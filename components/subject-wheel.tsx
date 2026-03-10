@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from "react"
 import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X, Info, Download, Link2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -499,7 +500,7 @@ export function SubjectWheel() {
     setIsPracticeOpen(true)
   }
 
-  const loadPracticeQuestions = async (subjectId: string) => {
+  const loadPracticeQuestions = async (subjectId: string, filter: PracticeFilter = practiceFilter) => {
     const subjectIndex = SUBJECT_ID_TO_INDEX[subjectId]
     if (subjectIndex === undefined) {
       setPracticeLoadError("La materia seleccionada no es valida.")
@@ -539,7 +540,7 @@ export function SubjectWheel() {
 
       const normalizedQuestions = Array.isArray(data) ? data : []
       const filteredQuestions =
-        practiceFilter === "erre"
+        filter === "erre"
           ? normalizedQuestions.filter((question) => question.estado === "erre")
           : normalizedQuestions
 
@@ -553,6 +554,14 @@ export function SubjectWheel() {
       )
     } finally {
       setIsLoadingPractice(false)
+    }
+  }
+
+  const handlePracticeFilterChange = (filter: PracticeFilter) => {
+    setPracticeFilter(filter)
+
+    if (practiceSubjectId) {
+      void loadPracticeQuestions(practiceSubjectId, filter)
     }
   }
 
@@ -1247,242 +1256,302 @@ export function SubjectWheel() {
 
       {/* Practice Modal */}
       <Dialog open={isPracticeOpen} onOpenChange={setIsPracticeOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+        <DialogContent className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
+          <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-6 py-5 sm:px-8">
             <DialogTitle className="flex items-center gap-2">
-              <GraduationCap className="w-4 h-4 text-slate-600" />
+              <GraduationCap className="h-5 w-5 text-slate-600" />
               Practicar
             </DialogTitle>
           </DialogHeader>
 
-          {/* Subject selection */}
-          {practiceSubjectIndex === null && (
-            <div className="space-y-3">
-              <p className="text-sm text-slate-500">Selecciona una materia para practicar:</p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Select value={practiceSubjectId} onValueChange={loadPracticeQuestions}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Seleccionar materia..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {INITIAL_SUBJECTS.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name.replace("\n", " ")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={practiceFilter}
-                  onValueChange={(value) => setPracticeFilter(value as PracticeFilter)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Modo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todas aleatorias</SelectItem>
-                    <SelectItem value="erre">Solo erré</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <p className="text-xs text-slate-400">
-                El modo "Solo erré" muestra únicamente preguntas en estado erre de la semana actual.
-              </p>
-            </div>
-          )}
-
-          {/* Loading state */}
-          {practiceSubjectIndex !== null && isLoadingPractice && (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            </div>
-          )}
-
-          {/* No questions */}
-          {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length === 0 && (
-            <div className="text-center py-8">
-              <p className="text-slate-500 text-sm mb-4">
-                {practiceLoadError ||
-                  (practiceFilter === "erre"
-                    ? "No hay preguntas en erre para esta materia en esta semana."
-                    : "No hay preguntas para esta materia esta semana.")}
-              </p>
-              <Button variant="outline" onClick={() => {
-                setPracticeSubjectId("")
-                setPracticeSubjectIndex(null)
-              }}>
-                Elegir otra materia
-              </Button>
-            </div>
-          )}
-
-          {/* Flashcard view */}
-          {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length > 0 && (
-            <div className="space-y-4">
-              {currentPracticeIndex < practiceQuestions.length ? (
-                <>
-                  {/* Progress */}
-                  <div className="text-xs text-slate-400 text-center">
-                    Pregunta {currentPracticeIndex + 1} de {practiceQuestions.length}
-                  </div>
-                  <p className="text-xs text-center text-slate-400">
-                    {practiceFilter === "erre" ? "Modo: solo erré" : "Modo: todas aleatorias"}
+          <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+            {/* Subject selection */}
+            {practiceSubjectIndex === null && (
+              <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-slate-400">Modo practica</p>
+                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">
+                    Elegi materia y como queres practicar
+                  </h2>
+                  <p className="max-w-2xl text-sm text-slate-500 sm:text-base">
+                    El modo aleatorio mezcla todas las preguntas de la semana. "Solo erre" trae unicamente las
+                    que siguen marcadas como erre.
                   </p>
-
-                  {/* Question card */}
-                  <div className="p-4 bg-slate-50 rounded-lg border min-h-32">
-                    {currentPracticeQuestion && editingPracticeQuestionId === currentPracticeQuestion.id ? (
-                      <div className="space-y-3">
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Pregunta</p>
-                          <Textarea
-                            value={practiceEditDraft.pregunta}
-                            onChange={(e) =>
-                              setPracticeEditDraft((prev) => ({ ...prev, pregunta: e.target.value }))
-                            }
-                            className="min-h-20 bg-white"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Respuesta</p>
-                          <Textarea
-                            value={practiceEditDraft.respuesta}
-                            onChange={(e) =>
-                              setPracticeEditDraft((prev) => ({ ...prev, respuesta: e.target.value }))
-                            }
-                            className="min-h-20 bg-white"
-                          />
-                        </div>
-                        <p className="text-xs text-slate-400">
-                          Si vacias la pregunta o la respuesta, la tarjeta se borra.
-                        </p>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="bg-slate-800 hover:bg-slate-700 text-white"
-                            onClick={savePracticeQuestionEdit}
-                          >
-                            <Check className="w-4 h-4 mr-1" />
-                            Guardar
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={cancelEditingPracticeQuestion}>
-                            <X className="w-4 h-4 mr-1" />
-                            Cancelar
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">Pregunta</p>
-                            <p className="font-medium text-slate-700 mb-3">
-                              {currentPracticeQuestion?.pregunta}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => setIsExampleModalOpen(true)}
-                              className="rounded-full"
-                              aria-label="Ver ejemplo de la pregunta"
-                            >
-                              <Info className="w-4 h-4 text-slate-500" />
-                            </Button>
-                            <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
-                              <Pencil className="w-4 h-4 text-slate-500" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className="mt-2 pt-2 border-t">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex-1">
-                              <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">Respuesta</p>
-                              <p
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => setIsAnswerRevealed((prev) => !prev)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault()
-                                    setIsAnswerRevealed((prev) => !prev)
-                                  }
-                                }}
-                                className="text-sm text-slate-600 cursor-pointer hover:text-slate-800"
-                              >
-                                {isAnswerRevealed
-                                  ? currentPracticeQuestion?.respuesta || "Sin respuesta registrada"
-                                  : "Click para mostrar"}
-                              </p>
-                            </div>
-                            <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
-                              <Pencil className="w-4 h-4 text-slate-500" />
-                            </Button>
-                          </div>
-                        </div>
-                      </>
-                    )}
+                </div>
+                <div className="grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Materia</p>
+                    <Select value={practiceSubjectId} onValueChange={(value) => void loadPracticeQuestions(value)}>
+                      <SelectTrigger className="h-14 text-base">
+                        <SelectValue placeholder="Seleccionar materia..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {INITIAL_SUBJECTS.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name.replace("\n", " ")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-
-                  {/* Bien / Erré buttons - only visible when answer is revealed */}
-                  {isAnswerRevealed && editingPracticeQuestionId === null && (
-                    <div className="flex gap-3">
-                      <Button
-                        className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                        onClick={() => handlePracticeAnswer("bien")}
+                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Modo</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => handlePracticeFilterChange("all")}
+                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                          practiceFilter === "all"
+                            ? "border-sky-500 bg-sky-50 shadow-sm"
+                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                        }`}
                       >
-                        <Check className="w-4 h-4 mr-1" />
-                        Bien
-                      </Button>
-                      <Button
-                        className="flex-1 bg-red-500 hover:bg-red-600 text-white"
-                        onClick={() => handlePracticeAnswer("erre")}
+                        <Checkbox checked={practiceFilter === "all"} className="mt-0.5 pointer-events-none" />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-semibold text-slate-700">Aleatorio</span>
+                          <span className="block text-xs text-slate-500">Todas las preguntas mezcladas.</span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePracticeFilterChange("erre")}
+                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                          practiceFilter === "erre"
+                            ? "border-rose-500 bg-rose-50 shadow-sm"
+                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                        }`}
                       >
-                        Erré
-                      </Button>
+                        <Checkbox checked={practiceFilter === "erre"} className="mt-0.5 pointer-events-none" />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-semibold text-slate-700">Solo erre</span>
+                          <span className="block text-xs text-slate-500">Repasa solo las que seguis fallando.</span>
+                        </span>
+                      </button>
                     </div>
-                  )}
-                </>
-              ) : (
-                /* Summary after all questions */
-                <div className="text-center py-6 px-4 rounded-xl border bg-gradient-to-br from-emerald-50 via-sky-50 to-white">
-                  <p className="text-2xl font-semibold text-slate-700 mb-2">Terminaste!!</p>
-                  <p className="text-sm text-slate-500 mb-2">
-                    Cerralo un momento, respira hondo y afloja los hombros.
-                  </p>
-                  <p className="text-sm text-slate-500 mb-4">
-                    Bien: {practiceQuestions.filter((q) => q.estado === "bien").length} | 
-                    Erré: {practiceQuestions.filter((q) => q.estado === "erre").length}
-                  </p>
-                  <div className="flex gap-2 justify-center">
-                    <Button variant="outline" onClick={() => {
-                      setCurrentPracticeIndex(0)
-                      setIsAnswerRevealed(false)
-                      setEditingPracticeQuestionId(null)
-                      setPracticeEditDraft({ pregunta: "", respuesta: "" })
-                      setPracticeQuestions((prev) => shuffleQuestions(prev))
-                    }}>
-                      Repetir
-                    </Button>
-                    <Button variant="outline" onClick={() => {
-                      setPracticeSubjectId("")
-                      setPracticeSubjectIndex(null)
-                      setCurrentPracticeIndex(0)
-                      setIsAnswerRevealed(false)
-                      setEditingPracticeQuestionId(null)
-                      setPracticeEditDraft({ pregunta: "", respuesta: "" })
-                    }}>
-                      Otra materia
-                    </Button>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          <DialogFooter>
+            {/* Loading state */}
+            {practiceSubjectIndex !== null && isLoadingPractice && (
+              <div className="flex h-full items-center justify-center py-10">
+                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+              </div>
+            )}
+
+            {/* No questions */}
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length === 0 && (
+              <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
+                <div className="w-full rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+                  <p className="mb-4 text-sm text-slate-500 sm:text-base">
+                    {practiceLoadError ||
+                      (practiceFilter === "erre"
+                        ? "No hay preguntas en erre para esta materia en esta semana."
+                        : "No hay preguntas para esta materia esta semana.")}
+                  </p>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setPracticeSubjectId("")
+                      setPracticeSubjectIndex(null)
+                    }}
+                  >
+                    Elegir otra materia
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Flashcard view */}
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length > 0 && (
+              <div className="mx-auto flex h-full w-full max-w-6xl flex-col">
+                {currentPracticeIndex < practiceQuestions.length ? (
+                  <div className="flex flex-1 flex-col gap-5">
+                    <div className="flex flex-col gap-2 rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">
+                          {practiceFilter === "erre" ? "Modo: solo erre" : "Modo: aleatorio"}
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          Pregunta {currentPracticeIndex + 1} de {practiceQuestions.length}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setPracticeSubjectId("")
+                          setPracticeSubjectIndex(null)
+                          setCurrentPracticeIndex(0)
+                          setIsAnswerRevealed(false)
+                          setEditingPracticeQuestionId(null)
+                          setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                        }}
+                      >
+                        Cambiar materia
+                      </Button>
+                    </div>
+
+                    <div className="flex flex-1 items-center justify-center">
+                      <div className="w-full max-w-4xl rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm sm:p-8 lg:p-10">
+                        {currentPracticeQuestion && editingPracticeQuestionId === currentPracticeQuestion.id ? (
+                          <div className="space-y-5">
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
+                              <Textarea
+                                value={practiceEditDraft.pregunta}
+                                onChange={(e) =>
+                                  setPracticeEditDraft((prev) => ({ ...prev, pregunta: e.target.value }))
+                                }
+                                className="min-h-32 bg-white text-base"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
+                              <Textarea
+                                value={practiceEditDraft.respuesta}
+                                onChange={(e) =>
+                                  setPracticeEditDraft((prev) => ({ ...prev, respuesta: e.target.value }))
+                                }
+                                className="min-h-32 bg-white text-base"
+                              />
+                            </div>
+                            <p className="text-xs text-slate-400">
+                              Si vacias la pregunta o la respuesta, la tarjeta se borra.
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                className="bg-slate-800 text-white hover:bg-slate-700"
+                                onClick={savePracticeQuestionEdit}
+                              >
+                                <Check className="mr-1 h-4 w-4" />
+                                Guardar
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={cancelEditingPracticeQuestion}>
+                                <X className="mr-1 h-4 w-4" />
+                                Cancelar
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-8">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="space-y-3">
+                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
+                                <p className="text-xl font-semibold leading-relaxed text-slate-800 sm:text-2xl">
+                                  {currentPracticeQuestion?.pregunta}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={() => setIsExampleModalOpen(true)}
+                                  className="rounded-full"
+                                  aria-label="Ver ejemplo de la pregunta"
+                                >
+                                  <Info className="h-4 w-4 text-slate-500" />
+                                </Button>
+                                <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
+                                  <Pencil className="h-4 w-4 text-slate-500" />
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 sm:p-6">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex-1 space-y-3">
+                                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
+                                  <p
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => setIsAnswerRevealed((prev) => !prev)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault()
+                                        setIsAnswerRevealed((prev) => !prev)
+                                      }
+                                    }}
+                                    className="cursor-pointer text-base leading-relaxed text-slate-600 hover:text-slate-800 sm:text-lg"
+                                  >
+                                    {isAnswerRevealed
+                                      ? currentPracticeQuestion?.respuesta || "Sin respuesta registrada"
+                                      : "Click para mostrar"}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {isAnswerRevealed && editingPracticeQuestionId === null && (
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <Button
+                                  className="h-12 bg-green-600 text-base text-white hover:bg-green-700"
+                                  onClick={() => handlePracticeAnswer("bien")}
+                                >
+                                  <Check className="mr-2 h-4 w-4" />
+                                  Bien
+                                </Button>
+                                <Button
+                                  className="h-12 bg-red-500 text-base text-white hover:bg-red-600"
+                                  onClick={() => handlePracticeAnswer("erre")}
+                                >
+                                  Erre
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-1 items-center justify-center">
+                    <div className="w-full max-w-3xl rounded-[2rem] border border-slate-200 bg-gradient-to-br from-emerald-50 via-sky-50 to-white px-6 py-10 text-center shadow-sm">
+                      <p className="mb-2 text-3xl font-semibold text-slate-700">Terminaste</p>
+                      <p className="mb-2 text-sm text-slate-500">
+                        Cerralo un momento, respira hondo y afloja los hombros.
+                      </p>
+                      <p className="mb-6 text-sm text-slate-500">
+                        Bien: {practiceQuestions.filter((q) => q.estado === "bien").length} | Erre:{" "}
+                        {practiceQuestions.filter((q) => q.estado === "erre").length}
+                      </p>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setCurrentPracticeIndex(0)
+                            setIsAnswerRevealed(false)
+                            setEditingPracticeQuestionId(null)
+                            setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                            setPracticeQuestions((prev) => shuffleQuestions(prev))
+                          }}
+                        >
+                          Repetir
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setPracticeSubjectId("")
+                            setPracticeSubjectIndex(null)
+                            setCurrentPracticeIndex(0)
+                            setIsAnswerRevealed(false)
+                            setEditingPracticeQuestionId(null)
+                            setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                          }}
+                        >
+                          Otra materia
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+          </div>
+
+          <DialogFooter className="border-t border-slate-200 px-6 py-4 sm:px-8">
             <Button variant="outline" onClick={() => setIsPracticeOpen(false)}>
               Cerrar
             </Button>
