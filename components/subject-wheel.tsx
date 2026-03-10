@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { saveQuestionExampleAction } from "@/app/actions/question-example"
+import { toast } from "@/hooks/use-toast"
 
 interface Subject {
   id: string
@@ -117,6 +118,7 @@ export function SubjectWheel() {
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
   const [panorama, setPanorama] = useState("")
   const [isSavingPanorama, setIsSavingPanorama] = useState(false)
+  const [subjectSaveError, setSubjectSaveError] = useState("")
   const [modalStep, setModalStep] = useState<"panorama" | "questions">("panorama")
   
   // Questions draft state for subject modal
@@ -134,7 +136,7 @@ export function SubjectWheel() {
   const [practiceLoadError, setPracticeLoadError] = useState("")
   const [editingPracticeQuestionId, setEditingPracticeQuestionId] = useState<number | null>(null)
   const [practiceEditDraft, setPracticeEditDraft] = useState<QuestionDraft>({ pregunta: "", respuesta: "" })
-  const [isExamplePanelOpen, setIsExamplePanelOpen] = useState(false)
+  const [isExampleModalOpen, setIsExampleModalOpen] = useState(false)
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
   const [exampleError, setExampleError] = useState("")
@@ -183,7 +185,7 @@ export function SubjectWheel() {
 
   useEffect(() => {
     const currentQuestion = practiceQuestions[currentPracticeIndex]
-    setIsExamplePanelOpen(false)
+    setIsExampleModalOpen(false)
     setExampleImageFile(null)
     setExampleError("")
     setExampleLinkDraft(currentQuestion?.example_link || "")
@@ -368,11 +370,13 @@ export function SubjectWheel() {
     }
 
     setIsDialogOpen(true)
+    setSubjectSaveError("")
   }
 
   // Continue from panorama to questions step
   const handleContinueToQuestions = () => {
     if (!currentSubject) return
+    setSubjectSaveError("")
     setModalStep("questions")
   }
 
@@ -381,6 +385,7 @@ export function SubjectWheel() {
     if (!currentSubject) return
 
     setIsSavingPanorama(true)
+    setSubjectSaveError("")
     try {
       const date = getTodayDateString()
 
@@ -455,6 +460,13 @@ export function SubjectWheel() {
       resetQuestionDrafts()
     } catch (error) {
       console.error("Failed to save panorama:", error)
+      const message = error instanceof Error ? error.message : "No se pudo guardar esta materia."
+      setSubjectSaveError(message)
+      toast({
+        variant: "destructive",
+        title: "No se pudo confirmar",
+        description: message,
+      })
     } finally {
       setIsSavingPanorama(false)
     }
@@ -681,9 +693,6 @@ export function SubjectWheel() {
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
   const currentPracticeQuestion = practiceQuestions[currentPracticeIndex]
-  const currentQuestionHasExample = Boolean(
-    currentPracticeQuestion?.example_image_url || currentPracticeQuestion?.example_link
-  )
 
   const handleReset = async () => {
     try {
@@ -1041,18 +1050,6 @@ export function SubjectWheel() {
               <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.35)]">
                 <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
                 <div className="space-y-6 p-5 md:p-6">
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
-                      Flashcard
-                    </p>
-                    <div className="space-y-1">
-                      <h3 className="text-lg font-semibold text-slate-900">Una sola dupla, mejor definida</h3>
-                      <p className="text-sm leading-relaxed text-slate-600">
-                        Carga una pregunta con su respuesta esperada. Si dejas la pregunta vacia, no se guarda.
-                      </p>
-                    </div>
-                  </div>
-
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
                       <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
@@ -1061,7 +1058,7 @@ export function SubjectWheel() {
                       <Textarea
                         value={questionDrafts[0]?.pregunta ?? ""}
                         onChange={(e) => handleUpdateQuestionDraft(0, "pregunta", e.target.value)}
-                        placeholder="Ej: En que casos conviene aplicar integracion por partes?"
+                        placeholder=""
                         className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
                       />
                     </div>
@@ -1073,7 +1070,7 @@ export function SubjectWheel() {
                       <Textarea
                         value={questionDrafts[0]?.respuesta ?? ""}
                         onChange={(e) => handleUpdateQuestionDraft(0, "respuesta", e.target.value)}
-                        placeholder="Ej: Cuando el producto permite simplificar la integral al derivar una parte y mantener integrable la otra."
+                        placeholder=""
                         className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
                       />
                     </div>
@@ -1100,6 +1097,7 @@ export function SubjectWheel() {
                 </Button>
                 <Button
                   onClick={handleContinueToQuestions}
+                  type="button"
                   className="bg-slate-800 hover:bg-slate-700 text-white"
                 >
                   Continuar
@@ -1109,12 +1107,14 @@ export function SubjectWheel() {
               <>
                 <Button
                   variant="outline"
+                  type="button"
                   onClick={() => setModalStep("panorama")}
                 >
                   Volver
                 </Button>
                 <Button
                   onClick={handleConfirmSubject}
+                  type="button"
                   disabled={isSavingPanorama}
                   className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
@@ -1122,6 +1122,99 @@ export function SubjectWheel() {
                 </Button>
               </>
             )}
+          </DialogFooter>
+          {subjectSaveError ? (
+            <p className="mt-2 text-sm text-red-500">{subjectSaveError}</p>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isExampleModalOpen} onOpenChange={setIsExampleModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ejemplo</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {currentPracticeQuestion?.example_image_url ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Descarga Ejemplo</p>
+                <a
+                  href={currentPracticeQuestion.example_image_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                >
+                  <Download className="h-4 w-4" />
+                  Descargar ejemplo
+                </a>
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                Imagen
+              </label>
+              <Input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setExampleImageFile(e.target.files?.[0] ?? null)}
+                className="bg-white"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                Link
+              </label>
+              {currentPracticeQuestion?.example_link ? (
+                <a
+                  href={currentPracticeQuestion.example_link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block break-all rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-sky-700 underline underline-offset-4"
+                >
+                  {currentPracticeQuestion.example_link}
+                </a>
+              ) : null}
+              <div className="relative">
+                <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  type="url"
+                  value={exampleLinkDraft}
+                  onChange={(e) => setExampleLinkDraft(e.target.value)}
+                  placeholder="https://..."
+                  className="bg-white pl-9"
+                />
+              </div>
+            </div>
+
+            {exampleError ? (
+              <p className="text-sm text-red-500">{exampleError}</p>
+            ) : null}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsExampleModalOpen(false)}
+            >
+              Cerrar
+            </Button>
+            <Button
+              type="button"
+              onClick={saveQuestionExample}
+              disabled={isSavingExample || (!exampleImageFile && !exampleLinkDraft.trim())}
+              className="bg-sky-600 text-white hover:bg-sky-700"
+            >
+              {isSavingExample ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              Guardar ejemplo
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1239,7 +1332,7 @@ export function SubjectWheel() {
                             <Button
                               size="icon"
                               variant="ghost"
-                              onClick={() => setIsExamplePanelOpen((prev) => !prev)}
+                              onClick={() => setIsExampleModalOpen(true)}
                               className="rounded-full"
                               aria-label="Ver ejemplo de la pregunta"
                             >
@@ -1250,97 +1343,6 @@ export function SubjectWheel() {
                             </Button>
                           </div>
                         </div>
-
-                        {isExamplePanelOpen && currentPracticeQuestion && (
-                          <div className="mb-4 rounded-2xl border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
-                            {currentQuestionHasExample ? (
-                              <div className="space-y-3">
-                                <p className="text-sm font-semibold text-slate-700">Descarga Ejemplo</p>
-                                {currentPracticeQuestion.example_image_url ? (
-                                  <a
-                                    href={currentPracticeQuestion.example_image_url}
-                                    download
-                                    className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                                  >
-                                    <Download className="h-4 w-4" />
-                                    Descargar ejemplo
-                                  </a>
-                                ) : (
-                                  <p className="text-sm text-slate-500">No hay imagen cargada para esta pregunta.</p>
-                                )}
-                                {currentPracticeQuestion.example_link ? (
-                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
-                                      Link de apoyo
-                                    </p>
-                                    <a
-                                      href={currentPracticeQuestion.example_link}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="break-all text-sm text-sky-700 underline underline-offset-4"
-                                    >
-                                      {currentPracticeQuestion.example_link}
-                                    </a>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <div className="space-y-4">
-                                <div>
-                                  <p className="text-sm font-semibold text-slate-700">Ejemplo claro</p>
-                                  <p className="mt-1 text-sm text-slate-500">
-                                    Permite subir una imagen del ejercicio y guardar un link de referencia para esta pregunta.
-                                  </p>
-                                </div>
-                                <div className="space-y-2">
-                                  <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                                    Imagen
-                                  </label>
-                                  <Input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={(e) => setExampleImageFile(e.target.files?.[0] ?? null)}
-                                    className="bg-white"
-                                  />
-                                  <p className="text-xs text-slate-400">
-                                    La imagen se sube a Vercel Blob y su URL queda guardada en Neon.
-                                  </p>
-                                </div>
-                                <div className="space-y-2">
-                                  <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                                    Link de la plataforma
-                                  </label>
-                                  <div className="relative">
-                                    <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                                    <Input
-                                      type="url"
-                                      value={exampleLinkDraft}
-                                      onChange={(e) => setExampleLinkDraft(e.target.value)}
-                                      placeholder="https://..."
-                                      className="bg-white pl-9"
-                                    />
-                                  </div>
-                                </div>
-                                <Button
-                                  type="button"
-                                  onClick={saveQuestionExample}
-                                  disabled={isSavingExample || (!exampleImageFile && !exampleLinkDraft.trim())}
-                                  className="bg-sky-600 text-white hover:bg-sky-700"
-                                >
-                                  {isSavingExample ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                  ) : (
-                                    <Upload className="h-4 w-4" />
-                                  )}
-                                  Guardar ejemplo
-                                </Button>
-                                {exampleError ? (
-                                  <p className="text-sm text-red-500">{exampleError}</p>
-                                ) : null}
-                              </div>
-                            )}
-                          </div>
-                        )}
 
                         <div className="mt-2 pt-2 border-t">
                           <div className="flex items-start justify-between gap-3">
