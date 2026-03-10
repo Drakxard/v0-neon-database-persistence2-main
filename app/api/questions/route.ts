@@ -1,7 +1,18 @@
 import { neon } from "@neondatabase/serverless"
+import { del } from "@vercel/blob"
 import { NextResponse } from "next/server"
 
 const sql = neon(process.env.DATABASE_URL!)
+
+async function deleteStoredExampleImage(imageUrl: string | null | undefined) {
+  if (!imageUrl) return
+
+  try {
+    await del(imageUrl)
+  } catch {
+    // Ignore cleanup failures to avoid blocking deletes.
+  }
+}
 
 function toInt(value: string | null) {
   if (value === null) return null
@@ -53,20 +64,27 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { pregunta, respuesta, id_materia, semana, items } = body
+    const { pregunta, respuesta, id_materia, semana, items, example_image_url, example_link } = body
 
     if (id_materia === undefined || semana === undefined) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
 
-    const normalizedItems: { pregunta: string; respuesta: string }[] = Array.isArray(items)
+    const normalizedItems: { pregunta: string; respuesta: string; example_image_url?: string | null; example_link?: string }[] = Array.isArray(items)
       ? items
           .map((item) => ({
             pregunta: String(item?.pregunta || "").trim(),
             respuesta: String(item?.respuesta || "").trim(),
+            example_image_url: item?.example_image_url ? String(item.example_image_url) : null,
+            example_link: String(item?.example_link || "").trim(),
           }))
           .filter((item) => item.pregunta.length > 0)
-      : [{ pregunta: String(pregunta || "").trim(), respuesta: String(respuesta || "").trim() }].filter(
+      : [{
+          pregunta: String(pregunta || "").trim(),
+          respuesta: String(respuesta || "").trim(),
+          example_image_url: example_image_url ? String(example_image_url) : null,
+          example_link: String(example_link || "").trim(),
+        }].filter(
           (item) => item.pregunta.length > 0
         )
 
@@ -77,8 +95,8 @@ export async function POST(request: Request) {
     if (normalizedItems.length === 1) {
       const item = normalizedItems[0]
       const rows = await sql`
-        INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana)
-        VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana})
+        INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link)
+        VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana}, ${item.example_image_url ?? null}, ${item.example_link})
         RETURNING *
       `
       return NextResponse.json(rows[0])
@@ -87,8 +105,8 @@ export async function POST(request: Request) {
     const inserted = []
     for (const item of normalizedItems) {
       const rows = await sql`
-        INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana)
-        VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana})
+        INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link)
+        VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana}, ${item.example_image_url ?? null}, ${item.example_link})
         RETURNING *
       `
       inserted.push(rows[0])
@@ -104,7 +122,7 @@ export async function POST(request: Request) {
 // PUT - update a question (including estado for practice mode)
 export async function PUT(request: Request) {
   try {
-    const { id, pregunta, respuesta, estado, id_materia, semana } = await request.json()
+    const { id, pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link } = await request.json()
 
     if (!id) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 })
@@ -119,6 +137,8 @@ export async function PUT(request: Request) {
         estado = COALESCE(${estado}, estado),
         id_materia = COALESCE(${id_materia}, id_materia),
         semana = COALESCE(${semana}, semana),
+        example_image_url = COALESCE(${example_image_url}, example_image_url),
+        example_link = COALESCE(${example_link}, example_link),
         updated_at = NOW()
       WHERE id = ${id}
       RETURNING *
@@ -145,6 +165,8 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 })
     }
 
+    const existing = await sql`SELECT example_image_url FROM preguntas_respuestas WHERE id = ${parsedId}`
+    await deleteStoredExampleImage(existing[0]?.example_image_url)
     await sql`DELETE FROM preguntas_respuestas WHERE id = ${parsedId}`
     return NextResponse.json({ success: true })
   } catch (error) {

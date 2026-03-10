@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS preguntas_respuestas (
   estado VARCHAR(10) NOT NULL DEFAULT 'bien' CHECK (estado IN ('bien', 'erre')),
   id_materia INTEGER NOT NULL CHECK (id_materia >= 0 AND id_materia <= 5),
   semana INTEGER NOT NULL DEFAULT 0,
+  example_image_url TEXT,
+  example_link TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

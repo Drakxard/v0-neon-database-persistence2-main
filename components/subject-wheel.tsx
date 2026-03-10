@@ -1,11 +1,13 @@
 "use client"
 
-import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X } from "lucide-react"
+import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from "react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X, Info, Download, Link2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { saveQuestionExampleAction } from "@/app/actions/question-example"
 
 interface Subject {
   id: string
@@ -20,6 +22,8 @@ interface Question {
   estado: "bien" | "erre" | null
   id_materia: number
   semana: number
+  example_image_url: string | null
+  example_link: string
 }
 
 interface QuestionDraft {
@@ -118,8 +122,6 @@ export function SubjectWheel() {
   // Questions draft state for subject modal
   const [questionDrafts, setQuestionDrafts] = useState<QuestionDraft[]>([
     { pregunta: "", respuesta: "" },
-    { pregunta: "", respuesta: "" },
-    { pregunta: "", respuesta: "" },
   ])
 
   // Practice modal state
@@ -132,6 +134,12 @@ export function SubjectWheel() {
   const [practiceLoadError, setPracticeLoadError] = useState("")
   const [editingPracticeQuestionId, setEditingPracticeQuestionId] = useState<number | null>(null)
   const [practiceEditDraft, setPracticeEditDraft] = useState<QuestionDraft>({ pregunta: "", respuesta: "" })
+  const [isExamplePanelOpen, setIsExamplePanelOpen] = useState(false)
+  const [exampleLinkDraft, setExampleLinkDraft] = useState("")
+  const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
+  const [exampleError, setExampleError] = useState("")
+  const [isSavingExample, startSavingExample] = useTransition()
+  const currentPracticeQuestionId = practiceQuestions[currentPracticeIndex]?.id ?? null
 
   // AI modal state
   const [isAiOpen, setIsAiOpen] = useState(false)
@@ -172,6 +180,14 @@ export function SubjectWheel() {
 
     loadFromDatabase()
   }, [])
+
+  useEffect(() => {
+    const currentQuestion = practiceQuestions[currentPracticeIndex]
+    setIsExamplePanelOpen(false)
+    setExampleImageFile(null)
+    setExampleError("")
+    setExampleLinkDraft(currentQuestion?.example_link || "")
+  }, [practiceSubjectIndex, currentPracticeIndex, currentPracticeQuestionId])
 
   // Sync to database whenever state changes — but only after initial load
   useEffect(() => {
@@ -324,8 +340,6 @@ export function SubjectWheel() {
   const resetQuestionDrafts = () => {
     setQuestionDrafts([
       { pregunta: "", respuesta: "" },
-      { pregunta: "", respuesta: "" },
-      { pregunta: "", respuesta: "" },
     ])
   }
 
@@ -333,10 +347,6 @@ export function SubjectWheel() {
     setQuestionDrafts((prev) =>
       prev.map((draft, i) => (i === index ? { ...draft, [field]: value } : draft))
     )
-  }
-
-  const handleAddQuestionDraft = () => {
-    setQuestionDrafts((prev) => [...prev, { pregunta: "", respuesta: "" }])
   }
 
   const handleSubjectClick = async (subject: Subject) => {
@@ -608,6 +618,46 @@ export function SubjectWheel() {
     }
   }
 
+  const saveQuestionExample = async () => {
+    const currentQuestion = practiceQuestions[currentPracticeIndex]
+    if (!currentQuestion) return
+
+    const hasExistingExample = Boolean(currentQuestion.example_image_url || currentQuestion.example_link)
+    if (!exampleImageFile && !exampleLinkDraft.trim() && !hasExistingExample) {
+      return
+    }
+
+    setExampleError("")
+    startSavingExample(async () => {
+      const formData = new FormData()
+      formData.append("questionId", String(currentQuestion.id))
+      formData.append("exampleLink", exampleLinkDraft.trim())
+
+      if (exampleImageFile) {
+        formData.append("image", exampleImageFile)
+      }
+
+      const result = await saveQuestionExampleAction(formData)
+      if (!result.ok) {
+        setExampleError(result.error)
+        return
+      }
+
+      setPracticeQuestions((prev) =>
+        prev.map((question) =>
+          question.id === currentQuestion.id
+            ? {
+                ...question,
+                example_image_url: result.question.example_image_url ?? question.example_image_url,
+                example_link: result.question.example_link ?? question.example_link,
+              }
+            : question
+        )
+      )
+      setExampleImageFile(null)
+    })
+  }
+
   const handleUndo = () => {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1
@@ -630,6 +680,10 @@ export function SubjectWheel() {
 
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
+  const currentPracticeQuestion = practiceQuestions[currentPracticeIndex]
+  const currentQuestionHasExample = Boolean(
+    currentPracticeQuestion?.example_image_url || currentPracticeQuestion?.example_link
+  )
 
   const handleReset = async () => {
     try {
@@ -983,39 +1037,49 @@ export function SubjectWheel() {
 
           {/* Step 2: Questions */}
           {modalStep === "questions" && (
-            <div className="space-y-4 flex-1 overflow-y-auto">
-              {questionDrafts.map((draft, index) => (
-                <div key={`q-draft-${index}`} className="grid gap-3 md:grid-cols-2 p-3 bg-slate-50 rounded-lg border">
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Pregunta {index + 1}</label>
-                    <Textarea
-                      value={draft.pregunta}
-                      onChange={(e) => handleUpdateQuestionDraft(index, "pregunta", e.target.value)}
-                      placeholder={`Escribe la pregunta ${index + 1}`}
-                      className="min-h-20 resize-none text-sm"
-                    />
+            <div className="flex-1 overflow-y-auto">
+              <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.35)]">
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
+                <div className="space-y-6 p-5 md:p-6">
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-700">
+                      Flashcard
+                    </p>
+                    <div className="space-y-1">
+                      <h3 className="text-lg font-semibold text-slate-900">Una sola dupla, mejor definida</h3>
+                      <p className="text-sm leading-relaxed text-slate-600">
+                        Carga una pregunta con su respuesta esperada. Si dejas la pregunta vacia, no se guarda.
+                      </p>
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-slate-700">Respuesta {index + 1}</label>
-                    <Textarea
-                      value={draft.respuesta}
-                      onChange={(e) => handleUpdateQuestionDraft(index, "respuesta", e.target.value)}
-                      placeholder={`Escribe la respuesta ${index + 1}`}
-                      className="min-h-20 resize-none text-sm"
-                    />
+
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                        Pregunta
+                      </label>
+                      <Textarea
+                        value={questionDrafts[0]?.pregunta ?? ""}
+                        onChange={(e) => handleUpdateQuestionDraft(0, "pregunta", e.target.value)}
+                        placeholder="Ej: En que casos conviene aplicar integracion por partes?"
+                        className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
+                      />
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                        Respuesta
+                      </label>
+                      <Textarea
+                        value={questionDrafts[0]?.respuesta ?? ""}
+                        onChange={(e) => handleUpdateQuestionDraft(0, "respuesta", e.target.value)}
+                        placeholder="Ej: Cuando el producto permite simplificar la integral al derivar una parte y mantener integrable la otra."
+                        className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
+                      />
+                    </div>
                   </div>
                 </div>
-              ))}
-
-              <Button
-                size="sm"
-                type="button"
-                variant="outline"
-                onClick={handleAddQuestionDraft}
-                className="w-full"
-              >
-                +
-              </Button>
+              </div>
             </div>
           )}
 
@@ -1122,7 +1186,7 @@ export function SubjectWheel() {
 
                   {/* Question card */}
                   <div className="p-4 bg-slate-50 rounded-lg border min-h-32">
-                    {editingPracticeQuestionId === practiceQuestions[currentPracticeIndex].id ? (
+                    {currentPracticeQuestion && editingPracticeQuestionId === currentPracticeQuestion.id ? (
                       <div className="space-y-3">
                         <div className="space-y-1">
                           <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Pregunta</p>
@@ -1168,13 +1232,115 @@ export function SubjectWheel() {
                           <div className="flex-1">
                             <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-1">Pregunta</p>
                             <p className="font-medium text-slate-700 mb-3">
-                              {practiceQuestions[currentPracticeIndex].pregunta}
+                              {currentPracticeQuestion?.pregunta}
                             </p>
                           </div>
-                          <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
-                            <Pencil className="w-4 h-4 text-slate-500" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => setIsExamplePanelOpen((prev) => !prev)}
+                              className="rounded-full"
+                              aria-label="Ver ejemplo de la pregunta"
+                            >
+                              <Info className="w-4 h-4 text-slate-500" />
+                            </Button>
+                            <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
+                              <Pencil className="w-4 h-4 text-slate-500" />
+                            </Button>
+                          </div>
                         </div>
+
+                        {isExamplePanelOpen && currentPracticeQuestion && (
+                          <div className="mb-4 rounded-2xl border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-4">
+                            {currentQuestionHasExample ? (
+                              <div className="space-y-3">
+                                <p className="text-sm font-semibold text-slate-700">Descarga Ejemplo</p>
+                                {currentPracticeQuestion.example_image_url ? (
+                                  <a
+                                    href={currentPracticeQuestion.example_image_url}
+                                    download
+                                    className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                                  >
+                                    <Download className="h-4 w-4" />
+                                    Descargar ejemplo
+                                  </a>
+                                ) : (
+                                  <p className="text-sm text-slate-500">No hay imagen cargada para esta pregunta.</p>
+                                )}
+                                {currentPracticeQuestion.example_link ? (
+                                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+                                      Link de apoyo
+                                    </p>
+                                    <a
+                                      href={currentPracticeQuestion.example_link}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="break-all text-sm text-sky-700 underline underline-offset-4"
+                                    >
+                                      {currentPracticeQuestion.example_link}
+                                    </a>
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <div className="space-y-4">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-700">Ejemplo claro</p>
+                                  <p className="mt-1 text-sm text-slate-500">
+                                    Permite subir una imagen del ejercicio y guardar un link de referencia para esta pregunta.
+                                  </p>
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                                    Imagen
+                                  </label>
+                                  <Input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => setExampleImageFile(e.target.files?.[0] ?? null)}
+                                    className="bg-white"
+                                  />
+                                  <p className="text-xs text-slate-400">
+                                    La imagen se sube a Vercel Blob y su URL queda guardada en Neon.
+                                  </p>
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                                    Link de la plataforma
+                                  </label>
+                                  <div className="relative">
+                                    <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                    <Input
+                                      type="url"
+                                      value={exampleLinkDraft}
+                                      onChange={(e) => setExampleLinkDraft(e.target.value)}
+                                      placeholder="https://..."
+                                      className="bg-white pl-9"
+                                    />
+                                  </div>
+                                </div>
+                                <Button
+                                  type="button"
+                                  onClick={saveQuestionExample}
+                                  disabled={isSavingExample || (!exampleImageFile && !exampleLinkDraft.trim())}
+                                  className="bg-sky-600 text-white hover:bg-sky-700"
+                                >
+                                  {isSavingExample ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Upload className="h-4 w-4" />
+                                  )}
+                                  Guardar ejemplo
+                                </Button>
+                                {exampleError ? (
+                                  <p className="text-sm text-red-500">{exampleError}</p>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         <div className="mt-2 pt-2 border-t">
                           <div className="flex items-start justify-between gap-3">
@@ -1193,7 +1359,7 @@ export function SubjectWheel() {
                                 className="text-sm text-slate-600 cursor-pointer hover:text-slate-800"
                               >
                                 {isAnswerRevealed
-                                  ? practiceQuestions[currentPracticeIndex].respuesta || "Sin respuesta registrada"
+                                  ? currentPracticeQuestion?.respuesta || "Sin respuesta registrada"
                                   : "Click para mostrar"}
                               </p>
                             </div>
