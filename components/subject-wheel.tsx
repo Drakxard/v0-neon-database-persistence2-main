@@ -365,6 +365,10 @@ export function SubjectWheel() {
     )
   }
 
+  const handleAddQuestionDraft = () => {
+    setQuestionDrafts((prev) => [...prev, { pregunta: "", respuesta: "" }])
+  }
+
   const handleSubjectClick = async (subject: Subject) => {
     const date = getTodayDateString()
 
@@ -1085,30 +1089,51 @@ export function SubjectWheel() {
               <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.35)]">
                 <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
                 <div className="space-y-6 p-5 md:p-6">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                        Pregunta
-                      </label>
-                      <Textarea
-                        value={questionDrafts[0]?.pregunta ?? ""}
-                        onChange={(e) => handleUpdateQuestionDraft(0, "pregunta", e.target.value)}
-                        placeholder=""
-                        className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
-                      />
-                    </div>
+                  {questionDrafts.map((draft, index) => (
+                    <div key={`question-draft-${index}`} className="space-y-3">
+                      {questionDrafts.length > 1 ? (
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
+                          Pregunta {index + 1}
+                        </p>
+                      ) : null}
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                          <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                            Pregunta
+                          </label>
+                          <Textarea
+                            value={draft.pregunta}
+                            onChange={(e) => handleUpdateQuestionDraft(index, "pregunta", e.target.value)}
+                            placeholder=""
+                            className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
+                          />
+                        </div>
 
-                    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                        Respuesta
-                      </label>
-                      <Textarea
-                        value={questionDrafts[0]?.respuesta ?? ""}
-                        onChange={(e) => handleUpdateQuestionDraft(0, "respuesta", e.target.value)}
-                        placeholder=""
-                        className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
-                      />
+                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                          <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                            Respuesta
+                          </label>
+                          <Textarea
+                            value={draft.respuesta}
+                            onChange={(e) => handleUpdateQuestionDraft(index, "respuesta", e.target.value)}
+                            placeholder=""
+                            className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
+                          />
+                        </div>
+                      </div>
                     </div>
+                  ))}
+                  <div className="flex justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={handleAddQuestionDraft}
+                      aria-label="Agregar otra pregunta"
+                      className="rounded-full border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    >
+                      +
+                    </Button>
                   </div>
                 </div>
               </div>
