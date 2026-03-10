@@ -77,6 +77,17 @@ function subjectsToIds(subjects: Subject[]): string[] {
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error"
+type PracticeFilter = "all" | "erre"
+
+function shuffleQuestions<T>(items: T[]): T[] {
+  const shuffled = [...items]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]]
+  }
+
+  return shuffled
+}
 
 async function parseJsonResponse(response: Response) {
   const text = await response.text()
@@ -129,6 +140,8 @@ export function SubjectWheel() {
   // Practice modal state
   const [isPracticeOpen, setIsPracticeOpen] = useState(false)
   const [practiceSubjectIndex, setPracticeSubjectIndex] = useState<number | null>(null)
+  const [practiceSubjectId, setPracticeSubjectId] = useState<string>("")
+  const [practiceFilter, setPracticeFilter] = useState<PracticeFilter>("all")
   const [practiceQuestions, setPracticeQuestions] = useState<Question[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false)
@@ -475,6 +488,8 @@ export function SubjectWheel() {
   // Practice modal functions
   const openPracticeModal = () => {
     setPracticeSubjectIndex(null)
+    setPracticeSubjectId("")
+    setPracticeFilter("all")
     setPracticeQuestions([])
     setPracticeLoadError("")
     setCurrentPracticeIndex(0)
@@ -488,6 +503,7 @@ export function SubjectWheel() {
     const subjectIndex = SUBJECT_ID_TO_INDEX[subjectId]
     if (subjectIndex === undefined) {
       setPracticeLoadError("La materia seleccionada no es valida.")
+      setPracticeSubjectId("")
       setPracticeSubjectIndex(null)
       setPracticeQuestions([])
       return
@@ -495,6 +511,7 @@ export function SubjectWheel() {
 
     setIsLoadingPractice(true)
     setPracticeLoadError("")
+    setPracticeSubjectId(subjectId)
     setPracticeSubjectIndex(subjectIndex)
     setCurrentPracticeIndex(0)
     setIsAnswerRevealed(false)
@@ -520,8 +537,14 @@ export function SubjectWheel() {
         throw new Error(getErrorMessage(data, "No se pudieron cargar las preguntas."))
       }
 
-      console.log("[v0] Practice questions loaded:", data)
-      setPracticeQuestions(Array.isArray(data) ? data : [])
+      const normalizedQuestions = Array.isArray(data) ? data : []
+      const filteredQuestions =
+        practiceFilter === "erre"
+          ? normalizedQuestions.filter((question) => question.estado === "erre")
+          : normalizedQuestions
+
+      console.log("[v0] Practice questions loaded:", filteredQuestions)
+      setPracticeQuestions(shuffleQuestions(filteredQuestions))
     } catch (err) {
       console.error("[v0] Failed to load practice questions:", err)
       setPracticeQuestions([])
@@ -548,19 +571,22 @@ export function SubjectWheel() {
       // ignore
     }
 
-    // Update local state
-    setPracticeQuestions((prev) =>
-      prev.map((q) => (q.id === currentQuestion.id ? { ...q, estado } : q))
-    )
+    setPracticeQuestions((prev) => {
+      const nextQuestions =
+        practiceFilter === "erre" && estado === "bien"
+          ? prev.filter((q) => q.id !== currentQuestion.id)
+          : prev.map((q) => (q.id === currentQuestion.id ? { ...q, estado } : q))
 
-    // Move to next question or finish
-    if (currentPracticeIndex < practiceQuestions.length - 1) {
-      setCurrentPracticeIndex((prev) => prev + 1)
-      setIsAnswerRevealed(false)
-    } else {
-      setCurrentPracticeIndex((prev) => prev + 1)
-      setIsAnswerRevealed(false)
-    }
+      setCurrentPracticeIndex((prevIndex) => {
+        if (nextQuestions.length === 0) return 0
+        if (prevIndex >= nextQuestions.length - 1) return nextQuestions.length
+        return prevIndex + 1
+      })
+
+      return nextQuestions
+    })
+
+    setIsAnswerRevealed(false)
   }
 
   const startEditingPracticeQuestion = () => {
@@ -1233,18 +1259,35 @@ export function SubjectWheel() {
           {practiceSubjectIndex === null && (
             <div className="space-y-3">
               <p className="text-sm text-slate-500">Selecciona una materia para practicar:</p>
-              <Select onValueChange={loadPracticeQuestions}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar materia..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {INITIAL_SUBJECTS.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name.replace("\n", " ")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Select value={practiceSubjectId} onValueChange={loadPracticeQuestions}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar materia..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INITIAL_SUBJECTS.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name.replace("\n", " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={practiceFilter}
+                  onValueChange={(value) => setPracticeFilter(value as PracticeFilter)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Modo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas aleatorias</SelectItem>
+                    <SelectItem value="erre">Solo erré</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-slate-400">
+                El modo "Solo erré" muestra únicamente preguntas en estado erre de la semana actual.
+              </p>
             </div>
           )}
 
@@ -1259,9 +1302,15 @@ export function SubjectWheel() {
           {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length === 0 && (
             <div className="text-center py-8">
               <p className="text-slate-500 text-sm mb-4">
-                {practiceLoadError || "No hay preguntas para esta materia esta semana."}
+                {practiceLoadError ||
+                  (practiceFilter === "erre"
+                    ? "No hay preguntas en erre para esta materia en esta semana."
+                    : "No hay preguntas para esta materia esta semana.")}
               </p>
-              <Button variant="outline" onClick={() => setPracticeSubjectIndex(null)}>
+              <Button variant="outline" onClick={() => {
+                setPracticeSubjectId("")
+                setPracticeSubjectIndex(null)
+              }}>
                 Elegir otra materia
               </Button>
             </div>
@@ -1276,6 +1325,9 @@ export function SubjectWheel() {
                   <div className="text-xs text-slate-400 text-center">
                     Pregunta {currentPracticeIndex + 1} de {practiceQuestions.length}
                   </div>
+                  <p className="text-xs text-center text-slate-400">
+                    {practiceFilter === "erre" ? "Modo: solo erré" : "Modo: todas aleatorias"}
+                  </p>
 
                   {/* Question card */}
                   <div className="p-4 bg-slate-50 rounded-lg border min-h-32">
@@ -1410,10 +1462,12 @@ export function SubjectWheel() {
                       setIsAnswerRevealed(false)
                       setEditingPracticeQuestionId(null)
                       setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                      setPracticeQuestions((prev) => shuffleQuestions(prev))
                     }}>
                       Repetir
                     </Button>
                     <Button variant="outline" onClick={() => {
+                      setPracticeSubjectId("")
                       setPracticeSubjectIndex(null)
                       setCurrentPracticeIndex(0)
                       setIsAnswerRevealed(false)
