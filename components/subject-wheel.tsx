@@ -1,15 +1,15 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X, Info, Download, Link2, Upload } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X, Info, Download, Link2, Upload, Mic, Pause, Play, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { saveQuestionExampleAction } from "@/app/actions/question-example"
-import { toast } from "@/hooks/use-toast"
+import { formatDateKey, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
 interface Subject {
   id: string
@@ -31,6 +31,29 @@ interface Question {
 interface QuestionDraft {
   pregunta: string
   respuesta: string
+}
+
+interface SubjectDayEntry {
+  id: number
+  subject_id: string
+  week_number: number
+  session_date: string
+  weekday_index: number
+  order_index: number
+  transcript_text: string
+  drive_file_id: string
+  drive_file_name: string
+  drive_mime_type: string
+  drive_web_view_link: string
+  answer_text: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface ReviewAudio {
+  blob: Blob
+  url: string
+  mimeType: string
 }
 
 const INITIAL_SUBJECTS: Subject[] = [
@@ -67,6 +90,17 @@ function getCurrentWeekNumber(): number {
 function getTodayDateString() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+}
+
+function getRecorderMimeType() {
+  if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
+
+  const mimeTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+  return mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || ""
+}
+
+function getSubjectDisplayName(subject: Subject | null) {
+  return subject?.name.replace("\n", " ") || ""
 }
 
 function idsToSubjects(ids: string[]): Subject[] {
@@ -125,18 +159,24 @@ export function SubjectWheel() {
   // so the sync useEffect never fires on the first render with stale default state.
   const readyToSync = useRef(false)
 
-  // Subject modal state (multi-step: panorama -> questions -> confirm)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
-  const [panorama, setPanorama] = useState("")
-  const [isSavingPanorama, setIsSavingPanorama] = useState(false)
-  const [subjectSaveError, setSubjectSaveError] = useState("")
-  const [modalStep, setModalStep] = useState<"panorama" | "questions">("panorama")
-  
-  // Questions draft state for subject modal
-  const [questionDrafts, setQuestionDrafts] = useState<QuestionDraft[]>([
-    { pregunta: "", respuesta: "" },
-  ])
+  const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
+  const [entries, setEntries] = useState<SubjectDayEntry[]>([])
+  const [isEntriesLoading, setIsEntriesLoading] = useState(false)
+  const [entriesError, setEntriesError] = useState("")
+  const [isRecording, setIsRecording] = useState(false)
+  const [recordingError, setRecordingError] = useState("")
+  const [reviewAudio, setReviewAudio] = useState<ReviewAudio | null>(null)
+  const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false)
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false)
+  const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
+  const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
+  const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
+  const [isSavingAnswerId, setIsSavingAnswerId] = useState<number | null>(null)
+  const [expandedAudioEntryId, setExpandedAudioEntryId] = useState<number | null>(null)
+  const [loadingAudioEntryId, setLoadingAudioEntryId] = useState<number | null>(null)
+  const [audioSourceUrls, setAudioSourceUrls] = useState<Record<number, string>>({})
 
   // Practice modal state
   const [isPracticeOpen, setIsPracticeOpen] = useState(false)
@@ -166,6 +206,19 @@ export function SubjectWheel() {
   const aiResponseRef = useRef<HTMLDivElement>(null)
   // Panoramas indexed by subject id for the AI context
   const [panoramaMap, setPanoramaMap] = useState<Record<string, string>>({})
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordingChunksRef = useRef<Blob[]>([])
+  const audioCacheRef = useRef<Map<number, string>>(new Map())
+  const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
+  const todayKey = getTodayDateString()
+  const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
+  const selectedWeekNumber = useMemo(() => getWeekNumberForDate(selectedDate), [selectedDate])
+  const weekDates = useMemo(() => getWeekDates(selectedWeekNumber), [selectedWeekNumber])
+  const currentDayIndex = weekDates.findIndex((date) => formatDateKey(date) === currentDateKey)
+  const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
+    return formatDateKey(date) <= todayKey ? index : lastIndex
+  }, -1)
 
   // Load from database on mount
   useEffect(() => {
@@ -353,140 +406,320 @@ export function SubjectWheel() {
     }
   }
 
-  const resetQuestionDrafts = () => {
-    setQuestionDrafts([
-      { pregunta: "", respuesta: "" },
-    ])
-  }
+  useEffect(() => {
+    if (!isDialogOpen || !currentSubject) return
 
-  const handleUpdateQuestionDraft = (index: number, field: "pregunta" | "respuesta", value: string) => {
-    setQuestionDrafts((prev) =>
-      prev.map((draft, i) => (i === index ? { ...draft, [field]: value } : draft))
-    )
-  }
+    const loadEntries = async () => {
+      setIsEntriesLoading(true)
+      setEntriesError("")
 
-  const handleAddQuestionDraft = () => {
-    setQuestionDrafts((prev) => [...prev, { pregunta: "", respuesta: "" }])
-  }
-
-  const handleSubjectClick = async (subject: Subject) => {
-    const date = getTodayDateString()
-
-    // Reset modal state
-    setCurrentSubject(subject)
-    setModalStep("panorama")
-    resetQuestionDrafts()
-    
-    // Try to load previous panorama if it exists
-    try {
-      const response = await fetch(`/api/subject-completions?date=${date}&subjectId=${subject.id}`)
-      const completion = await response.json()
-      setPanorama(completion?.panorama || "")
-    } catch (error) {
-      console.error("Failed to load panorama:", error)
-      setPanorama("")
-    }
-
-    setIsDialogOpen(true)
-    setSubjectSaveError("")
-  }
-
-  // Continue from panorama to questions step
-  const handleContinueToQuestions = () => {
-    if (!currentSubject) return
-    setSubjectSaveError("")
-    setModalStep("questions")
-  }
-
-  // Final confirm: save panorama and mark as completed
-  const handleConfirmSubject = async () => {
-    if (!currentSubject) return
-
-    setIsSavingPanorama(true)
-    setSubjectSaveError("")
-    try {
-      const date = getTodayDateString()
-
-      // Save panorama to database
-      const completionResponse = await fetch("/api/subject-completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date,
+      try {
+        const params = new URLSearchParams({
           subjectId: currentSubject.id,
-          panorama,
-        }),
-      })
-
-      if (!completionResponse.ok) {
-        const payload = await parseJsonResponse(completionResponse)
-        throw new Error(getErrorMessage(payload, "No se pudo guardar el panorama."))
-      }
-
-      const idMateria = SUBJECT_ID_TO_INDEX[currentSubject.id]
-      const semana = getCurrentWeekNumber()
-      const questionItems = questionDrafts
-        .map((item) => ({
-          pregunta: item.pregunta.trim(),
-          respuesta: item.respuesta.trim(),
-        }))
-        .filter((item) => item.pregunta.length > 0)
-
-      if (questionItems.length > 0) {
-        const questionsResponse = await fetch("/api/questions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id_materia: idMateria,
-            semana,
-            items: questionItems,
-          }),
+          sessionDate: currentDateKey,
+          weekNumber: String(selectedWeekNumber),
         })
 
-        if (!questionsResponse.ok) {
-          const payload = await parseJsonResponse(questionsResponse)
-          throw new Error(getErrorMessage(payload, "No se pudieron guardar las preguntas."))
+        const response = await fetch(`/api/subject-day-entries?${params.toString()}`)
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudieron cargar las dudas del dia."))
+        }
+
+        setEntries(Array.isArray(payload) ? payload : [])
+      } catch (error) {
+        console.error("Failed to load subject day entries:", error)
+        setEntries([])
+        setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.")
+      } finally {
+        setIsEntriesLoading(false)
+      }
+    }
+
+    void loadEntries()
+  }, [currentDateKey, currentSubject, isDialogOpen, selectedWeekNumber])
+
+  useEffect(() => {
+    return () => {
+      if (reviewAudio) {
+        URL.revokeObjectURL(reviewAudio.url)
+      }
+
+      Object.values(audioElementRefs.current).forEach((audioElement) => {
+        audioElement?.pause()
+      })
+
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      }
+
+      audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [reviewAudio])
+
+  const disposeReviewAudio = (nextAudio?: ReviewAudio | null) => {
+    if (reviewAudio && reviewAudio !== nextAudio) {
+      URL.revokeObjectURL(reviewAudio.url)
+    }
+  }
+
+  const resetSubjectUiState = () => {
+    audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+    audioCacheRef.current.clear()
+    audioElementRefs.current = {}
+    setEntries([])
+    setEntriesError("")
+    setRecordingError("")
+    setEditingAnswerId(null)
+    setAnswerDrafts({})
+    setRevealedAnswers({})
+    setExpandedAudioEntryId(null)
+    setLoadingAudioEntryId(null)
+    setAudioSourceUrls({})
+  }
+
+  const cancelReview = () => {
+    disposeReviewAudio(null)
+    setReviewAudio(null)
+    setIsReviewDialogOpen(false)
+  }
+
+  const closeSubjectDialog = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.onstop = null
+      mediaRecorderRef.current.stop()
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+    }
+
+    Object.values(audioElementRefs.current).forEach((audioElement) => {
+      audioElement?.pause()
+    })
+    setIsRecording(false)
+    cancelReview()
+    setIsDialogOpen(false)
+    setCurrentSubject(null)
+    resetSubjectUiState()
+  }
+
+  const handleSubjectClick = (subject: Subject) => {
+    setCurrentSubject(subject)
+    setCurrentDateKey(todayKey)
+    resetSubjectUiState()
+    setIsDialogOpen(true)
+  }
+
+  const markSubjectAsCompleted = (subject: Subject) => {
+    if (!completedSubjects.some((item) => item.id === subject.id)) {
+      const nextActive = activeSubjects.filter((item) => item.id !== subject.id)
+      const nextCompleted = [...completedSubjects, subject]
+      const nextHistory = history.slice(0, historyIndex + 1)
+      nextHistory.push({ active: nextActive, completed: nextCompleted })
+
+      setActiveSubjects(nextActive)
+      setCompletedSubjects(nextCompleted)
+      setHistory(nextHistory)
+      setHistoryIndex(nextHistory.length - 1)
+    }
+
+    closeSubjectDialog()
+  }
+
+  const moveDay = (direction: -1 | 1) => {
+    const nextIndex = currentDayIndex + direction
+    if (nextIndex < 0 || nextIndex >= weekDates.length || nextIndex > lastVisibleDayIndex) return
+    setCurrentDateKey(formatDateKey(weekDates[nextIndex]))
+  }
+
+  const startRecording = async () => {
+    setRecordingError("")
+
+    try {
+      if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        throw new Error("Tu navegador no soporta grabacion de audio.")
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = getRecorderMimeType()
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+
+      mediaStreamRef.current = stream
+      mediaRecorderRef.current = recorder
+      recordingChunksRef.current = []
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordingChunksRef.current.push(event.data)
         }
       }
 
-      // Check if subject is already completed
-      const isAlreadyCompleted = completedSubjects.some((s) => s.id === currentSubject.id)
+      recorder.onstop = () => {
+        setIsRecording(false)
 
-      if (!isAlreadyCompleted) {
-        // Update local state - mark as completed
-        const newActive = activeSubjects.filter((s) => s.id !== currentSubject.id)
-        const newCompleted = [...completedSubjects, currentSubject]
+        const chunks = recordingChunksRef.current
+        recordingChunksRef.current = []
 
-        setActiveSubjects(newActive)
-        setCompletedSubjects(newCompleted)
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+          mediaStreamRef.current = null
+        }
 
-        // Add to history
-        const newHistory = history.slice(0, historyIndex + 1)
-        newHistory.push({
-          active: newActive,
-          completed: newCompleted,
-        })
-        setHistory(newHistory)
-        setHistoryIndex(newHistory.length - 1)
+        if (chunks.length === 0) return
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
+        const nextReviewAudio = {
+          blob,
+          mimeType: blob.type || "audio/webm",
+          url: URL.createObjectURL(blob),
+        }
+
+        disposeReviewAudio(nextReviewAudio)
+        setReviewAudio(nextReviewAudio)
+        setIsReviewDialogOpen(true)
       }
-      // If already completed, just updating panorama - no state change needed
 
-      setIsDialogOpen(false)
-      setCurrentSubject(null)
-      setPanorama("")
-      setModalStep("panorama")
-      resetQuestionDrafts()
+      recorder.start()
+      setIsRecording(true)
     } catch (error) {
-      console.error("Failed to save panorama:", error)
-      const message = error instanceof Error ? error.message : "No se pudo guardar esta materia."
-      setSubjectSaveError(message)
-      toast({
-        variant: "destructive",
-        title: "No se pudo confirmar",
-        description: message,
+      console.error("Failed to start recording:", error)
+      setRecordingError(error instanceof Error ? error.message : "No se pudo iniciar la grabacion.")
+      setIsRecording(false)
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop()
+    }
+  }
+
+  const confirmReview = async () => {
+    if (!currentSubject || !reviewAudio) return
+
+    setIsUploadingAudio(true)
+    setEntriesError("")
+
+    try {
+      const formData = new FormData()
+      formData.append("subjectId", currentSubject.id)
+      formData.append("subjectName", getSubjectDisplayName(currentSubject))
+      formData.append("sessionDate", currentDateKey)
+      formData.append("weekNumber", String(selectedWeekNumber))
+      formData.append("weekdayIndex", String(currentDayIndex >= 0 ? currentDayIndex : 0))
+      formData.append("audio", new File([reviewAudio.blob], `${currentSubject.id}-${currentDateKey}.webm`, { type: reviewAudio.mimeType }))
+
+      const response = await fetch("/api/subject-day-entries", {
+        method: "POST",
+        body: formData,
       })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo confirmar el audio."))
+      }
+
+      setEntries((previousEntries) => {
+        const nextEntries = [...previousEntries, payload as SubjectDayEntry]
+        return nextEntries.sort((left, right) => left.order_index - right.order_index || left.id - right.id)
+      })
+
+      cancelReview()
+    } catch (error) {
+      console.error("Failed to upload audio entry:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar el audio.")
     } finally {
-      setIsSavingPanorama(false)
+      setIsUploadingAudio(false)
+    }
+  }
+
+  const startAnswerEdit = (entry: SubjectDayEntry) => {
+    setEditingAnswerId(entry.id)
+    setAnswerDrafts((previous) => ({
+      ...previous,
+      [entry.id]: previous[entry.id] ?? entry.answer_text ?? "",
+    }))
+  }
+
+  const saveAnswer = async (entry: SubjectDayEntry) => {
+    const draft = (answerDrafts[entry.id] ?? entry.answer_text ?? "").trim()
+    setIsSavingAnswerId(entry.id)
+
+    try {
+      const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answerText: draft || null }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo guardar la respuesta."))
+      }
+
+      setEntries((previousEntries) => previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item)))
+      setEditingAnswerId(null)
+      setRevealedAnswers((previous) => ({ ...previous, [entry.id]: false }))
+    } catch (error) {
+      console.error("Failed to save answer:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo guardar la respuesta.")
+    } finally {
+      setIsSavingAnswerId(null)
+    }
+  }
+
+  const togglePlayback = async (entryId: number) => {
+    try {
+      if (expandedAudioEntryId === entryId) {
+        const currentAudio = audioElementRefs.current[entryId]
+        if (currentAudio) {
+          if (currentAudio.paused) {
+            await currentAudio.play()
+          } else {
+            currentAudio.pause()
+          }
+        }
+        return
+      }
+
+      Object.entries(audioElementRefs.current).forEach(([key, audioElement]) => {
+        if (Number(key) !== entryId) {
+          audioElement?.pause()
+        }
+      })
+
+      let nextUrl = audioCacheRef.current.get(entryId)
+      if (!nextUrl) {
+        setLoadingAudioEntryId(entryId)
+        const response = await fetch(`/api/subject-day-entries/${entryId}/audio`)
+        if (!response.ok) {
+          const payload = await parseJsonResponse(response)
+          throw new Error(getErrorMessage(payload, "No se pudo descargar el audio."))
+        }
+
+        const blob = await response.blob()
+        nextUrl = URL.createObjectURL(blob)
+        audioCacheRef.current.set(entryId, nextUrl)
+        setAudioSourceUrls((previous) => ({
+          ...previous,
+          [entryId]: nextUrl!,
+        }))
+      }
+
+      setExpandedAudioEntryId(entryId)
+      setTimeout(() => {
+        const audioElement = audioElementRefs.current[entryId]
+        if (audioElement) {
+          void audioElement.play()
+        }
+      }, 0)
+    } catch (error) {
+      console.error("Failed to play remote audio:", error)
+      setEntriesError("No se pudo reproducir el audio.")
+    } finally {
+      setLoadingAudioEntryId(null)
     }
   }
 
@@ -818,6 +1051,11 @@ export function SubjectWheel() {
     })
   }, [activeSubjects])
 
+  const editingEntry = useMemo(
+    () => entries.find((entry) => entry.id === editingAnswerId) ?? null,
+    [editingAnswerId, entries]
+  )
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-100 flex flex-col">
@@ -963,13 +1201,15 @@ export function SubjectWheel() {
         {completedSubjects.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-center mb-2">
             {completedSubjects.map((subject) => (
-              <div
+              <button
                 key={subject.id}
-                className="px-3 py-1 rounded-full text-white text-xs font-medium"
+                type="button"
+                onClick={() => handleSubjectClick(subject)}
+                className="px-3 py-1 rounded-full text-white text-xs font-medium transition-opacity hover:opacity-90"
                 style={{ backgroundColor: subject.color }}
               >
                 {subject.name.replace("\n", " ")}
-              </div>
+              </button>
             ))}
           </div>
         )}
@@ -1052,140 +1292,216 @@ export function SubjectWheel() {
         </DialogContent>
       </Dialog>
 
-      {/* Multi-step Subject Modal: Panorama -> Questions -> Confirm */}
-      <Dialog open={isDialogOpen} onOpenChange={(open) => {
-        if (!open) {
-          setIsDialogOpen(false)
-          setCurrentSubject(null)
-          setPanorama("")
-          setModalStep("panorama")
-          resetQuestionDrafts()
-        }
-      }}>
-        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+      <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? closeSubjectDialog() : undefined)}>
+        <DialogContent className="h-[96vh] w-[98vw] max-w-[98vw] sm:max-w-[98vw] border-2 border-black bg-white p-0 shadow-none" showCloseButton={false}>
+          <div className="relative flex h-full flex-col overflow-hidden p-6 sm:p-8">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => moveDay(-1)}
+              disabled={currentDayIndex <= 0}
+              className="absolute left-3 top-1/2 z-20 h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => moveDay(1)}
+              disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
+              className="absolute right-3 top-1/2 z-20 h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+
+            <DialogHeader className="space-y-4 border-b-2 border-black pb-4 pr-28">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-2">
+                  <DialogTitle className="text-left text-2xl font-normal leading-tight text-black sm:text-3xl">
+                    Semana {selectedWeekNumber} - {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)}
+                  </DialogTitle>
+                  <DialogDescription className="text-left text-lg text-black">
+                    Dudas
+                  </DialogDescription>
+                </div>
+
+                <Button
+                  type="button"
+                  onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
+                  className="rounded-2xl border-2 border-black bg-white px-6 text-black hover:bg-slate-100"
+                >
+                  Terminar
+                </Button>
+              </div>
+
+              <div className="text-base text-slate-700">{currentDateKey}</div>
+            </DialogHeader>
+
+            <div className="relative flex-1 overflow-y-auto py-6 pl-8 pr-8 sm:pl-14 sm:pr-14">
+              {entriesError ? (
+                <div className="mb-4 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
+              ) : null}
+
+              {isEntriesLoading ? (
+                <div className="flex min-h-56 items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                </div>
+              ) : entries.length > 0 ? (
+                <div className="space-y-4 pb-28">
+                  {entries.map((entry) => {
+                    const isRevealed = revealedAnswers[entry.id]
+                    const isExpandedAudio = expandedAudioEntryId === entry.id
+                    const audioSrc = audioSourceUrls[entry.id]
+
+                    return (
+                      <article key={entry.id} className="border border-slate-300 px-4 py-3">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-black">Duda {entry.order_index + 1}</p>
+                            <p className="text-base text-slate-800">{entry.transcript_text}</p>
+                          </div>
+
+                          <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="border-black text-black">
+                            {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : isExpandedAudio ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                            {loadingAudioEntryId === entry.id ? "Cargando..." : isExpandedAudio ? "Reproducir/Pausar" : "Audio"}
+                          </Button>
+                        </div>
+
+                        {isExpandedAudio && audioSrc ? (
+                          <div className="mt-3 space-y-2">
+                            <audio
+                              ref={(element) => {
+                                audioElementRefs.current[entry.id] = element
+                              }}
+                              controls
+                              src={audioSrc}
+                              preload="metadata"
+                              className="w-full"
+                            />
+                            <p className="text-xs text-slate-400">
+                              El audio se descarga una sola vez y luego queda en memoria mientras el modal siga abierto.
+                            </p>
+                          </div>
+                        ) : null}
+
+                        <div className="mt-4 border-t border-slate-200 pt-3">
+                          {entry.answer_text ? (
+                            <div className="space-y-3">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRevealedAnswers((previous) => ({
+                                    ...previous,
+                                    [entry.id]: !previous[entry.id],
+                                  }))
+                                }
+                                className="block w-full border border-slate-300 px-3 py-2 text-left text-sm text-slate-800"
+                              >
+                                {isRevealed ? entry.answer_text : "Click para revelar la respuesta"}
+                              </button>
+                              <Button variant="outline" onClick={() => startAnswerEdit(entry)}>
+                                Responder
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button variant="outline" onClick={() => startAnswerEdit(entry)}>
+                              Responder
+                            </Button>
+                          )}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="pb-28 text-sm text-slate-700">Todavia no hay dudas cargadas para este dia.</div>
+              )}
+
+              {recordingError ? (
+                <div className="mt-3 pr-24 text-sm text-red-700">{recordingError}</div>
+              ) : null}
+              {isRecording ? (
+                <div className="mt-3 pr-24 text-sm text-slate-700">Grabando...</div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => void (isRecording ? stopRecording() : startRecording())}
+                className={`absolute bottom-4 right-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-black ${
+                  isRecording ? "bg-red-500 text-white" : "bg-white text-black"
+                }`}
+                aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
+              >
+                {isRecording ? <Square className="h-10 w-10" /> : <Mic className="h-10 w-10" />}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingEntry)} onOpenChange={(open) => (!open ? setEditingAnswerId(null) : undefined)}>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>
-              {modalStep === "panorama" 
-                ? `Panorama de ${currentSubject?.name.replace("\n", " ")}`
-                : "Preguntas"}
-            </DialogTitle>
+            <DialogTitle>Responder</DialogTitle>
+            <DialogDescription>Escribe la respuesta para esta duda. Luego quedara oculta hasta hacer click.</DialogDescription>
           </DialogHeader>
 
-          {/* Step 1: Panorama */}
-          {modalStep === "panorama" && (
-            <div className="space-y-4 flex-1 overflow-y-auto">
+          {editingEntry ? (
+            <div className="space-y-4">
+              <div className="border border-slate-300 px-3 py-2 text-sm text-slate-800">
+                {editingEntry.transcript_text}
+              </div>
               <Textarea
-                placeholder="Describe lo que aprendiste en esta materia hoy..."
-                value={panorama}
-                onChange={(e) => setPanorama(e.target.value)}
-                className="min-h-40 resize-none"
+                value={answerDrafts[editingEntry.id] ?? ""}
+                onChange={(event) =>
+                  setAnswerDrafts((previous) => ({
+                    ...previous,
+                    [editingEntry.id]: event.target.value,
+                  }))
+                }
+                placeholder="Escribe la respuesta"
+                className="min-h-32"
               />
             </div>
-          )}
-
-          {/* Step 2: Questions */}
-          {modalStep === "questions" && (
-            <div className="flex-1 overflow-y-auto">
-              <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-slate-50 to-sky-50 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.35)]">
-                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
-                <div className="space-y-6 p-5 md:p-6">
-                  {questionDrafts.map((draft, index) => (
-                    <div key={`question-draft-${index}`} className="space-y-3">
-                      {questionDrafts.length > 1 ? (
-                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
-                          Pregunta {index + 1}
-                        </p>
-                      ) : null}
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                          <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                            Pregunta
-                          </label>
-                          <Textarea
-                            value={draft.pregunta}
-                            onChange={(e) => handleUpdateQuestionDraft(index, "pregunta", e.target.value)}
-                            placeholder=""
-                            className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
-                          />
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                          <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                            Respuesta
-                          </label>
-                          <Textarea
-                            value={draft.respuesta}
-                            onChange={(e) => handleUpdateQuestionDraft(index, "respuesta", e.target.value)}
-                            placeholder=""
-                            className="min-h-36 resize-none rounded-xl border-slate-200 bg-slate-50/80 text-sm text-slate-800 shadow-none focus-visible:border-sky-400 focus-visible:ring-sky-200"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="flex justify-center">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      onClick={handleAddQuestionDraft}
-                      aria-label="Agregar otra pregunta"
-                      className="rounded-full border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    >
-                      +
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="gap-2 mt-4">
-            {modalStep === "panorama" ? (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsDialogOpen(false)
-                    setCurrentSubject(null)
-                    setPanorama("")
-                    setModalStep("panorama")
-                    resetQuestionDrafts()
-                  }}
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  onClick={handleContinueToQuestions}
-                  type="button"
-                  className="bg-slate-800 hover:bg-slate-700 text-white"
-                >
-                  Continuar
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  type="button"
-                  onClick={() => setModalStep("panorama")}
-                >
-                  Volver
-                </Button>
-                <Button
-                  onClick={handleConfirmSubject}
-                  type="button"
-                  disabled={isSavingPanorama}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {isSavingPanorama ? "Guardando..." : "Confirmar"}
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-          {subjectSaveError ? (
-            <p className="mt-2 text-sm text-red-500">{subjectSaveError}</p>
           ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingAnswerId(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={() => editingEntry && void saveAnswer(editingEntry)} disabled={!editingEntry || isSavingAnswerId === editingEntry.id}>
+              {editingEntry && isSavingAnswerId === editingEntry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isReviewDialogOpen} onOpenChange={(open) => (!open ? cancelReview() : undefined)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Revisar audio</DialogTitle>
+            <DialogDescription>Escuchalo antes de confirmar. Solo al confirmar se crea la transcripcion.</DialogDescription>
+          </DialogHeader>
+
+          {reviewAudio ? (
+            <div className="space-y-3">
+              <audio controls src={reviewAudio.url} className="w-full" />
+              <p className="text-sm text-slate-500">
+                {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)} - {currentDateKey}
+              </p>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={cancelReview} disabled={isUploadingAudio}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void confirmReview()} disabled={!reviewAudio || isUploadingAudio}>
+              {isUploadingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Confirmar
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1586,3 +1902,4 @@ export function SubjectWheel() {
     </div>
   )
 }
+
