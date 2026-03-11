@@ -1875,17 +1875,9 @@ export function SubjectWheel() {
                 {!isPracticeFinished && currentPracticeIndex < practiceVisibleEntries.length ? (
                   <div className="flex flex-1 flex-col gap-5">
                     <div className="flex flex-col gap-2 rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">
-                          Semana {practiceWeekNumber} ·
-                          {practiceFilters.random ? " Aleatorio" : " Orden original"} ·
-                          {practiceFilters.unanswered ? " Sin respuesta" : " Con y sin respuesta"} ·
-                          {practiceFilters.erre ? " Solo erre" : " Todos los estados"}
-                        </p>
-                        <p className="text-sm text-slate-500">
-                          Duda {currentPracticeIndex + 1} de {practiceVisibleEntries.length}
-                        </p>
-                      </div>
+                      <p className="text-sm text-slate-500">
+                        Duda {currentPracticeIndex + 1} de {practiceVisibleEntries.length}
+                      </p>
                       <Button
                         variant="outline"
                         onClick={() => {
@@ -2003,12 +1995,6 @@ export function SubjectWheel() {
             )}
 
           </div>
-
-          <DialogFooter className="border-t border-slate-200 px-6 py-4 sm:px-8">
-            <Button variant="outline" onClick={() => setIsPracticeOpen(false)}>
-              Cerrar
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
