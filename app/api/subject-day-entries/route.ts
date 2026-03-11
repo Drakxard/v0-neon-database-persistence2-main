@@ -45,6 +45,15 @@ function isMissingSubjectDayEntriesTable(error: unknown) {
   )
 }
 
+function isMissingColumn(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "42703"
+  )
+}
+
 function isGeminiQuotaError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "")
   return message.toLowerCase().includes("quota exceeded")
@@ -69,12 +78,20 @@ function getDisplayTitle(entry: Pick<EntryRow, "custom_title" | "order_index">) 
 async function getEntryLinks(entryIds: number[]) {
   if (entryIds.length === 0) return new Map<number, EntryLinkRow[]>()
 
-  const rows = await sql`
-    SELECT id, entry_id, label, url, order_index
-    FROM subject_day_entry_links
-    WHERE entry_id = ANY(${entryIds})
-    ORDER BY entry_id ASC, order_index ASC, id ASC
-  `
+  let rows: EntryLinkRow[]
+  try {
+    rows = await sql`
+      SELECT id, entry_id, label, url, order_index
+      FROM subject_day_entry_links
+      WHERE entry_id = ANY(${entryIds})
+      ORDER BY entry_id ASC, order_index ASC, id ASC
+    ` as EntryLinkRow[]
+  } catch (error) {
+    if (isMissingSubjectDayEntriesTable(error)) {
+      return new Map<number, EntryLinkRow[]>()
+    }
+    throw error
+  }
 
   const linksByEntry = new Map<number, EntryLinkRow[]>()
   for (const row of rows as EntryLinkRow[]) {
@@ -99,6 +116,44 @@ async function withLinks(rows: EntryRow[]) {
   }))
 }
 
+async function selectEntries(subjectId: string, weekNumber: number, sessionDate?: string) {
+  try {
+    if (sessionDate) {
+      return await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+        FROM subject_day_entries
+        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
+        ORDER BY session_date ASC, order_index ASC, id ASC
+      ` as EntryRow[]
+    }
+
+    return await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
+      ORDER BY session_date ASC, order_index ASC, id ASC
+    ` as EntryRow[]
+  } catch (error) {
+    if (!isMissingColumn(error)) throw error
+
+    if (sessionDate) {
+      return await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+        FROM subject_day_entries
+        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
+        ORDER BY session_date ASC, order_index ASC, id ASC
+      ` as EntryRow[]
+    }
+
+    return await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
+      ORDER BY session_date ASC, order_index ASC, id ASC
+    ` as EntryRow[]
+  }
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
@@ -118,21 +173,11 @@ export async function GET(request: Request) {
 
     let rows: EntryRow[]
     if (sessionDate && parsedDate) {
-      rows = await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
-        FROM subject_day_entries
-        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
-        ORDER BY session_date ASC, order_index ASC, id ASC
-      ` as EntryRow[]
+      rows = await selectEntries(subjectId, weekNumber, sessionDate)
     } else if (sessionDate) {
       return badRequest("Invalid sessionDate")
     } else {
-      rows = await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
-        FROM subject_day_entries
-        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
-        ORDER BY session_date ASC, order_index ASC, id ASC
-      ` as EntryRow[]
+      rows = await selectEntries(subjectId, weekNumber)
     }
 
     return NextResponse.json(await withLinks(rows))
@@ -205,33 +250,66 @@ export async function POST(request: Request) {
       }
     }
 
-    const rows = await sql`
-      INSERT INTO subject_day_entries (
-        subject_id,
-        week_number,
-        session_date,
-        weekday_index,
-        order_index,
-        transcript_text,
-        drive_file_id,
-        drive_file_name,
-        drive_mime_type,
-        drive_web_view_link
-      )
-      VALUES (
-        ${subjectId},
-        ${weekNumber},
-        ${sessionDate},
-        ${weekdayIndex},
-        ${nextOrderIndex},
-        ${transcriptText},
-        ${driveFile.id},
-        ${driveFile.name},
-        ${driveFile.mimeType},
-        ${driveFile.webViewLink || ""}
-      )
-      RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
-    `
+    let rows: EntryRow[]
+    try {
+      rows = await sql`
+        INSERT INTO subject_day_entries (
+          subject_id,
+          week_number,
+          session_date,
+          weekday_index,
+          order_index,
+          transcript_text,
+          drive_file_id,
+          drive_file_name,
+          drive_mime_type,
+          drive_web_view_link
+        )
+        VALUES (
+          ${subjectId},
+          ${weekNumber},
+          ${sessionDate},
+          ${weekdayIndex},
+          ${nextOrderIndex},
+          ${transcriptText},
+          ${driveFile.id},
+          ${driveFile.name},
+          ${driveFile.mimeType},
+          ${driveFile.webViewLink || ""}
+        )
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+      ` as EntryRow[]
+    } catch (error) {
+      if (!isMissingColumn(error)) throw error
+
+      rows = await sql`
+        INSERT INTO subject_day_entries (
+          subject_id,
+          week_number,
+          session_date,
+          weekday_index,
+          order_index,
+          transcript_text,
+          drive_file_id,
+          drive_file_name,
+          drive_mime_type,
+          drive_web_view_link
+        )
+        VALUES (
+          ${subjectId},
+          ${weekNumber},
+          ${sessionDate},
+          ${weekdayIndex},
+          ${nextOrderIndex},
+          ${transcriptText},
+          ${driveFile.id},
+          ${driveFile.name},
+          ${driveFile.mimeType},
+          ${driveFile.webViewLink || ""}
+        )
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+      ` as EntryRow[]
+    }
 
     return NextResponse.json((await withLinks([rows[0] as EntryRow]))[0])
   } catch (error) {

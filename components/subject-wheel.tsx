@@ -168,6 +168,16 @@ function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "cu
   return `Duda ${entry.order_index + 1}`
 }
 
+function applyPracticeFilters(entries: SubjectDayEntry[], filters: PracticeFilters, options?: { shuffle?: boolean }) {
+  const filteredEntries = entries.filter((entry) => {
+    if (filters.unanswered && entry.answer_text?.trim()) return false
+    if (filters.erre && entry.practice_state !== "erre") return false
+    return true
+  })
+
+  return options?.shuffle && filters.random ? shuffleQuestions(filteredEntries) : filteredEntries
+}
+
 export function SubjectWheel() {
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(INITIAL_SUBJECTS)
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
@@ -193,6 +203,7 @@ export function SubjectWheel() {
   const [isUploadingAudio, setIsUploadingAudio] = useState(false)
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
   const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
+  const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({})
   const [editingTitleId, setEditingTitleId] = useState<number | null>(null)
   const [titleDrafts, setTitleDrafts] = useState<Record<number, string>>({})
   const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
@@ -214,7 +225,9 @@ export function SubjectWheel() {
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
   const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
   const [practiceEntries, setPracticeEntries] = useState<SubjectDayEntry[]>([])
+  const [practiceVisibleEntries, setPracticeVisibleEntries] = useState<SubjectDayEntry[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
+  const [isPracticeFinished, setIsPracticeFinished] = useState(false)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false)
   const [isLoadingPractice, setIsLoadingPractice] = useState(false)
   const [practiceLoadError, setPracticeLoadError] = useState("")
@@ -501,6 +514,7 @@ export function SubjectWheel() {
     setEditingAnswerId(null)
     setEditingTitleId(null)
     setAnswerDrafts({})
+    setQuestionDrafts({})
     setTitleDrafts({})
     setRevealedAnswers({})
     setIsSavingTitleId(null)
@@ -677,17 +691,22 @@ export function SubjectWheel() {
       ...previous,
       [entry.id]: previous[entry.id] ?? entry.answer_text ?? "",
     }))
+    setQuestionDrafts((previous) => ({
+      ...previous,
+      [entry.id]: previous[entry.id] ?? entry.transcript_text,
+    }))
   }
 
   const saveAnswer = async (entry: SubjectDayEntry) => {
     const draft = (answerDrafts[entry.id] ?? entry.answer_text ?? "").trim()
+    const questionDraft = (questionDrafts[entry.id] ?? entry.transcript_text).trim()
     setIsSavingAnswerId(entry.id)
 
     try {
       const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answerText: draft || null }),
+        body: JSON.stringify({ answerText: draft || null, transcriptText: questionDraft || entry.transcript_text }),
       })
 
       const payload = await response.json()
@@ -745,12 +764,10 @@ export function SubjectWheel() {
 
     setIsCopyingEntries(true)
     try {
-      const payload = entries.reduce<Record<string, string>>((acc, entry) => {
-        acc[getEntryDisplayTitle(entry)] = entry.transcript_text
-        return acc
-      }, {})
-
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+      const payload = entries
+        .map((entry) => `${getEntryDisplayTitle(entry)}: ${entry.answer_text?.trim() || ""}`)
+        .join("\n")
+      await navigator.clipboard.writeText(payload)
     } catch (error) {
       console.error("Failed to copy entries:", error)
       setEntriesError("No se pudieron copiar las dudas.")
@@ -865,8 +882,10 @@ export function SubjectWheel() {
     setPracticeWeekNumber(String(getCurrentWeekNumber()))
     setPracticeFilters({ random: false, unanswered: false, erre: false })
     setPracticeEntries([])
+    setPracticeVisibleEntries([])
     setPracticeLoadError("")
     setCurrentPracticeIndex(0)
+    setIsPracticeFinished(false)
     setIsAnswerRevealed(false)
     setIsPracticeOpen(true)
   }
@@ -878,6 +897,7 @@ export function SubjectWheel() {
       setPracticeSubjectId("")
       setPracticeSubjectIndex(null)
       setPracticeEntries([])
+      setPracticeVisibleEntries([])
       return
     }
 
@@ -885,6 +905,7 @@ export function SubjectWheel() {
     if (Number.isNaN(parsedWeekNumber) || parsedWeekNumber < 0) {
       setPracticeLoadError("La semana seleccionada no es valida.")
       setPracticeEntries([])
+      setPracticeVisibleEntries([])
       return
     }
 
@@ -894,6 +915,7 @@ export function SubjectWheel() {
     setPracticeSubjectIndex(subjectIndex)
     setPracticeWeekNumber(String(parsedWeekNumber))
     setCurrentPracticeIndex(0)
+    setIsPracticeFinished(false)
     setIsAnswerRevealed(false)
     try {
       const controller = new AbortController()
@@ -919,16 +941,12 @@ export function SubjectWheel() {
       }
 
       const normalizedEntries = Array.isArray(data) ? (data as SubjectDayEntry[]) : []
-      const filteredEntries = normalizedEntries.filter((entry) => {
-        if (filters.unanswered && entry.answer_text?.trim()) return false
-        if (filters.erre && entry.practice_state !== "erre") return false
-        return true
-      })
-
-      setPracticeEntries(filters.random ? shuffleQuestions(filteredEntries) : filteredEntries)
+      setPracticeEntries(normalizedEntries)
+      setPracticeVisibleEntries(applyPracticeFilters(normalizedEntries, filters, { shuffle: true }))
     } catch (err) {
       console.error("[v0] Failed to load practice entries:", err)
       setPracticeEntries([])
+      setPracticeVisibleEntries([])
       setPracticeLoadError(
         err instanceof Error ? err.message : "No se pudieron cargar las dudas de practica."
       )
@@ -943,53 +961,66 @@ export function SubjectWheel() {
       [key]: !practiceFilters[key],
     }
     setPracticeFilters(nextFilters)
-    if (practiceSubjectId) {
-      void loadPracticeEntries(practiceSubjectId, practiceWeekNumber, nextFilters)
-    }
+    setCurrentPracticeIndex(0)
+    setIsPracticeFinished(false)
+    setPracticeVisibleEntries(applyPracticeFilters(practiceEntries, nextFilters, { shuffle: true }))
   }
 
   const handlePracticeAnswer = async (estado: "bien" | "erre") => {
-    const currentEntry = practiceEntries[currentPracticeIndex]
+    const currentEntry = practiceVisibleEntries[currentPracticeIndex]
     if (!currentEntry) return
 
-    try {
-      const response = await fetch(`/api/subject-day-entries/${currentEntry.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ practiceState: estado === "erre" ? "erre" : null }),
-      })
-      const payload = await parseJsonResponse(response)
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo actualizar el estado de practica."))
+    const nextPracticeState = estado === "erre" ? "erre" : null
+    const shouldRemainVisible =
+      (!practiceFilters.erre || nextPracticeState === "erre") &&
+      (!practiceFilters.unanswered || !currentEntry.answer_text?.trim())
+    const nextVisibleLength = practiceVisibleEntries.length + (shouldRemainVisible ? 0 : -1)
+    const nextIndex = shouldRemainVisible ? currentPracticeIndex + 1 : currentPracticeIndex
+
+    setPracticeEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === currentEntry.id
+          ? { ...entry, practice_state: nextPracticeState }
+          : entry
+      )
+    )
+    setPracticeVisibleEntries((prev) => {
+      const updatedVisibleEntries = prev.map((entry) =>
+        entry.id === currentEntry.id
+          ? { ...entry, practice_state: nextPracticeState }
+          : entry
+      )
+
+      if (!shouldRemainVisible) {
+        return updatedVisibleEntries.filter((entry) => entry.id !== currentEntry.id)
       }
 
-      setPracticeEntries((prev) => {
-        const updatedEntries = prev.map((entry) =>
-          entry.id === currentEntry.id
-            ? { ...entry, practice_state: estado === "erre" ? "erre" : null }
-            : entry
-        )
+      return updatedVisibleEntries
+    })
+    setIsAnswerRevealed(false)
 
-        const filteredEntries = updatedEntries.filter((entry) => {
-          if (practiceFilters.unanswered && entry.answer_text?.trim()) return false
-          if (practiceFilters.erre && entry.practice_state !== "erre") return false
-          return true
-        })
-
-        setCurrentPracticeIndex((prevIndex) => {
-          if (filteredEntries.length === 0) return 0
-          if (prevIndex >= filteredEntries.length - 1) return filteredEntries.length
-          return prevIndex + 1
-        })
-
-        return filteredEntries
-      })
-    } catch (error) {
-      console.error("[v0] Failed to update practice state:", error)
-      setPracticeLoadError(error instanceof Error ? error.message : "No se pudo actualizar el estado.")
+    if (nextVisibleLength <= 0 || nextIndex >= nextVisibleLength) {
+      setIsPracticeFinished(true)
+    } else {
+      setCurrentPracticeIndex(nextIndex)
     }
 
-    setIsAnswerRevealed(false)
+    void (async () => {
+      try {
+        const response = await fetch(`/api/subject-day-entries/${currentEntry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ practiceState: nextPracticeState }),
+        })
+        const payload = await parseJsonResponse(response)
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo actualizar el estado de practica."))
+        }
+      } catch (error) {
+        console.error("[v0] Failed to update practice state:", error)
+        setPracticeLoadError(error instanceof Error ? error.message : "No se pudo actualizar el estado.")
+      }
+    })()
   }
 
   const handleUndo = () => {
@@ -1014,7 +1045,7 @@ export function SubjectWheel() {
 
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
-  const currentPracticeEntry = practiceEntries[currentPracticeIndex]
+  const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
   const practiceWeekOptions = useMemo(
     () => Array.from({ length: getCurrentWeekNumber() + 1 }, (_, index) => String(index)),
     []
@@ -1133,24 +1164,7 @@ export function SubjectWheel() {
     <div className="min-h-screen bg-slate-100 flex flex-col">
       {/* Header */}
       <header className="flex items-center justify-between p-4 bg-white shadow-sm">
-        <div className="flex gap-2">
-          <button
-            onClick={handleUndo}
-            disabled={!canUndo}
-            className="p-2 rounded-full hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label="Deshacer"
-          >
-            <ChevronLeft className="w-5 h-5 text-slate-700" />
-          </button>
-          <button
-            onClick={handleRedo}
-            disabled={!canRedo}
-            className="p-2 rounded-full hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label="Rehacer"
-          >
-            <ChevronRight className="w-5 h-5 text-slate-700" />
-          </button>
-        </div>
+        <div />
 
         {/* Save status indicator */}
         <div className="flex items-center gap-1.5 text-xs">
@@ -1180,14 +1194,6 @@ export function SubjectWheel() {
             <GraduationCap className="w-4 h-4 mr-1.5" />
             Practicar
           </Button>
-          <button
-            onClick={openAiModal}
-            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
-            aria-label="Consultar IA"
-            title="Consultar IA (G)"
-          >
-            <Sparkles className="w-5 h-5 text-slate-700" />
-          </button>
           <button
             onClick={handleReset}
             className="p-2 rounded-full hover:bg-slate-100 transition-colors"
@@ -1586,9 +1592,22 @@ export function SubjectWheel() {
 
           {editingEntry ? (
             <div className="space-y-4">
-              <div className="border border-slate-300 px-3 py-2 text-sm text-slate-800">
-                {editingEntry.transcript_text}
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Pregunta</p>
+                <Textarea
+                  value={questionDrafts[editingEntry.id] ?? editingEntry.transcript_text}
+                  onChange={(event) =>
+                    setQuestionDrafts((previous) => ({
+                      ...previous,
+                      [editingEntry.id]: event.target.value,
+                    }))
+                  }
+                  placeholder="Escribe la duda"
+                  className="min-h-24"
+                />
               </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-slate-700">Respuesta</p>
               <Textarea
                 value={answerDrafts[editingEntry.id] ?? ""}
                 onChange={(event) =>
@@ -1600,6 +1619,7 @@ export function SubjectWheel() {
                 placeholder="Escribe la respuesta"
                 className="min-h-32"
               />
+              </div>
             </div>
           ) : null}
 
@@ -1739,10 +1759,17 @@ export function SubjectWheel() {
                   <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
                     <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Filtros</p>
                     <div className="grid gap-3 sm:grid-cols-3">
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => togglePracticeFilter("random")}
-                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            togglePracticeFilter("random")
+                          }
+                        }}
+                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.random
                             ? "border-sky-500 bg-sky-50 shadow-sm"
                             : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -1753,11 +1780,18 @@ export function SubjectWheel() {
                           <span className="block text-sm font-semibold text-slate-700">Aleatorio</span>
                           <span className="block text-xs text-slate-500">Mezcla el orden de las dudas cargadas.</span>
                         </span>
-                      </button>
-                      <button
-                        type="button"
+                      </div>
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => togglePracticeFilter("unanswered")}
-                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            togglePracticeFilter("unanswered")
+                          }
+                        }}
+                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.unanswered
                             ? "border-amber-500 bg-amber-50 shadow-sm"
                             : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -1768,11 +1802,18 @@ export function SubjectWheel() {
                           <span className="block text-sm font-semibold text-slate-700">Sin respuesta</span>
                           <span className="block text-xs text-slate-500">Solo dudas que aun no tienen respuesta.</span>
                         </span>
-                      </button>
-                      <button
-                        type="button"
+                      </div>
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => togglePracticeFilter("erre")}
-                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault()
+                            togglePracticeFilter("erre")
+                          }
+                        }}
+                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.erre
                             ? "border-rose-500 bg-rose-50 shadow-sm"
                             : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
@@ -1783,7 +1824,7 @@ export function SubjectWheel() {
                           <span className="block text-sm font-semibold text-slate-700">Erre</span>
                           <span className="block text-xs text-slate-500">Solo dudas marcadas como erre.</span>
                         </span>
-                      </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1807,7 +1848,7 @@ export function SubjectWheel() {
             )}
 
             {/* No questions */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceEntries.length === 0 && (
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length === 0 && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
                 <div className="w-full rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
                   <p className="mb-4 text-sm text-slate-500 sm:text-base">
@@ -1819,6 +1860,7 @@ export function SubjectWheel() {
                       setPracticeSubjectId("")
                       setPracticeSubjectIndex(null)
                       setPracticeEntries([])
+                      setPracticeVisibleEntries([])
                     }}
                   >
                     Elegir otra materia
@@ -1828,9 +1870,9 @@ export function SubjectWheel() {
             )}
 
             {/* Flashcard view */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceEntries.length > 0 && (
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length > 0 && (
               <div className="mx-auto flex h-full w-full max-w-6xl flex-col">
-                {currentPracticeIndex < practiceEntries.length ? (
+                {!isPracticeFinished && currentPracticeIndex < practiceVisibleEntries.length ? (
                   <div className="flex flex-1 flex-col gap-5">
                     <div className="flex flex-col gap-2 rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
                       <div>
@@ -1841,7 +1883,7 @@ export function SubjectWheel() {
                           {practiceFilters.erre ? " Solo erre" : " Todos los estados"}
                         </p>
                         <p className="text-sm text-slate-500">
-                          Duda {currentPracticeIndex + 1} de {practiceEntries.length}
+                          Duda {currentPracticeIndex + 1} de {practiceVisibleEntries.length}
                         </p>
                       </div>
                       <Button
@@ -1850,8 +1892,10 @@ export function SubjectWheel() {
                           setPracticeSubjectId("")
                           setPracticeSubjectIndex(null)
                           setCurrentPracticeIndex(0)
+                          setIsPracticeFinished(false)
                           setIsAnswerRevealed(false)
                           setPracticeEntries([])
+                          setPracticeVisibleEntries([])
                         }}
                       >
                         Cambiar materia
@@ -1922,16 +1966,17 @@ export function SubjectWheel() {
                         Cerralo un momento, respira hondo y afloja los hombros.
                       </p>
                       <p className="mb-6 text-sm text-slate-500">
-                        Totales revisados: {practiceEntries.length}. Erre restantes:{" "}
-                        {practiceEntries.filter((entry) => entry.practice_state === "erre").length}
+                        Totales visibles: {practiceVisibleEntries.length}. Erre visibles:{" "}
+                        {practiceVisibleEntries.filter((entry) => entry.practice_state === "erre").length}
                       </p>
                       <div className="flex flex-wrap justify-center gap-2">
                         <Button
                           variant="outline"
                           onClick={() => {
                             setCurrentPracticeIndex(0)
+                            setIsPracticeFinished(false)
                             setIsAnswerRevealed(false)
-                            setPracticeEntries((prev) => (practiceFilters.random ? shuffleQuestions(prev) : [...prev]))
+                            setPracticeVisibleEntries((prev) => (practiceFilters.random ? shuffleQuestions(prev) : [...prev]))
                           }}
                         >
                           Repetir
@@ -1942,8 +1987,10 @@ export function SubjectWheel() {
                             setPracticeSubjectId("")
                             setPracticeSubjectIndex(null)
                             setCurrentPracticeIndex(0)
+                            setIsPracticeFinished(false)
                             setIsAnswerRevealed(false)
                             setPracticeEntries([])
+                            setPracticeVisibleEntries([])
                           }}
                         >
                           Otra materia
