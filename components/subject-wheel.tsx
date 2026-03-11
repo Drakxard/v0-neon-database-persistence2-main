@@ -1337,7 +1337,7 @@ export function SubjectWheel() {
               <div className="text-base text-slate-700">{currentDateKey}</div>
             </DialogHeader>
 
-            <div className="relative flex-1 overflow-y-auto py-6 pl-8 pr-8 sm:pl-14 sm:pr-14">
+            <div className="flex-1 overflow-y-auto py-6 pl-8 pr-8 sm:pl-14 sm:pr-14">
               {entriesError ? (
                 <div className="mb-4 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
               ) : null}
@@ -1423,7 +1423,9 @@ export function SubjectWheel() {
               {isRecording ? (
                 <div className="mt-3 pr-24 text-sm text-slate-700">Grabando...</div>
               ) : null}
+            </div>
 
+            <div className="relative h-0">
               <button
                 type="button"
                 onClick={() => void (isRecording ? stopRecording() : startRecording())}
