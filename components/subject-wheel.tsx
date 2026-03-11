@@ -1293,14 +1293,14 @@ export function SubjectWheel() {
       </Dialog>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? closeSubjectDialog() : undefined)}>
-        <DialogContent className="h-[96vh] w-[98vw] max-w-[98vw] sm:max-w-[98vw] border-2 border-black bg-white p-0 shadow-none" showCloseButton={false}>
-          <div className="relative flex h-full flex-col overflow-hidden p-6 sm:p-8">
+        <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-white p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border-2 sm:border-black" showCloseButton={false}>
+          <div className="relative flex h-full flex-col overflow-hidden px-4 py-4 sm:p-8">
             <Button
               variant="outline"
               size="icon"
               onClick={() => moveDay(-1)}
               disabled={currentDayIndex <= 0}
-              className="absolute left-3 top-1/2 z-20 h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25"
+              className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -1309,18 +1309,18 @@ export function SubjectWheel() {
               size="icon"
               onClick={() => moveDay(1)}
               disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
-              className="absolute right-3 top-1/2 z-20 h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25"
+              className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
 
-            <DialogHeader className="space-y-4 border-b-2 border-black pb-4 pr-28">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-2">
-                  <DialogTitle className="text-left text-2xl font-normal leading-tight text-black sm:text-3xl">
+            <DialogHeader className="space-y-3 border-b border-black pb-3 sm:border-b-2 sm:pb-4 sm:pr-28">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1.5">
+                  <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
                     Semana {selectedWeekNumber} - {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)}
                   </DialogTitle>
-                  <DialogDescription className="text-left text-lg text-black">
+                  <DialogDescription className="text-left text-sm text-black sm:text-base">
                     Dudas
                   </DialogDescription>
                 </div>
@@ -1328,18 +1328,40 @@ export function SubjectWheel() {
                 <Button
                   type="button"
                   onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
-                  className="rounded-2xl border-2 border-black bg-white px-6 text-black hover:bg-slate-100"
+                  className="h-10 rounded-2xl border-2 border-black bg-white px-4 text-sm text-black hover:bg-slate-100 sm:h-11 sm:px-6"
                 >
                   Terminar
                 </Button>
               </div>
 
-              <div className="text-base text-slate-700">{currentDateKey}</div>
+              <div className="flex items-center justify-between gap-3 md:justify-start md:gap-4">
+                <div className="flex items-center gap-2 md:hidden">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => moveDay(-1)}
+                    disabled={currentDayIndex <= 0}
+                    className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => moveDay(1)}
+                    disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
+                    className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
+              </div>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto py-6 pl-8 pr-8 sm:pl-14 sm:pr-14">
+            <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
               {entriesError ? (
-                <div className="mb-4 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
+                <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
               ) : null}
 
               {isEntriesLoading ? (
@@ -1347,21 +1369,21 @@ export function SubjectWheel() {
                   <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
                 </div>
               ) : entries.length > 0 ? (
-                <div className="space-y-4 pb-28">
+                <div className="space-y-3 pb-24 sm:space-y-4 sm:pb-28">
                   {entries.map((entry) => {
                     const isRevealed = revealedAnswers[entry.id]
                     const isExpandedAudio = expandedAudioEntryId === entry.id
                     const audioSrc = audioSourceUrls[entry.id]
 
                     return (
-                      <article key={entry.id} className="border border-slate-300 px-4 py-3">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-2">
-                            <p className="text-sm font-medium text-black">Duda {entry.order_index + 1}</p>
-                            <p className="text-base text-slate-800">{entry.transcript_text}</p>
+                      <article key={entry.id} className="border border-slate-300 px-3 py-3 sm:px-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-1.5">
+                            <p className="text-xs font-medium text-black sm:text-sm">Duda {entry.order_index + 1}</p>
+                            <p className="text-sm leading-6 text-slate-800 sm:text-base sm:leading-7">{entry.transcript_text}</p>
                           </div>
 
-                          <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="border-black text-black">
+                          <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-10 shrink-0 border-black px-3 text-black sm:px-4">
                             {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : isExpandedAudio ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                             {loadingAudioEntryId === entry.id ? "Cargando..." : isExpandedAudio ? "Reproducir/Pausar" : "Audio"}
                           </Button>
@@ -1376,7 +1398,7 @@ export function SubjectWheel() {
                               controls
                               src={audioSrc}
                               preload="metadata"
-                              className="w-full"
+                              className="h-10 w-full sm:h-11"
                             />
                             <p className="text-xs text-slate-400">
                               El audio se descarga una sola vez y luego queda en memoria mientras el modal siga abierto.
@@ -1386,7 +1408,7 @@ export function SubjectWheel() {
 
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           {entry.answer_text ? (
-                            <div className="space-y-3">
+                            <div className="space-y-2.5">
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1399,12 +1421,12 @@ export function SubjectWheel() {
                               >
                                 {isRevealed ? entry.answer_text : "Click para revelar la respuesta"}
                               </button>
-                              <Button variant="outline" onClick={() => startAnswerEdit(entry)}>
+                              <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
                                 Responder
                               </Button>
                             </div>
                           ) : (
-                            <Button variant="outline" onClick={() => startAnswerEdit(entry)}>
+                            <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
                               Responder
                             </Button>
                           )}
@@ -1414,7 +1436,7 @@ export function SubjectWheel() {
                   })}
                 </div>
               ) : (
-                <div className="pb-28 text-sm text-slate-700">Todavia no hay dudas cargadas para este dia.</div>
+                <div className="pb-24 text-sm text-slate-700 sm:pb-28">Todavia no hay dudas cargadas para este dia.</div>
               )}
 
               {recordingError ? (
@@ -1429,12 +1451,12 @@ export function SubjectWheel() {
               <button
                 type="button"
                 onClick={() => void (isRecording ? stopRecording() : startRecording())}
-                className={`absolute bottom-4 right-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-black ${
+                className={`absolute bottom-4 right-2 flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:right-4 sm:h-20 sm:w-20 ${
                   isRecording ? "bg-red-500 text-white" : "bg-white text-black"
                 }`}
                 aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
               >
-                {isRecording ? <Square className="h-10 w-10" /> : <Mic className="h-10 w-10" />}
+                {isRecording ? <Square className="h-8 w-8 sm:h-10 sm:w-10" /> : <Mic className="h-8 w-8 sm:h-10 sm:w-10" />}
               </button>
             </div>
           </div>
