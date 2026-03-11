@@ -1,14 +1,13 @@
 "use client"
 
-import { useState, useMemo, useEffect, useRef, useCallback, useTransition } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Loader2, Sparkles, GraduationCap, Pencil, X, Info, Download, Link2, Upload, Mic, Pause, Play, Square } from "lucide-react"
+import { useState, useMemo, useEffect, useRef, useCallback } from "react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { saveQuestionExampleAction } from "@/app/actions/question-example"
 import { formatDateKey, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
 interface Subject {
@@ -33,6 +32,12 @@ interface QuestionDraft {
   respuesta: string
 }
 
+interface SubjectDayEntryLink {
+  id: number
+  label: string
+  url: string
+}
+
 interface SubjectDayEntry {
   id: number
   subject_id: string
@@ -46,6 +51,10 @@ interface SubjectDayEntry {
   drive_mime_type: string
   drive_web_view_link: string
   answer_text: string | null
+  custom_title: string | null
+  display_title: string
+  practice_state: "erre" | null
+  external_links: SubjectDayEntryLink[]
   created_at: string
   updated_at: string
 }
@@ -112,7 +121,11 @@ function subjectsToIds(subjects: Subject[]): string[] {
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error"
-type PracticeFilter = "all" | "erre"
+type PracticeFilters = {
+  random: boolean
+  unanswered: boolean
+  erre: boolean
+}
 
 function shuffleQuestions<T>(items: T[]): T[] {
   const shuffled = [...items]
@@ -147,6 +160,14 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
+function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "custom_title" | "order_index">) {
+  const customTitle = entry.custom_title?.trim()
+  if (customTitle) return customTitle
+  const displayTitle = entry.display_title?.trim()
+  if (displayTitle) return displayTitle
+  return `Duda ${entry.order_index + 1}`
+}
+
 export function SubjectWheel() {
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(INITIAL_SUBJECTS)
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
@@ -172,30 +193,37 @@ export function SubjectWheel() {
   const [isUploadingAudio, setIsUploadingAudio] = useState(false)
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
   const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
+  const [editingTitleId, setEditingTitleId] = useState<number | null>(null)
+  const [titleDrafts, setTitleDrafts] = useState<Record<number, string>>({})
   const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
   const [isSavingAnswerId, setIsSavingAnswerId] = useState<number | null>(null)
+  const [isSavingTitleId, setIsSavingTitleId] = useState<number | null>(null)
   const [expandedAudioEntryId, setExpandedAudioEntryId] = useState<number | null>(null)
   const [loadingAudioEntryId, setLoadingAudioEntryId] = useState<number | null>(null)
   const [audioSourceUrls, setAudioSourceUrls] = useState<Record<number, string>>({})
+  const [isCopyingEntries, setIsCopyingEntries] = useState(false)
+  const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
+  const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
+  const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
+  const [isSavingLink, setIsSavingLink] = useState(false)
 
   // Practice modal state
   const [isPracticeOpen, setIsPracticeOpen] = useState(false)
   const [practiceSubjectIndex, setPracticeSubjectIndex] = useState<number | null>(null)
   const [practiceSubjectId, setPracticeSubjectId] = useState<string>("")
-  const [practiceFilter, setPracticeFilter] = useState<PracticeFilter>("all")
-  const [practiceQuestions, setPracticeQuestions] = useState<Question[]>([])
+  const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
+  const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
+  const [practiceEntries, setPracticeEntries] = useState<SubjectDayEntry[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false)
   const [isLoadingPractice, setIsLoadingPractice] = useState(false)
   const [practiceLoadError, setPracticeLoadError] = useState("")
-  const [editingPracticeQuestionId, setEditingPracticeQuestionId] = useState<number | null>(null)
-  const [practiceEditDraft, setPracticeEditDraft] = useState<QuestionDraft>({ pregunta: "", respuesta: "" })
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false)
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
   const [exampleError, setExampleError] = useState("")
-  const [isSavingExample, startSavingExample] = useTransition()
-  const currentPracticeQuestionId = practiceQuestions[currentPracticeIndex]?.id ?? null
+  const practiceQuestions: Question[] = []
+  const currentPracticeQuestionId = null
 
   // AI modal state
   const [isAiOpen, setIsAiOpen] = useState(false)
@@ -471,11 +499,19 @@ export function SubjectWheel() {
     setEntriesError("")
     setRecordingError("")
     setEditingAnswerId(null)
+    setEditingTitleId(null)
     setAnswerDrafts({})
+    setTitleDrafts({})
     setRevealedAnswers({})
+    setIsSavingTitleId(null)
     setExpandedAudioEntryId(null)
     setLoadingAudioEntryId(null)
     setAudioSourceUrls({})
+    setIsCopyingEntries(false)
+    setIsLinkDialogOpen(false)
+    setLinkEntryId(null)
+    setLinkDraft({ label: "", url: "" })
+    setIsSavingLink(false)
   }
 
   const cancelReview = () => {
@@ -670,6 +706,105 @@ export function SubjectWheel() {
     }
   }
 
+  const startTitleEdit = (entry: SubjectDayEntry) => {
+    setEditingTitleId(entry.id)
+    setTitleDrafts((previous) => ({
+      ...previous,
+      [entry.id]: previous[entry.id] ?? getEntryDisplayTitle(entry),
+    }))
+  }
+
+  const saveTitle = async (entry: SubjectDayEntry) => {
+    const draft = (titleDrafts[entry.id] ?? "").trim()
+    setIsSavingTitleId(entry.id)
+
+    try {
+      const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customTitle: draft || null }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo guardar el nombre de la duda."))
+      }
+
+      setEntries((previousEntries) => previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item)))
+      setEditingTitleId(null)
+    } catch (error) {
+      console.error("Failed to save entry title:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo guardar el nombre de la duda.")
+    } finally {
+      setIsSavingTitleId(null)
+    }
+  }
+
+  const copyEntriesForDay = async () => {
+    if (entries.length === 0 || isCopyingEntries) return
+
+    setIsCopyingEntries(true)
+    try {
+      const payload = entries.reduce<Record<string, string>>((acc, entry) => {
+        acc[getEntryDisplayTitle(entry)] = entry.transcript_text
+        return acc
+      }, {})
+
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+    } catch (error) {
+      console.error("Failed to copy entries:", error)
+      setEntriesError("No se pudieron copiar las dudas.")
+    } finally {
+      window.setTimeout(() => setIsCopyingEntries(false), 600)
+    }
+  }
+
+  const openLinkDialog = (entryId: number) => {
+    setLinkEntryId(entryId)
+    setLinkDraft({ label: "", url: "" })
+    setIsLinkDialogOpen(true)
+  }
+
+  const saveEntryLink = async () => {
+    if (linkEntryId === null) return
+
+    setIsSavingLink(true)
+    try {
+      const response = await fetch(`/api/subject-day-entries/${linkEntryId}/links`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: linkDraft.label.trim(),
+          url: linkDraft.url.trim(),
+        }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo guardar el link."))
+      }
+
+      setEntries((previousEntries) =>
+        previousEntries.map((entry) =>
+          entry.id === linkEntryId
+            ? {
+                ...entry,
+                external_links: [...entry.external_links, payload as SubjectDayEntryLink],
+              }
+            : entry
+        )
+      )
+      setIsLinkDialogOpen(false)
+      setLinkEntryId(null)
+      setLinkDraft({ label: "", url: "" })
+    } catch (error) {
+      console.error("Failed to save entry link:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo guardar el link.")
+    } finally {
+      setIsSavingLink(false)
+    }
+  }
+
   const togglePlayback = async (entryId: number) => {
     try {
       if (expandedAudioEntryId === entryId) {
@@ -727,23 +862,29 @@ export function SubjectWheel() {
   const openPracticeModal = () => {
     setPracticeSubjectIndex(null)
     setPracticeSubjectId("")
-    setPracticeFilter("all")
-    setPracticeQuestions([])
+    setPracticeWeekNumber(String(getCurrentWeekNumber()))
+    setPracticeFilters({ random: false, unanswered: false, erre: false })
+    setPracticeEntries([])
     setPracticeLoadError("")
     setCurrentPracticeIndex(0)
     setIsAnswerRevealed(false)
-    setEditingPracticeQuestionId(null)
-    setPracticeEditDraft({ pregunta: "", respuesta: "" })
     setIsPracticeOpen(true)
   }
 
-  const loadPracticeQuestions = async (subjectId: string, filter: PracticeFilter = practiceFilter) => {
+  const loadPracticeEntries = async (subjectId: string, weekNumberValue = practiceWeekNumber, filters = practiceFilters) => {
     const subjectIndex = SUBJECT_ID_TO_INDEX[subjectId]
     if (subjectIndex === undefined) {
       setPracticeLoadError("La materia seleccionada no es valida.")
       setPracticeSubjectId("")
       setPracticeSubjectIndex(null)
-      setPracticeQuestions([])
+      setPracticeEntries([])
+      return
+    }
+
+    const parsedWeekNumber = Number.parseInt(weekNumberValue, 10)
+    if (Number.isNaN(parsedWeekNumber) || parsedWeekNumber < 0) {
+      setPracticeLoadError("La semana seleccionada no es valida.")
+      setPracticeEntries([])
       return
     }
 
@@ -751,19 +892,21 @@ export function SubjectWheel() {
     setPracticeLoadError("")
     setPracticeSubjectId(subjectId)
     setPracticeSubjectIndex(subjectIndex)
+    setPracticeWeekNumber(String(parsedWeekNumber))
     setCurrentPracticeIndex(0)
     setIsAnswerRevealed(false)
-    setEditingPracticeQuestionId(null)
-    setPracticeEditDraft({ pregunta: "", respuesta: "" })
     try {
-      const semana = getCurrentWeekNumber()
-      console.log("[v0] Loading practice questions for:", { subjectIndex, semana })
       const controller = new AbortController()
       const timeoutId = window.setTimeout(() => controller.abort(), 10000)
       let res: Response
 
       try {
-        res = await fetch(`/api/questions?id_materia=${subjectIndex}&semana=${semana}`, {
+        const params = new URLSearchParams({
+          subjectId,
+          weekNumber: String(parsedWeekNumber),
+        })
+
+        res = await fetch(`/api/subject-day-entries?${params.toString()}`, {
           signal: controller.signal,
         })
       } finally {
@@ -772,174 +915,81 @@ export function SubjectWheel() {
 
       const data = await parseJsonResponse(res)
       if (!res.ok) {
-        throw new Error(getErrorMessage(data, "No se pudieron cargar las preguntas."))
+        throw new Error(getErrorMessage(data, "No se pudieron cargar las dudas de practica."))
       }
 
-      const normalizedQuestions = Array.isArray(data) ? data : []
-      const filteredQuestions =
-        filter === "erre"
-          ? normalizedQuestions.filter((question) => question.estado === "erre")
-          : normalizedQuestions
+      const normalizedEntries = Array.isArray(data) ? (data as SubjectDayEntry[]) : []
+      const filteredEntries = normalizedEntries.filter((entry) => {
+        if (filters.unanswered && entry.answer_text?.trim()) return false
+        if (filters.erre && entry.practice_state !== "erre") return false
+        return true
+      })
 
-      console.log("[v0] Practice questions loaded:", filteredQuestions)
-      setPracticeQuestions(shuffleQuestions(filteredQuestions))
+      setPracticeEntries(filters.random ? shuffleQuestions(filteredEntries) : filteredEntries)
     } catch (err) {
-      console.error("[v0] Failed to load practice questions:", err)
-      setPracticeQuestions([])
+      console.error("[v0] Failed to load practice entries:", err)
+      setPracticeEntries([])
       setPracticeLoadError(
-        err instanceof Error ? err.message : "No se pudieron cargar las preguntas de practica."
+        err instanceof Error ? err.message : "No se pudieron cargar las dudas de practica."
       )
     } finally {
       setIsLoadingPractice(false)
     }
   }
 
-  const handlePracticeFilterChange = (filter: PracticeFilter) => {
-    setPracticeFilter(filter)
-
+  const togglePracticeFilter = (key: keyof PracticeFilters) => {
+    const nextFilters = {
+      ...practiceFilters,
+      [key]: !practiceFilters[key],
+    }
+    setPracticeFilters(nextFilters)
     if (practiceSubjectId) {
-      void loadPracticeQuestions(practiceSubjectId, filter)
+      void loadPracticeEntries(practiceSubjectId, practiceWeekNumber, nextFilters)
     }
   }
 
   const handlePracticeAnswer = async (estado: "bien" | "erre") => {
-    const currentQuestion = practiceQuestions[currentPracticeIndex]
-    if (!currentQuestion) return
+    const currentEntry = practiceEntries[currentPracticeIndex]
+    if (!currentEntry) return
 
-    // Update estado in DB
     try {
-      await fetch("/api/questions", {
-        method: "PUT",
+      const response = await fetch(`/api/subject-day-entries/${currentEntry.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: currentQuestion.id, estado }),
+        body: JSON.stringify({ practiceState: estado === "erre" ? "erre" : null }),
       })
-    } catch {
-      // ignore
+      const payload = await parseJsonResponse(response)
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo actualizar el estado de practica."))
+      }
+
+      setPracticeEntries((prev) => {
+        const updatedEntries = prev.map((entry) =>
+          entry.id === currentEntry.id
+            ? { ...entry, practice_state: estado === "erre" ? "erre" : null }
+            : entry
+        )
+
+        const filteredEntries = updatedEntries.filter((entry) => {
+          if (practiceFilters.unanswered && entry.answer_text?.trim()) return false
+          if (practiceFilters.erre && entry.practice_state !== "erre") return false
+          return true
+        })
+
+        setCurrentPracticeIndex((prevIndex) => {
+          if (filteredEntries.length === 0) return 0
+          if (prevIndex >= filteredEntries.length - 1) return filteredEntries.length
+          return prevIndex + 1
+        })
+
+        return filteredEntries
+      })
+    } catch (error) {
+      console.error("[v0] Failed to update practice state:", error)
+      setPracticeLoadError(error instanceof Error ? error.message : "No se pudo actualizar el estado.")
     }
-
-    setPracticeQuestions((prev) => {
-      const nextQuestions =
-        practiceFilter === "erre" && estado === "bien"
-          ? prev.filter((q) => q.id !== currentQuestion.id)
-          : prev.map((q) => (q.id === currentQuestion.id ? { ...q, estado } : q))
-
-      setCurrentPracticeIndex((prevIndex) => {
-        if (nextQuestions.length === 0) return 0
-        if (prevIndex >= nextQuestions.length - 1) return nextQuestions.length
-        return prevIndex + 1
-      })
-
-      return nextQuestions
-    })
 
     setIsAnswerRevealed(false)
-  }
-
-  const startEditingPracticeQuestion = () => {
-    const currentQuestion = practiceQuestions[currentPracticeIndex]
-    if (!currentQuestion) return
-
-    setEditingPracticeQuestionId(currentQuestion.id)
-    setPracticeEditDraft({
-      pregunta: currentQuestion.pregunta,
-      respuesta: currentQuestion.respuesta,
-    })
-  }
-
-  const cancelEditingPracticeQuestion = () => {
-    setEditingPracticeQuestionId(null)
-    setPracticeEditDraft({ pregunta: "", respuesta: "" })
-  }
-
-  const savePracticeQuestionEdit = async () => {
-    const currentQuestion = practiceQuestions[currentPracticeIndex]
-    if (!currentQuestion || editingPracticeQuestionId !== currentQuestion.id) return
-
-    const pregunta = practiceEditDraft.pregunta.trim()
-    const respuesta = practiceEditDraft.respuesta.trim()
-
-    try {
-      if (!pregunta || !respuesta) {
-        const response = await fetch(`/api/questions?id=${currentQuestion.id}`, {
-          method: "DELETE",
-        })
-
-        if (!response.ok) {
-          const payload = await parseJsonResponse(response)
-          throw new Error(getErrorMessage(payload, "No se pudo borrar la pregunta."))
-        }
-
-        const nextQuestions = practiceQuestions.filter((question) => question.id !== currentQuestion.id)
-        setPracticeQuestions(nextQuestions)
-        setCurrentPracticeIndex((prev) => Math.min(prev, Math.max(nextQuestions.length - 1, 0)))
-        setIsAnswerRevealed(false)
-      } else {
-        const response = await fetch("/api/questions", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: currentQuestion.id,
-            pregunta,
-            respuesta,
-          }),
-        })
-
-        const payload = await parseJsonResponse(response)
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload, "No se pudo actualizar la pregunta."))
-        }
-
-        setPracticeQuestions((prev) =>
-          prev.map((question) =>
-            question.id === currentQuestion.id ? { ...question, pregunta, respuesta } : question
-          )
-        )
-      }
-
-      cancelEditingPracticeQuestion()
-    } catch (error) {
-      console.error("[v0] Failed to edit practice question:", error)
-    }
-  }
-
-  const saveQuestionExample = async () => {
-    const currentQuestion = practiceQuestions[currentPracticeIndex]
-    if (!currentQuestion) return
-
-    const hasExistingExample = Boolean(currentQuestion.example_image_url || currentQuestion.example_link)
-    if (!exampleImageFile && !exampleLinkDraft.trim() && !hasExistingExample) {
-      return
-    }
-
-    setExampleError("")
-    startSavingExample(async () => {
-      const formData = new FormData()
-      formData.append("questionId", String(currentQuestion.id))
-      formData.append("exampleLink", exampleLinkDraft.trim())
-
-      if (exampleImageFile) {
-        formData.append("image", exampleImageFile)
-      }
-
-      const result = await saveQuestionExampleAction(formData)
-      if (!result.ok) {
-        setExampleError(result.error)
-        return
-      }
-
-      setPracticeQuestions((prev) =>
-        prev.map((question) =>
-          question.id === currentQuestion.id
-            ? {
-                ...question,
-                example_image_url: result.question.example_image_url ?? question.example_image_url,
-                example_link: result.question.example_link ?? question.example_link,
-              }
-            : question
-        )
-      )
-      setExampleImageFile(null)
-    })
   }
 
   const handleUndo = () => {
@@ -964,7 +1014,11 @@ export function SubjectWheel() {
 
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
-  const currentPracticeQuestion = practiceQuestions[currentPracticeIndex]
+  const currentPracticeEntry = practiceEntries[currentPracticeIndex]
+  const practiceWeekOptions = useMemo(
+    () => Array.from({ length: getCurrentWeekNumber() + 1 }, (_, index) => String(index)),
+    []
+  )
 
   const handleReset = async () => {
     try {
@@ -1317,9 +1371,21 @@ export function SubjectWheel() {
             <DialogHeader className="space-y-3 border-b border-black pb-3 sm:border-b-2 sm:pb-4 sm:pr-28">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1.5">
-                  <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
-                    Semana {selectedWeekNumber} - {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)}
-                  </DialogTitle>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
+                      Semana {selectedWeekNumber} - {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)}
+                    </DialogTitle>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void copyEntriesForDay()}
+                      disabled={entries.length === 0 || isCopyingEntries}
+                      className="h-9 border-black px-3 text-black"
+                    >
+                      {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                      Copiar
+                    </Button>
+                  </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
                     Dudas
                   </DialogDescription>
@@ -1374,12 +1440,60 @@ export function SubjectWheel() {
                     const isRevealed = revealedAnswers[entry.id]
                     const isExpandedAudio = expandedAudioEntryId === entry.id
                     const audioSrc = audioSourceUrls[entry.id]
+                    const isEditingTitle = editingTitleId === entry.id
 
                     return (
                       <article key={entry.id} className="border border-slate-300 px-3 py-3 sm:px-4">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1.5">
-                            <p className="text-xs font-medium text-black sm:text-sm">Duda {entry.order_index + 1}</p>
+                            {isEditingTitle ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Input
+                                  value={titleDrafts[entry.id] ?? ""}
+                                  onChange={(event) =>
+                                    setTitleDrafts((previous) => ({
+                                      ...previous,
+                                      [entry.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="h-9 max-w-xs"
+                                />
+                                <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
+                                  {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                  Guardar
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
+                                  <X className="h-4 w-4" />
+                                  Cancelar
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-xs font-medium text-black sm:text-sm">{getEntryDisplayTitle(entry)}</p>
+                                <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
+                                  <Pencil className="h-4 w-4 text-slate-500" />
+                                </Button>
+                              </div>
+                            )}
+                            <div className="flex flex-wrap items-center gap-2">
+                              {entry.external_links.map((link) => (
+                                <Button key={link.id} type="button" variant="outline" className="h-8 border-black px-3 text-xs text-black" asChild>
+                                  <a href={link.url} target="_blank" rel="noreferrer">
+                                    <Link2 className="h-3.5 w-3.5" />
+                                    {link.label}
+                                  </a>
+                                </Button>
+                              ))}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                onClick={() => openLinkDialog(entry.id)}
+                                className="h-8 w-8 border-black text-black"
+                              >
+                                <Plus className="h-4 w-4" />
+                              </Button>
+                            </div>
                             <p className="text-sm leading-6 text-slate-800 sm:text-base sm:leading-7">{entry.transcript_text}</p>
                           </div>
 
@@ -1529,91 +1643,40 @@ export function SubjectWheel() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isExampleModalOpen} onOpenChange={setIsExampleModalOpen}>
+      <Dialog open={isLinkDialogOpen} onOpenChange={setIsLinkDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Ejemplo</DialogTitle>
+            <DialogTitle>Agregar link</DialogTitle>
+            <DialogDescription>Este link queda guardado en la duda seleccionada.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
-            {currentPracticeQuestion?.example_image_url ? (
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Descarga Ejemplo</p>
-                <a
-                  href={currentPracticeQuestion.example_image_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                >
-                  <Download className="h-4 w-4" />
-                  Descargar ejemplo
-                </a>
-              </div>
-            ) : null}
-
             <div className="space-y-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                Imagen
-              </label>
+              <label className="text-sm font-medium text-slate-700">Ingresa nombre</label>
               <Input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setExampleImageFile(e.target.files?.[0] ?? null)}
-                className="bg-white"
+                value={linkDraft.label}
+                onChange={(event) => setLinkDraft((previous) => ({ ...previous, label: event.target.value }))}
+                placeholder="Apunte, video, PDF..."
               />
             </div>
-
             <div className="space-y-2">
-              <label className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                Link
-              </label>
-              {currentPracticeQuestion?.example_link ? (
-                <a
-                  href={currentPracticeQuestion.example_link}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block break-all rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-sky-700 underline underline-offset-4"
-                >
-                  {currentPracticeQuestion.example_link}
-                </a>
-              ) : null}
-              <div className="relative">
-                <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <Input
-                  type="url"
-                  value={exampleLinkDraft}
-                  onChange={(e) => setExampleLinkDraft(e.target.value)}
-                  placeholder="https://..."
-                  className="bg-white pl-9"
-                />
-              </div>
+              <label className="text-sm font-medium text-slate-700">Insertar link</label>
+              <Input
+                type="url"
+                value={linkDraft.url}
+                onChange={(event) => setLinkDraft((previous) => ({ ...previous, url: event.target.value }))}
+                placeholder="https://..."
+              />
             </div>
-
-            {exampleError ? (
-              <p className="text-sm text-red-500">{exampleError}</p>
-            ) : null}
           </div>
 
-          <DialogFooter className="gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsExampleModalOpen(false)}
-            >
-              Cerrar
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsLinkDialogOpen(false)} disabled={isSavingLink}>
+              Cancelar
             </Button>
-            <Button
-              type="button"
-              onClick={saveQuestionExample}
-              disabled={isSavingExample || (!exampleImageFile && !exampleLinkDraft.trim())}
-              className="bg-sky-600 text-white hover:bg-sky-700"
-            >
-              {isSavingExample ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-              Guardar ejemplo
+            <Button onClick={() => void saveEntryLink()} disabled={isSavingLink || !linkDraft.label.trim() || !linkDraft.url.trim()}>
+              {isSavingLink ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Guardar
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1639,14 +1702,13 @@ export function SubjectWheel() {
                     Elegi materia y como queres practicar
                   </h2>
                   <p className="max-w-2xl text-sm text-slate-500 sm:text-base">
-                    El modo aleatorio mezcla todas las preguntas de la semana. "Solo erre" trae unicamente las
-                    que siguen marcadas como erre.
+                    Se cargan todas las dudas de la semana elegida para la materia seleccionada.
                   </p>
                 </div>
-                <div className="grid gap-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                   <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                     <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Materia</p>
-                    <Select value={practiceSubjectId} onValueChange={(value) => void loadPracticeQuestions(value)}>
+                    <Select value={practiceSubjectId} onValueChange={(value) => setPracticeSubjectId(value)}>
                       <SelectTrigger className="h-14 text-base">
                         <SelectValue placeholder="Seleccionar materia..." />
                       </SelectTrigger>
@@ -1660,40 +1722,79 @@ export function SubjectWheel() {
                     </Select>
                   </div>
                   <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Modo</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Semana</p>
+                    <Select value={practiceWeekNumber} onValueChange={setPracticeWeekNumber}>
+                      <SelectTrigger className="h-14 text-base">
+                        <SelectValue placeholder="Seleccionar semana..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {practiceWeekOptions.map((weekValue) => (
+                          <SelectItem key={weekValue} value={weekValue}>
+                            Semana {weekValue}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Filtros</p>
+                    <div className="grid gap-3 sm:grid-cols-3">
                       <button
                         type="button"
-                        onClick={() => handlePracticeFilterChange("all")}
+                        onClick={() => togglePracticeFilter("random")}
                         className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
-                          practiceFilter === "all"
+                          practiceFilters.random
                             ? "border-sky-500 bg-sky-50 shadow-sm"
                             : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
                         }`}
                       >
-                        <Checkbox checked={practiceFilter === "all"} className="mt-0.5 pointer-events-none" />
+                        <Checkbox checked={practiceFilters.random} className="mt-0.5 pointer-events-none" />
                         <span className="space-y-1">
                           <span className="block text-sm font-semibold text-slate-700">Aleatorio</span>
-                          <span className="block text-xs text-slate-500">Todas las preguntas mezcladas.</span>
+                          <span className="block text-xs text-slate-500">Mezcla el orden de las dudas cargadas.</span>
                         </span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => handlePracticeFilterChange("erre")}
+                        onClick={() => togglePracticeFilter("unanswered")}
                         className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
-                          practiceFilter === "erre"
+                          practiceFilters.unanswered
+                            ? "border-amber-500 bg-amber-50 shadow-sm"
+                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                        }`}
+                      >
+                        <Checkbox checked={practiceFilters.unanswered} className="mt-0.5 pointer-events-none" />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-semibold text-slate-700">Sin respuesta</span>
+                          <span className="block text-xs text-slate-500">Solo dudas que aun no tienen respuesta.</span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => togglePracticeFilter("erre")}
+                        className={`flex items-start gap-3 rounded-2xl border p-4 text-left transition ${
+                          practiceFilters.erre
                             ? "border-rose-500 bg-rose-50 shadow-sm"
                             : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
                         }`}
                       >
-                        <Checkbox checked={practiceFilter === "erre"} className="mt-0.5 pointer-events-none" />
+                        <Checkbox checked={practiceFilters.erre} className="mt-0.5 pointer-events-none" />
                         <span className="space-y-1">
-                          <span className="block text-sm font-semibold text-slate-700">Solo erre</span>
-                          <span className="block text-xs text-slate-500">Repasa solo las que seguis fallando.</span>
+                          <span className="block text-sm font-semibold text-slate-700">Erre</span>
+                          <span className="block text-xs text-slate-500">Solo dudas marcadas como erre.</span>
                         </span>
                       </button>
                     </div>
                   </div>
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => practiceSubjectId && practiceWeekNumber && void loadPracticeEntries(practiceSubjectId, practiceWeekNumber, practiceFilters)}
+                    disabled={!practiceSubjectId || !practiceWeekNumber}
+                    className="h-12 px-6"
+                  >
+                    Cargar dudas
+                  </Button>
                 </div>
               </div>
             )}
@@ -1706,20 +1807,18 @@ export function SubjectWheel() {
             )}
 
             {/* No questions */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length === 0 && (
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceEntries.length === 0 && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
                 <div className="w-full rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
                   <p className="mb-4 text-sm text-slate-500 sm:text-base">
-                    {practiceLoadError ||
-                      (practiceFilter === "erre"
-                        ? "No hay preguntas en erre para esta materia en esta semana."
-                        : "No hay preguntas para esta materia esta semana.")}
+                    {practiceLoadError || "No hay dudas para esta materia con los filtros elegidos."}
                   </p>
                   <Button
                     variant="outline"
                     onClick={() => {
                       setPracticeSubjectId("")
                       setPracticeSubjectIndex(null)
+                      setPracticeEntries([])
                     }}
                   >
                     Elegir otra materia
@@ -1729,17 +1828,20 @@ export function SubjectWheel() {
             )}
 
             {/* Flashcard view */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceQuestions.length > 0 && (
+            {practiceSubjectIndex !== null && !isLoadingPractice && practiceEntries.length > 0 && (
               <div className="mx-auto flex h-full w-full max-w-6xl flex-col">
-                {currentPracticeIndex < practiceQuestions.length ? (
+                {currentPracticeIndex < practiceEntries.length ? (
                   <div className="flex flex-1 flex-col gap-5">
                     <div className="flex flex-col gap-2 rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
                       <div>
                         <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">
-                          {practiceFilter === "erre" ? "Modo: solo erre" : "Modo: aleatorio"}
+                          Semana {practiceWeekNumber} ·
+                          {practiceFilters.random ? " Aleatorio" : " Orden original"} ·
+                          {practiceFilters.unanswered ? " Sin respuesta" : " Con y sin respuesta"} ·
+                          {practiceFilters.erre ? " Solo erre" : " Todos los estados"}
                         </p>
                         <p className="text-sm text-slate-500">
-                          Pregunta {currentPracticeIndex + 1} de {practiceQuestions.length}
+                          Duda {currentPracticeIndex + 1} de {practiceEntries.length}
                         </p>
                       </div>
                       <Button
@@ -1749,8 +1851,7 @@ export function SubjectWheel() {
                           setPracticeSubjectIndex(null)
                           setCurrentPracticeIndex(0)
                           setIsAnswerRevealed(false)
-                          setEditingPracticeQuestionId(null)
-                          setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                          setPracticeEntries([])
                         }}
                       >
                         Cambiar materia
@@ -1759,114 +1860,57 @@ export function SubjectWheel() {
 
                     <div className="flex flex-1 items-center justify-center">
                       <div className="w-full max-w-4xl rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm sm:p-8 lg:p-10">
-                        {currentPracticeQuestion && editingPracticeQuestionId === currentPracticeQuestion.id ? (
-                          <div className="space-y-5">
-                            <div className="space-y-2">
-                              <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
-                              <Textarea
-                                value={practiceEditDraft.pregunta}
-                                onChange={(e) =>
-                                  setPracticeEditDraft((prev) => ({ ...prev, pregunta: e.target.value }))
-                                }
-                                className="min-h-32 bg-white text-base"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
-                              <Textarea
-                                value={practiceEditDraft.respuesta}
-                                onChange={(e) =>
-                                  setPracticeEditDraft((prev) => ({ ...prev, respuesta: e.target.value }))
-                                }
-                                className="min-h-32 bg-white text-base"
-                              />
-                            </div>
-                            <p className="text-xs text-slate-400">
-                              Si vacias la pregunta o la respuesta, la tarjeta se borra.
+                        <div className="space-y-8">
+                          <div className="space-y-3">
+                            <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
+                            <p className="text-sm font-medium text-slate-500">{getEntryDisplayTitle(currentPracticeEntry!)}</p>
+                            <p className="text-xl font-semibold leading-relaxed text-slate-800 sm:text-2xl">
+                              {currentPracticeEntry?.transcript_text}
                             </p>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                className="bg-slate-800 text-white hover:bg-slate-700"
-                                onClick={savePracticeQuestionEdit}
-                              >
-                                <Check className="mr-1 h-4 w-4" />
-                                Guardar
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={cancelEditingPracticeQuestion}>
-                                <X className="mr-1 h-4 w-4" />
-                                Cancelar
-                              </Button>
-                            </div>
                           </div>
-                        ) : (
-                          <div className="space-y-8">
+
+                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 sm:p-6">
                             <div className="flex items-start justify-between gap-3">
-                              <div className="space-y-3">
-                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
-                                <p className="text-xl font-semibold leading-relaxed text-slate-800 sm:text-2xl">
-                                  {currentPracticeQuestion?.pregunta}
+                              <div className="flex-1 space-y-3">
+                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
+                                <p
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={() => setIsAnswerRevealed((prev) => !prev)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault()
+                                      setIsAnswerRevealed((prev) => !prev)
+                                    }
+                                  }}
+                                  className="cursor-pointer text-base leading-relaxed text-slate-600 hover:text-slate-800 sm:text-lg"
+                                >
+                                  {isAnswerRevealed
+                                    ? currentPracticeEntry?.answer_text || "Sin respuesta registrada"
+                                    : "Click para mostrar"}
                                 </p>
                               </div>
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => setIsExampleModalOpen(true)}
-                                  className="rounded-full"
-                                  aria-label="Ver ejemplo de la pregunta"
-                                >
-                                  <Info className="h-4 w-4 text-slate-500" />
-                                </Button>
-                                <Button size="icon" variant="ghost" onClick={startEditingPracticeQuestion}>
-                                  <Pencil className="h-4 w-4 text-slate-500" />
-                                </Button>
-                              </div>
                             </div>
-
-                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 sm:p-6">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1 space-y-3">
-                                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
-                                  <p
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setIsAnswerRevealed((prev) => !prev)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault()
-                                        setIsAnswerRevealed((prev) => !prev)
-                                      }
-                                    }}
-                                    className="cursor-pointer text-base leading-relaxed text-slate-600 hover:text-slate-800 sm:text-lg"
-                                  >
-                                    {isAnswerRevealed
-                                      ? currentPracticeQuestion?.respuesta || "Sin respuesta registrada"
-                                      : "Click para mostrar"}
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-
-                            {isAnswerRevealed && editingPracticeQuestionId === null && (
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <Button
-                                  className="h-12 bg-green-600 text-base text-white hover:bg-green-700"
-                                  onClick={() => handlePracticeAnswer("bien")}
-                                >
-                                  <Check className="mr-2 h-4 w-4" />
-                                  Bien
-                                </Button>
-                                <Button
-                                  className="h-12 bg-red-500 text-base text-white hover:bg-red-600"
-                                  onClick={() => handlePracticeAnswer("erre")}
-                                >
-                                  Erre
-                                </Button>
-                              </div>
-                            )}
                           </div>
-                        )}
+
+                          {isAnswerRevealed && (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <Button
+                                className="h-12 bg-green-600 text-base text-white hover:bg-green-700"
+                                onClick={() => handlePracticeAnswer("bien")}
+                              >
+                                <Check className="mr-2 h-4 w-4" />
+                                Bien
+                              </Button>
+                              <Button
+                                className="h-12 bg-red-500 text-base text-white hover:bg-red-600"
+                                onClick={() => handlePracticeAnswer("erre")}
+                              >
+                                Erre
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1878,8 +1922,8 @@ export function SubjectWheel() {
                         Cerralo un momento, respira hondo y afloja los hombros.
                       </p>
                       <p className="mb-6 text-sm text-slate-500">
-                        Bien: {practiceQuestions.filter((q) => q.estado === "bien").length} | Erre:{" "}
-                        {practiceQuestions.filter((q) => q.estado === "erre").length}
+                        Totales revisados: {practiceEntries.length}. Erre restantes:{" "}
+                        {practiceEntries.filter((entry) => entry.practice_state === "erre").length}
                       </p>
                       <div className="flex flex-wrap justify-center gap-2">
                         <Button
@@ -1887,9 +1931,7 @@ export function SubjectWheel() {
                           onClick={() => {
                             setCurrentPracticeIndex(0)
                             setIsAnswerRevealed(false)
-                            setEditingPracticeQuestionId(null)
-                            setPracticeEditDraft({ pregunta: "", respuesta: "" })
-                            setPracticeQuestions((prev) => shuffleQuestions(prev))
+                            setPracticeEntries((prev) => (practiceFilters.random ? shuffleQuestions(prev) : [...prev]))
                           }}
                         >
                           Repetir
@@ -1901,8 +1943,7 @@ export function SubjectWheel() {
                             setPracticeSubjectIndex(null)
                             setCurrentPracticeIndex(0)
                             setIsAnswerRevealed(false)
-                            setEditingPracticeQuestionId(null)
-                            setPracticeEditDraft({ pregunta: "", respuesta: "" })
+                            setPracticeEntries([])
                           }}
                         >
                           Otra materia
