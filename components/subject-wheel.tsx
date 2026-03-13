@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -65,6 +65,24 @@ interface ReviewAudio {
   mimeType: string
 }
 
+type AudioUploadTarget = {
+  source: "subject-dialog" | "mobile-shortcut" | "manual-mobile-shortcut"
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+  shortcutIndex?: number
+}
+
+type MobileShortcutWindow = {
+  index: number
+  weekdayIndex: number
+  startMinutes: number
+  endMinutes: number
+  subjectId: string
+}
+
 const INITIAL_SUBJECTS: Subject[] = [
   { id: "algebra", name: "Álgebra 2", color: "#0098C8" },
   { id: "calculo2", name: "Cálculo 2", color: "#2563eb" },
@@ -84,6 +102,26 @@ const SUBJECT_ID_TO_INDEX: Record<string, number> = {
   probabilidad: 5,
 }
 
+const MOBILE_SHORTCUT_WINDOWS: MobileShortcutWindow[] = [
+  { index: 1, weekdayIndex: 0, startMinutes: 11 * 60, endMinutes: 12 * 60, subjectId: "fisica" },
+  { index: 2, weekdayIndex: 0, startMinutes: 17 * 60, endMinutes: 18 * 60, subjectId: "calculo3" },
+  { index: 3, weekdayIndex: 1, startMinutes: 16 * 60, endMinutes: 17 * 60, subjectId: "probabilidad" },
+  { index: 4, weekdayIndex: 2, startMinutes: 14 * 60, endMinutes: 14 * 60 + 30, subjectId: "fisica" },
+  { index: 5, weekdayIndex: 2, startMinutes: 18 * 60, endMinutes: 19 * 60, subjectId: "probabilidad" },
+  { index: 6, weekdayIndex: 3, startMinutes: 11 * 60, endMinutes: 12 * 60, subjectId: "calculo3" },
+  { index: 7, weekdayIndex: 4, startMinutes: 16 * 60, endMinutes: 17 * 60, subjectId: "logica" },
+]
+
+const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
+  0: ["fisica", "calculo3"],
+  1: ["logica", "probabilidad"],
+  2: ["logica", "fisica", "probabilidad"],
+  3: ["calculo3", "algebra"],
+  4: ["fisica", "logica"],
+  5: ["fisica", "calculo2", "probabilidad", "logica"],
+  6: ["logica", "probabilidad", "calculo3", "fisica", "calculo2", "algebra"],
+}
+
 function getCurrentWeekNumber(): number {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -99,6 +137,59 @@ function getCurrentWeekNumber(): number {
 function getTodayDateString() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+}
+
+function getMinutesOfDay(date: Date) {
+  return date.getHours() * 60 + date.getMinutes()
+}
+
+function getSubjectById(subjectId: string) {
+  return INITIAL_SUBJECTS.find((subject) => subject.id === subjectId) || null
+}
+
+function getScheduledSubjectIdsForDate(date: Date) {
+  const jsDay = date.getDay()
+  const weekdayIndex = jsDay === 0 ? 6 : jsDay - 1
+  return SUBJECT_IDS_BY_WEEKDAY[weekdayIndex] ?? []
+}
+
+function getScheduledSubjectsForDate(date: Date) {
+  return getScheduledSubjectIdsForDate(date)
+    .map((subjectId) => getSubjectById(subjectId))
+    .filter(Boolean) as Subject[]
+}
+
+function getActiveMobileShortcutWindow(date: Date) {
+  const jsDay = date.getDay()
+  const weekdayIndex = jsDay === 0 ? 6 : jsDay - 1
+  const currentMinutes = getMinutesOfDay(date)
+
+  return (
+    MOBILE_SHORTCUT_WINDOWS.find(
+      (window) =>
+        window.weekdayIndex === weekdayIndex &&
+        currentMinutes >= window.startMinutes &&
+        currentMinutes < window.endMinutes
+    ) || null
+  )
+}
+
+function getShortcutDismissKey(dateKey: string, shortcutIndex: number) {
+  return `mobile-shortcut-dismissed:${dateKey}:${shortcutIndex}`
+}
+
+function formatClockTime(date: Date) {
+  return new Intl.DateTimeFormat("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date)
+}
+
+function formatMinutesLabel(totalMinutes: number) {
+  const hours = String(Math.floor(totalMinutes / 60)).padStart(2, "0")
+  const minutes = String(totalMinutes % 60).padStart(2, "0")
+  return `${hours}:${minutes}`
 }
 
 function getRecorderMimeType() {
@@ -118,6 +209,23 @@ function idsToSubjects(ids: string[]): Subject[] {
 
 function subjectsToIds(subjects: Subject[]): string[] {
   return subjects.map((s) => s.id)
+}
+
+function normalizeSubjectsForDay(activeIds: string[], completedIds: string[], date: Date) {
+  const scheduledIds = getScheduledSubjectIdsForDate(date)
+  const completedSet = new Set(completedIds.filter((id) => scheduledIds.includes(id)))
+
+  const completedSubjects = scheduledIds
+    .filter((id) => completedSet.has(id))
+    .map((id) => getSubjectById(id))
+    .filter(Boolean) as Subject[]
+
+  const activeSubjects = scheduledIds
+    .filter((id) => !completedSet.has(id))
+    .map((id) => getSubjectById(id))
+    .filter(Boolean) as Subject[]
+
+  return { activeSubjects, completedSubjects }
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error"
@@ -179,7 +287,7 @@ function applyPracticeFilters(entries: SubjectDayEntry[], filters: PracticeFilte
 }
 
 export function SubjectWheel() {
-  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(INITIAL_SUBJECTS)
+  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(new Date()))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -199,8 +307,13 @@ export function SubjectWheel() {
   const [isRecording, setIsRecording] = useState(false)
   const [recordingError, setRecordingError] = useState("")
   const [reviewAudio, setReviewAudio] = useState<ReviewAudio | null>(null)
+  const [recordingTarget, setRecordingTarget] = useState<AudioUploadTarget | null>(null)
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false)
   const [isUploadingAudio, setIsUploadingAudio] = useState(false)
+  const [now, setNow] = useState(() => new Date())
+  const [isMobileShortcutPickerOpen, setIsMobileShortcutPickerOpen] = useState(false)
+  const [isMobileShortcutOpen, setIsMobileShortcutOpen] = useState(false)
+  const [manualMobileSubjectId, setManualMobileSubjectId] = useState("")
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
   const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
   const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({})
@@ -253,6 +366,42 @@ export function SubjectWheel() {
   const audioCacheRef = useRef<Map<number, string>>(new Map())
   const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
   const todayKey = getTodayDateString()
+  const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now), [now])
+  const mobileShortcutTarget = useMemo(() => {
+    if (!activeMobileShortcut) return null
+
+    const subject = getSubjectById(activeMobileShortcut.subjectId)
+    if (!subject) return null
+
+    const sessionDate = formatDateKey(now)
+    return {
+      source: "mobile-shortcut" as const,
+      subjectId: subject.id,
+      subjectName: getSubjectDisplayName(subject),
+      sessionDate,
+      weekNumber: getWeekNumberForDate(now),
+      weekdayIndex: activeMobileShortcut.weekdayIndex,
+      shortcutIndex: activeMobileShortcut.index,
+    }
+  }, [activeMobileShortcut, now])
+  const manualMobileShortcutTarget = useMemo(() => {
+    const subject = getSubjectById(manualMobileSubjectId)
+    if (!subject) return null
+
+    return {
+      source: "manual-mobile-shortcut" as const,
+      subjectId: subject.id,
+      subjectName: getSubjectDisplayName(subject),
+      sessionDate: formatDateKey(now),
+      weekNumber: getWeekNumberForDate(now),
+      weekdayIndex: mobileShortcutTarget?.weekdayIndex ?? (() => {
+        const jsDay = now.getDay()
+        return jsDay === 0 ? 6 : jsDay - 1
+      })(),
+    }
+  }, [manualMobileSubjectId, mobileShortcutTarget?.weekdayIndex, now])
+  const activeMobileModalTarget = manualMobileShortcutTarget ?? mobileShortcutTarget
+  const mobileClockLabel = useMemo(() => formatClockTime(now), [now])
   const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
   const selectedWeekNumber = useMemo(() => getWeekNumberForDate(selectedDate), [selectedDate])
   const weekDates = useMemo(() => getWeekDates(selectedWeekNumber), [selectedWeekNumber])
@@ -263,22 +412,36 @@ export function SubjectWheel() {
 
   // Load from database on mount
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(new Date())
+    }, 1000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
     const loadFromDatabase = async () => {
       try {
-        const date = getTodayDateString()
-        const response = await fetch(`/api/sessions?date=${date}`)
+        const dateKey = getTodayDateString()
+        const today = new Date()
+        const response = await fetch(`/api/sessions?date=${dateKey}`)
         if (!response.ok) throw new Error("Failed to fetch session")
         const session = await response.json()
 
         if (session && Array.isArray(session.active_subject_ids)) {
           const completedSubjectsData = session.completed_subjects || {}
           const completedIds = Object.keys(completedSubjectsData)
-          setActiveSubjects(idsToSubjects(session.active_subject_ids))
-          setCompletedSubjects(idsToSubjects(completedIds))
+          const normalized = normalizeSubjectsForDay(session.active_subject_ids, completedIds, today)
+          setActiveSubjects(normalized.activeSubjects)
+          setCompletedSubjects(normalized.completedSubjects)
+        } else {
+          setActiveSubjects(getScheduledSubjectsForDate(today))
+          setCompletedSubjects([])
         }
-        // If no session exists, default INITIAL_SUBJECTS is already set
       } catch (error) {
         console.error("Failed to load from database:", error)
+        setActiveSubjects(getScheduledSubjectsForDate(new Date()))
+        setCompletedSubjects([])
       } finally {
         setIsLoading(false)
         // Only allow syncing AFTER the loaded state has been applied
@@ -400,6 +563,16 @@ export function SubjectWheel() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [openAiModal])
 
+  useEffect(() => {
+    if (!mobileShortcutTarget || typeof window === "undefined") return
+    if (isDialogOpen || isReviewDialogOpen || isPracticeOpen || isAiOpen || isLinkDialogOpen || isMobileShortcutPickerOpen) return
+
+    const dismissKey = getShortcutDismissKey(mobileShortcutTarget.sessionDate, mobileShortcutTarget.shortcutIndex ?? -1)
+    if (window.localStorage.getItem(dismissKey) === "1") return
+
+    setIsMobileShortcutOpen(true)
+  }, [isAiOpen, isDialogOpen, isLinkDialogOpen, isMobileShortcutPickerOpen, isPracticeOpen, isReviewDialogOpen, mobileShortcutTarget])
+
   // Auto-scroll AI response box
   useEffect(() => {
     if (aiResponseRef.current) {
@@ -504,6 +677,22 @@ export function SubjectWheel() {
     }
   }
 
+  const stopAndDiscardRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.onstop = null
+      mediaRecorderRef.current.stop()
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
+    }
+
+    recordingChunksRef.current = []
+    setIsRecording(false)
+    setRecordingTarget(null)
+  }
+
   const resetSubjectUiState = () => {
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
     audioCacheRef.current.clear()
@@ -532,18 +721,45 @@ export function SubjectWheel() {
     disposeReviewAudio(null)
     setReviewAudio(null)
     setIsReviewDialogOpen(false)
+    setRecordingTarget(null)
+  }
+
+  const closeMobileShortcutModal = (persistDismissal: boolean) => {
+    if (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") {
+      stopAndDiscardRecording()
+      cancelReview()
+    }
+
+    if (
+      persistDismissal &&
+      typeof window !== "undefined" &&
+      mobileShortcutTarget?.shortcutIndex !== undefined
+    ) {
+      window.localStorage.setItem(
+        getShortcutDismissKey(mobileShortcutTarget.sessionDate, mobileShortcutTarget.shortcutIndex),
+        "1"
+      )
+    }
+
+    setIsMobileShortcutOpen(false)
+    setManualMobileSubjectId("")
+  }
+
+  const openManualMobileShortcutPicker = () => {
+    setManualMobileSubjectId("")
+    setIsMobileShortcutPickerOpen(true)
+  }
+
+  const handleManualMobileSubjectSelect = (subjectId: string) => {
+    setManualMobileSubjectId(subjectId)
+    setRecordingError("")
+    setEntriesError("")
+    setIsMobileShortcutPickerOpen(false)
+    setIsMobileShortcutOpen(true)
   }
 
   const closeSubjectDialog = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-      mediaRecorderRef.current.onstop = null
-      mediaRecorderRef.current.stop()
-    }
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
-      mediaStreamRef.current = null
-    }
+    stopAndDiscardRecording()
 
     Object.values(audioElementRefs.current).forEach((audioElement) => {
       audioElement?.pause()
@@ -584,8 +800,9 @@ export function SubjectWheel() {
     setCurrentDateKey(formatDateKey(weekDates[nextIndex]))
   }
 
-  const startRecording = async () => {
+  const startRecording = async (target: AudioUploadTarget) => {
     setRecordingError("")
+    cancelReview()
 
     try {
       if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -599,6 +816,7 @@ export function SubjectWheel() {
       mediaStreamRef.current = stream
       mediaRecorderRef.current = recorder
       recordingChunksRef.current = []
+      setRecordingTarget(target)
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -628,7 +846,7 @@ export function SubjectWheel() {
 
         disposeReviewAudio(nextReviewAudio)
         setReviewAudio(nextReviewAudio)
-        setIsReviewDialogOpen(true)
+        setIsReviewDialogOpen(target.source === "subject-dialog")
       }
 
       recorder.start()
@@ -637,6 +855,7 @@ export function SubjectWheel() {
       console.error("Failed to start recording:", error)
       setRecordingError(error instanceof Error ? error.message : "No se pudo iniciar la grabacion.")
       setIsRecording(false)
+      setRecordingTarget(null)
     }
   }
 
@@ -647,19 +866,23 @@ export function SubjectWheel() {
   }
 
   const confirmReview = async () => {
-    if (!currentSubject || !reviewAudio) return
+    if (!recordingTarget || !reviewAudio) return
+    const target = recordingTarget
 
     setIsUploadingAudio(true)
     setEntriesError("")
 
     try {
       const formData = new FormData()
-      formData.append("subjectId", currentSubject.id)
-      formData.append("subjectName", getSubjectDisplayName(currentSubject))
-      formData.append("sessionDate", currentDateKey)
-      formData.append("weekNumber", String(selectedWeekNumber))
-      formData.append("weekdayIndex", String(currentDayIndex >= 0 ? currentDayIndex : 0))
-      formData.append("audio", new File([reviewAudio.blob], `${currentSubject.id}-${currentDateKey}.webm`, { type: reviewAudio.mimeType }))
+      formData.append("subjectId", target.subjectId)
+      formData.append("subjectName", target.subjectName)
+      formData.append("sessionDate", target.sessionDate)
+      formData.append("weekNumber", String(target.weekNumber))
+      formData.append("weekdayIndex", String(target.weekdayIndex))
+      formData.append(
+        "audio",
+        new File([reviewAudio.blob], `${target.subjectId}-${target.sessionDate}.webm`, { type: reviewAudio.mimeType })
+      )
 
       const response = await fetch("/api/subject-day-entries", {
         method: "POST",
@@ -671,18 +894,32 @@ export function SubjectWheel() {
         throw new Error(getErrorMessage(payload, "No se pudo confirmar el audio."))
       }
 
-      setEntries((previousEntries) => {
-        const nextEntries = [...previousEntries, payload as SubjectDayEntry]
-        return nextEntries.sort((left, right) => left.order_index - right.order_index || left.id - right.id)
-      })
+      if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
+        setEntries((previousEntries) => {
+          const nextEntries = [...previousEntries, payload as SubjectDayEntry]
+          return nextEntries.sort((left, right) => left.order_index - right.order_index || left.id - right.id)
+        })
+      }
 
       cancelReview()
+      if (target.source === "mobile-shortcut") {
+        closeMobileShortcutModal(true)
+      }
     } catch (error) {
       console.error("Failed to upload audio entry:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar el audio.")
     } finally {
       setIsUploadingAudio(false)
     }
+  }
+
+  const handleMobileShortcutReset = () => {
+    if ((recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") && isRecording) {
+      stopAndDiscardRecording()
+    }
+
+    setRecordingError("")
+    cancelReview()
   }
 
   const startAnswerEdit = (entry: SubjectDayEntry) => {
@@ -1054,9 +1291,11 @@ export function SubjectWheel() {
   const handleReset = async () => {
     try {
       const date = getTodayDateString()
+      const scheduledSubjects = getScheduledSubjectsForDate(new Date())
+      const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
       
       // Reset local state
-      setActiveSubjects(INITIAL_SUBJECTS)
+      setActiveSubjects(scheduledSubjects)
       setCompletedSubjects([])
       setHistory([])
       setHistoryIndex(-1)
@@ -1067,7 +1306,7 @@ export function SubjectWheel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           date,
-          activeSubjectIds: INITIAL_SUBJECTS.map(s => s.id),
+          activeSubjectIds: scheduledSubjectIds,
           completedSubjects: {},
         }),
       })
@@ -1187,6 +1426,14 @@ export function SubjectWheel() {
 
         <div className="flex gap-2 items-center">
           <Button
+            onClick={openManualMobileShortcutPicker}
+            variant="outline"
+            className="h-9 px-3"
+          >
+            <Smartphone className="w-4 h-4 mr-1.5" />
+            Celular
+          </Button>
+          <Button
             onClick={openPracticeModal}
             variant="outline"
             className="h-9 px-3"
@@ -1275,6 +1522,118 @@ export function SubjectWheel() {
         )}
         <p>Las materias se reiniciarán mañana</p>
       </footer>
+
+      <Dialog open={isMobileShortcutPickerOpen} onOpenChange={setIsMobileShortcutPickerOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Elegir materia</DialogTitle>
+            <DialogDescription>Selecciona una de las 6 materias para abrir el modal del celular.</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {INITIAL_SUBJECTS.map((subject) => (
+              <button
+                key={subject.id}
+                type="button"
+                onClick={() => handleManualMobileSubjectSelect(subject.id)}
+                className="rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-900 transition hover:border-slate-500 hover:bg-slate-50"
+              >
+                {subject.name.replace("\n", " ")}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isMobileShortcutOpen} onOpenChange={(open) => (!open ? closeMobileShortcutModal(true) : undefined)}>
+        <DialogContent
+          className="top-0 left-0 z-[60] h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-[#9a9a9a] p-0 shadow-none sm:top-1/2 sm:left-1/2 sm:h-[min(92dvh,760px)] sm:w-[440px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[28px] sm:border-2 sm:border-slate-200 sm:shadow-2xl"
+          showCloseButton={false}
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Atajo de celular</DialogTitle>
+            <DialogDescription>Modal para grabar y confirmar un audio rápido.</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex h-full min-h-0 flex-col justify-between bg-[#9a9a9a] px-6 py-6 text-slate-950 sm:rounded-[26px]">
+            <div className="space-y-8 pt-2">
+              <div className="mx-auto flex h-28 w-full max-w-[320px] items-center justify-center rounded-[18px] border-[8px] border-slate-700 bg-[#afafaf] text-6xl font-medium text-white">
+                {mobileClockLabel}
+              </div>
+
+              <div className="space-y-5 text-center">
+                <p className="text-3xl font-semibold text-slate-950">
+                  {activeMobileModalTarget ? activeMobileModalTarget.subjectName : "Esperando horario"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!activeMobileModalTarget) return
+
+                    void (
+                      isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")
+                        ? stopRecording()
+                        : startRecording(activeMobileModalTarget)
+                    )
+                  }}
+                  disabled={!activeMobileModalTarget || isUploadingAudio}
+                  className={`mx-auto flex h-52 w-52 items-center justify-center rounded-full border-[8px] border-slate-700 transition ${
+                    !activeMobileModalTarget || isUploadingAudio
+                      ? "cursor-not-allowed opacity-50"
+                      : isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")
+                        ? "bg-red-500 text-white"
+                        : "bg-[#9a9a9a] text-slate-950 hover:bg-[#a3a3a3]"
+                  }`}
+                  aria-label={isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? "Detener grabacion" : "Iniciar grabacion"}
+                >
+                  {isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
+                    <Square className="h-20 w-20" />
+                  ) : (
+                    <Mic className="h-20 w-20" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3 pb-1">
+              {reviewAudio && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
+                <audio controls src={reviewAudio.url} className="w-full" />
+              ) : (
+                <div className="h-12 rounded-full border-4 border-slate-700/70 bg-[#9a9a9a]" />
+              )}
+
+              {recordingError ? <div className="text-sm text-red-900">{recordingError}</div> : null}
+              {entriesError && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
+                <div className="text-sm text-red-900">{entriesError}</div>
+              ) : null}
+              {!activeMobileModalTarget ? (
+                <p className="text-sm text-slate-900">
+                  Este modal se abre solo en los bloques definidos. El boton queda disponible para la fase 1.
+                </p>
+              ) : null}
+
+              <div className="flex items-center justify-between gap-4 pt-2 text-[2rem] font-medium leading-none text-slate-700">
+                <button
+                  type="button"
+                  onClick={handleMobileShortcutReset}
+                  disabled={isUploadingAudio || (!reviewAudio && !(isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")))}
+                  className="transition disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Reiniciar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmReview()}
+                  disabled={!reviewAudio || !recordingTarget || !["mobile-shortcut", "manual-mobile-shortcut"].includes(recordingTarget.source) || isUploadingAudio}
+                  className="transition disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {isUploadingAudio ? "Subiendo..." : "Confirmar"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* AI Modal */}
       <Dialog open={isAiOpen} onOpenChange={(open) => { if (!open) { setIsAiOpen(false); setAiSent(false); setAiResponse("") } }}>
@@ -1570,7 +1929,20 @@ export function SubjectWheel() {
             <div className="relative h-0">
               <button
                 type="button"
-                onClick={() => void (isRecording ? stopRecording() : startRecording())}
+                onClick={() => {
+                  if (!currentSubject) return
+
+                  const target: AudioUploadTarget = {
+                    source: "subject-dialog",
+                    subjectId: currentSubject.id,
+                    subjectName: getSubjectDisplayName(currentSubject),
+                    sessionDate: currentDateKey,
+                    weekNumber: selectedWeekNumber,
+                    weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                  }
+
+                  void (isRecording ? stopRecording() : startRecording(target))
+                }}
                 className={`absolute bottom-4 right-2 flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:right-4 sm:h-20 sm:w-20 ${
                   isRecording ? "bg-red-500 text-white" : "bg-white text-black"
                 }`}
@@ -1646,7 +2018,7 @@ export function SubjectWheel() {
             <div className="space-y-3">
               <audio controls src={reviewAudio.url} className="w-full" />
               <p className="text-sm text-slate-500">
-                {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)} - {currentDateKey}
+                {recordingTarget?.subjectName || getSubjectDisplayName(currentSubject)} - {recordingTarget ? getWeekdayLabel(recordingTarget.sessionDate) : getWeekdayLabel(currentDateKey)} - {recordingTarget?.sessionDate || currentDateKey}
               </p>
             </div>
           ) : null}
