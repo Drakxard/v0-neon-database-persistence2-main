@@ -24,6 +24,7 @@ type EntryRow = {
   answer_text: string | null
   custom_title: string | null
   practice_state: "erre" | null
+  is_featured: boolean
   created_at: string
   updated_at: string
 }
@@ -75,6 +76,14 @@ function getDisplayTitle(entry: Pick<EntryRow, "custom_title" | "order_index">) 
   return customTitle && customTitle.length > 0 ? customTitle : `Duda ${entry.order_index + 1}`
 }
 
+function normalizeSessionDateKey(sessionDate: string | Date) {
+  if (sessionDate instanceof Date) {
+    return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
+  }
+
+  return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
 async function getEntryLinks(entryIds: number[]) {
   if (entryIds.length === 0) return new Map<number, EntryLinkRow[]>()
 
@@ -107,6 +116,7 @@ async function withLinks(rows: EntryRow[]) {
   const linksByEntry = await getEntryLinks(rows.map((row) => row.id))
   return rows.map((row) => ({
     ...row,
+    session_date: normalizeSessionDateKey(row.session_date),
     display_title: getDisplayTitle(row),
     external_links: (linksByEntry.get(row.id) ?? []).map((link) => ({
       id: link.id,
@@ -120,25 +130,25 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
   try {
     if (sessionDate) {
       return await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
-        ORDER BY session_date ASC, order_index ASC, id ASC
+        ORDER BY session_date ASC, is_featured DESC, order_index ASC, id ASC
       ` as EntryRow[]
     }
 
     return await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
-      ORDER BY session_date ASC, order_index ASC, id ASC
+      ORDER BY session_date ASC, is_featured DESC, order_index ASC, id ASC
     ` as EntryRow[]
   } catch (error) {
     if (!isMissingColumn(error)) throw error
 
     if (sessionDate) {
       return await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
         ORDER BY session_date ASC, order_index ASC, id ASC
@@ -146,10 +156,30 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
     }
 
     return await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
       ORDER BY session_date ASC, order_index ASC, id ASC
+    ` as EntryRow[]
+  }
+}
+
+async function selectAllEntries(subjectId: string) {
+  try {
+    return await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+      ORDER BY week_number ASC, session_date ASC, is_featured DESC, order_index ASC, id ASC
+    ` as EntryRow[]
+  } catch (error) {
+    if (!isMissingColumn(error)) throw error
+
+    return await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+      ORDER BY week_number ASC, session_date ASC, order_index ASC, id ASC
     ` as EntryRow[]
   }
 }
@@ -167,15 +197,20 @@ export async function GET(request: Request) {
         : Number.NaN
       : rawWeekNumber
 
-    if (!subjectId || Number.isNaN(weekNumber)) {
-      return badRequest("Missing subjectId or weekNumber")
+    if (!subjectId) {
+      return badRequest("Missing subjectId")
     }
 
     let rows: EntryRow[]
     if (sessionDate && parsedDate) {
+      if (Number.isNaN(weekNumber)) {
+        return badRequest("Missing weekNumber")
+      }
       rows = await selectEntries(subjectId, weekNumber, sessionDate)
     } else if (sessionDate) {
       return badRequest("Invalid sessionDate")
+    } else if (Number.isNaN(weekNumber)) {
+      rows = await selectAllEntries(subjectId)
     } else {
       rows = await selectEntries(subjectId, weekNumber)
     }
@@ -277,7 +312,7 @@ export async function POST(request: Request) {
           ${driveFile.mimeType},
           ${driveFile.webViewLink || ""}
         )
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
       if (!isMissingColumn(error)) throw error
@@ -307,7 +342,7 @@ export async function POST(request: Request) {
           ${driveFile.mimeType},
           ${driveFile.webViewLink || ""}
         )
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     }
 

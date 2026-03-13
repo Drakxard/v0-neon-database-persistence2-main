@@ -20,6 +20,7 @@ type EntryRow = {
   answer_text: string | null
   custom_title: string | null
   practice_state: "erre" | null
+  is_featured: boolean
   created_at: string
   updated_at: string
 }
@@ -47,17 +48,25 @@ function getDisplayTitle(entry: Pick<EntryRow, "custom_title" | "order_index">) 
   return customTitle && customTitle.length > 0 ? customTitle : `Duda ${entry.order_index + 1}`
 }
 
+function normalizeSessionDateKey(sessionDate: string | Date) {
+  if (sessionDate instanceof Date) {
+    return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
+  }
+
+  return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
 async function withLinks(row: EntryRow | null) {
   if (!row) return null
 
-  let links
+  let links: { id: number; label: string; url: string }[]
   try {
     links = await sql`
       SELECT id, label, url
       FROM subject_day_entry_links
       WHERE entry_id = ${row.id}
       ORDER BY order_index ASC, id ASC
-    `
+    ` as { id: number; label: string; url: string }[]
   } catch (error) {
     if (isMissingSubjectDayEntriesTable(error)) {
       links = []
@@ -68,6 +77,7 @@ async function withLinks(row: EntryRow | null) {
 
   return {
     ...row,
+    session_date: normalizeSessionDateKey(row.session_date),
     display_title: getDisplayTitle(row),
     external_links: links,
   }
@@ -87,22 +97,39 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const customTitle = typeof body.customTitle === "string" ? body.customTitle.trim() : null
     const practiceState =
       body.practiceState === "erre" ? "erre" : body.practiceState === null ? null : undefined
+    const isFeatured = typeof body.isFeatured === "boolean" ? body.isFeatured : undefined
 
     let rows: EntryRow[]
     try {
       rows = await sql`
+        WITH entry_scope AS (
+          SELECT subject_id, week_number, session_date
+          FROM subject_day_entries
+          WHERE id = ${entryId}
+        ),
+        cleared AS (
+          UPDATE subject_day_entries
+          SET is_featured = FALSE
+          WHERE ${isFeatured === true}
+            AND (subject_id, week_number, session_date) IN (
+              SELECT subject_id, week_number, session_date
+              FROM entry_scope
+            )
+          RETURNING id
+        )
         UPDATE subject_day_entries
         SET
           transcript_text = CASE WHEN ${"transcriptText" in body} THEN ${transcriptText || ""} ELSE transcript_text END,
           answer_text = CASE WHEN ${"answerText" in body} THEN ${answerText} ELSE answer_text END,
           custom_title = CASE WHEN ${"customTitle" in body} THEN ${customTitle} ELSE custom_title END,
           practice_state = CASE WHEN ${practiceState !== undefined} THEN ${practiceState ?? null} ELSE practice_state END,
+          is_featured = CASE WHEN ${isFeatured !== undefined} THEN ${isFeatured} ELSE is_featured END,
           updated_at = NOW()
         WHERE id = ${entryId}
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, created_at, updated_at
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
-      const isTryingNewFields = "customTitle" in body || practiceState !== undefined
+      const isTryingNewFields = "customTitle" in body || practiceState !== undefined || isFeatured !== undefined
       if (!isMissingColumn(error) || isTryingNewFields) {
         throw error
       }
@@ -114,7 +141,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           answer_text = CASE WHEN ${"answerText" in body} THEN ${answerText} ELSE answer_text END,
           updated_at = NOW()
         WHERE id = ${entryId}
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, created_at, updated_at
+        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     }
 

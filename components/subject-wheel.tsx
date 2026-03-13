@@ -54,6 +54,7 @@ interface SubjectDayEntry {
   custom_title: string | null
   display_title: string
   practice_state: "erre" | null
+  is_featured: boolean
   external_links: SubjectDayEntryLink[]
   created_at: string
   updated_at: string
@@ -81,6 +82,11 @@ type MobileShortcutWindow = {
   startMinutes: number
   endMinutes: number
   subjectId: string
+}
+
+type PendingFeaturedUpdate = {
+  entryId: number
+  isFeatured: boolean
 }
 
 const INITIAL_SUBJECTS: Subject[] = [
@@ -286,6 +292,15 @@ function applyPracticeFilters(entries: SubjectDayEntry[], filters: PracticeFilte
   return options?.shuffle && filters.random ? shuffleQuestions(filteredEntries) : filteredEntries
 }
 
+function sortSubjectDayEntries(entries: SubjectDayEntry[]) {
+  return [...entries].sort(
+    (left, right) =>
+      Number(right.is_featured) - Number(left.is_featured) ||
+      left.order_index - right.order_index ||
+      left.id - right.id
+  )
+}
+
 export function SubjectWheel() {
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(new Date()))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
@@ -348,6 +363,11 @@ export function SubjectWheel() {
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
   const [exampleError, setExampleError] = useState("")
+  const [isReviewOpen, setIsReviewOpen] = useState(false)
+  const [reviewSubjectId, setReviewSubjectId] = useState("")
+  const [reviewEntries, setReviewEntries] = useState<SubjectDayEntry[]>([])
+  const [isLoadingReview, setIsLoadingReview] = useState(false)
+  const [reviewError, setReviewError] = useState("")
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
 
@@ -365,6 +385,8 @@ export function SubjectWheel() {
   const recordingChunksRef = useRef<Blob[]>([])
   const audioCacheRef = useRef<Map<number, string>>(new Map())
   const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
+  const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
+  const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const todayKey = getTodayDateString()
   const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now), [now])
   const mobileShortcutTarget = useMemo(() => {
@@ -640,7 +662,7 @@ export function SubjectWheel() {
           throw new Error(getErrorMessage(payload, "No se pudieron cargar las dudas del dia."))
         }
 
-        setEntries(Array.isArray(payload) ? payload : [])
+        setEntries(sortSubjectDayEntries(Array.isArray(payload) ? payload : []))
       } catch (error) {
         console.error("Failed to load subject day entries:", error)
         setEntries([])
@@ -667,6 +689,7 @@ export function SubjectWheel() {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop())
       }
 
+      clearPendingFeaturedSave()
       audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
     }
   }, [reviewAudio])
@@ -675,6 +698,56 @@ export function SubjectWheel() {
     if (reviewAudio && reviewAudio !== nextAudio) {
       URL.revokeObjectURL(reviewAudio.url)
     }
+  }
+
+  const clearPendingFeaturedSave = () => {
+    if (pendingFeaturedSaveTimerRef.current) {
+      window.clearTimeout(pendingFeaturedSaveTimerRef.current)
+      pendingFeaturedSaveTimerRef.current = null
+    }
+  }
+
+  const flushPendingFeaturedUpdate = async () => {
+    const pendingUpdate = pendingFeaturedUpdateRef.current
+    if (!pendingUpdate) return
+
+    clearPendingFeaturedSave()
+    pendingFeaturedUpdateRef.current = null
+
+    try {
+      const response = await fetch(`/api/subject-day-entries/${pendingUpdate.entryId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isFeatured: pendingUpdate.isFeatured }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo actualizar el destacado."))
+      }
+
+      const updatedEntry = payload as SubjectDayEntry
+      setEntries((previousEntries) =>
+        sortSubjectDayEntries(
+          previousEntries.map((item) => {
+            if (item.session_date === updatedEntry.session_date && item.subject_id === updatedEntry.subject_id && updatedEntry.is_featured) {
+              return { ...item, is_featured: false }
+            }
+            return item.id === updatedEntry.id ? updatedEntry : item
+          })
+        )
+      )
+    } catch (error) {
+      console.error("Failed to persist featured entry:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo actualizar el destacado.")
+    }
+  }
+
+  const scheduleFeaturedSave = () => {
+    clearPendingFeaturedSave()
+    pendingFeaturedSaveTimerRef.current = window.setTimeout(() => {
+      void flushPendingFeaturedUpdate()
+    }, 3000)
   }
 
   const stopAndDiscardRecording = () => {
@@ -694,6 +767,8 @@ export function SubjectWheel() {
   }
 
   const resetSubjectUiState = () => {
+    clearPendingFeaturedSave()
+    pendingFeaturedUpdateRef.current = null
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
     audioCacheRef.current.clear()
     audioElementRefs.current = {}
@@ -758,7 +833,8 @@ export function SubjectWheel() {
     setIsMobileShortcutOpen(true)
   }
 
-  const closeSubjectDialog = () => {
+  const closeSubjectDialog = async () => {
+    await flushPendingFeaturedUpdate()
     stopAndDiscardRecording()
 
     Object.values(audioElementRefs.current).forEach((audioElement) => {
@@ -778,6 +854,18 @@ export function SubjectWheel() {
     setIsDialogOpen(true)
   }
 
+  const openSubjectDay = async (subjectId: string, dateKey: string) => {
+    await flushPendingFeaturedUpdate()
+    const subject = getSubjectById(subjectId)
+    if (!subject) return
+
+    setCurrentSubject(subject)
+    setCurrentDateKey(dateKey)
+    resetSubjectUiState()
+    setIsReviewOpen(false)
+    setIsDialogOpen(true)
+  }
+
   const markSubjectAsCompleted = (subject: Subject) => {
     if (!completedSubjects.some((item) => item.id === subject.id)) {
       const nextActive = activeSubjects.filter((item) => item.id !== subject.id)
@@ -794,7 +882,8 @@ export function SubjectWheel() {
     closeSubjectDialog()
   }
 
-  const moveDay = (direction: -1 | 1) => {
+  const moveDay = async (direction: -1 | 1) => {
+    await flushPendingFeaturedUpdate()
     const nextIndex = currentDayIndex + direction
     if (nextIndex < 0 || nextIndex >= weekDates.length || nextIndex > lastVisibleDayIndex) return
     setCurrentDateKey(formatDateKey(weekDates[nextIndex]))
@@ -897,7 +986,7 @@ export function SubjectWheel() {
       if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
         setEntries((previousEntries) => {
           const nextEntries = [...previousEntries, payload as SubjectDayEntry]
-          return nextEntries.sort((left, right) => left.order_index - right.order_index || left.id - right.id)
+          return sortSubjectDayEntries(nextEntries)
         })
       }
 
@@ -951,7 +1040,7 @@ export function SubjectWheel() {
         throw new Error(getErrorMessage(payload, "No se pudo guardar la respuesta."))
       }
 
-      setEntries((previousEntries) => previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item)))
+      setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
       setEditingAnswerId(null)
       setRevealedAnswers((previous) => ({ ...previous, [entry.id]: false }))
     } catch (error) {
@@ -986,7 +1075,7 @@ export function SubjectWheel() {
         throw new Error(getErrorMessage(payload, "No se pudo guardar el nombre de la duda."))
       }
 
-      setEntries((previousEntries) => previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item)))
+      setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
       setEditingTitleId(null)
     } catch (error) {
       console.error("Failed to save entry title:", error)
@@ -1002,8 +1091,13 @@ export function SubjectWheel() {
     setIsCopyingEntries(true)
     try {
       const payload = entries
-        .map((entry) => `${getEntryDisplayTitle(entry)}: ${entry.answer_text?.trim() || ""}`)
-        .join("\n")
+        .map((entry) => {
+          const title = getEntryDisplayTitle(entry)
+          const transcript = entry.transcript_text?.trim() || ""
+          const answer = entry.answer_text?.trim() || ""
+          return `${title}\nTranscripcion: ${transcript}\nRespuesta: ${answer}`
+        })
+        .join("\n\n")
       await navigator.clipboard.writeText(payload)
     } catch (error) {
       console.error("Failed to copy entries:", error)
@@ -1011,6 +1105,27 @@ export function SubjectWheel() {
     } finally {
       window.setTimeout(() => setIsCopyingEntries(false), 600)
     }
+  }
+
+  const toggleFeaturedEntry = (entry: SubjectDayEntry) => {
+    const nextIsFeatured = !entry.is_featured
+    pendingFeaturedUpdateRef.current = {
+      entryId: entry.id,
+      isFeatured: nextIsFeatured,
+    }
+
+    setEntriesError("")
+    setEntries((previousEntries) =>
+      sortSubjectDayEntries(
+        previousEntries.map((item) => {
+          if (item.session_date === entry.session_date && item.subject_id === entry.subject_id && nextIsFeatured) {
+            return { ...item, is_featured: item.id === entry.id }
+          }
+          return item.id === entry.id ? { ...item, is_featured: nextIsFeatured } : item
+        })
+      )
+    )
+    scheduleFeaturedSave()
   }
 
   const openLinkDialog = (entryId: number) => {
@@ -1127,6 +1242,42 @@ export function SubjectWheel() {
     setIsPracticeOpen(true)
   }
 
+  const openReviewModal = () => {
+    setReviewSubjectId("")
+    setReviewEntries([])
+    setReviewError("")
+    setIsReviewOpen(true)
+  }
+
+  const loadReviewEntries = async (subjectId: string) => {
+    setIsLoadingReview(true)
+    setReviewError("")
+    setReviewSubjectId(subjectId)
+
+    try {
+      const params = new URLSearchParams({ subjectId })
+      const response = await fetch(`/api/subject-day-entries?${params.toString()}`)
+      const payload = await parseJsonResponse(response)
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudieron cargar los destacados."))
+      }
+
+      const normalizedEntries = Array.isArray(payload) ? (payload as SubjectDayEntry[]) : []
+      setReviewEntries(
+        normalizedEntries.filter((entry) => entry.is_featured).sort((left, right) => {
+          if (left.week_number !== right.week_number) return left.week_number - right.week_number
+          return left.session_date.localeCompare(right.session_date)
+        })
+      )
+    } catch (error) {
+      console.error("Failed to load review entries:", error)
+      setReviewEntries([])
+      setReviewError(error instanceof Error ? error.message : "No se pudieron cargar los destacados.")
+    } finally {
+      setIsLoadingReview(false)
+    }
+  }
+
   const loadPracticeEntries = async (subjectId: string, weekNumberValue = practiceWeekNumber, filters = practiceFilters) => {
     const subjectIndex = SUBJECT_ID_TO_INDEX[subjectId]
     if (subjectIndex === undefined) {
@@ -1207,7 +1358,7 @@ export function SubjectWheel() {
     const currentEntry = practiceVisibleEntries[currentPracticeIndex]
     if (!currentEntry) return
 
-    const nextPracticeState = estado === "erre" ? "erre" : null
+    const nextPracticeState: "erre" | null = estado === "erre" ? "erre" : null
     const shouldRemainVisible =
       (!practiceFilters.erre || nextPracticeState === "erre") &&
       (!practiceFilters.unanswered || !currentEntry.answer_text?.trim())
@@ -1283,6 +1434,14 @@ export function SubjectWheel() {
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
+  const reviewEntriesByWeek = useMemo(() => {
+    return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
+      const current = accumulator[entry.week_number] ?? []
+      current.push(entry)
+      accumulator[entry.week_number] = current
+      return accumulator
+    }, {})
+  }, [reviewEntries])
   const practiceWeekOptions = useMemo(
     () => Array.from({ length: getCurrentWeekNumber() + 1 }, (_, index) => String(index)),
     []
@@ -1440,6 +1599,13 @@ export function SubjectWheel() {
           >
             <GraduationCap className="w-4 h-4 mr-1.5" />
             Practicar
+          </Button>
+          <Button
+            onClick={openReviewModal}
+            variant="outline"
+            className="h-9 px-3"
+          >
+            Destacado
           </Button>
           <button
             onClick={handleReset}
@@ -1711,13 +1877,13 @@ export function SubjectWheel() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? closeSubjectDialog() : undefined)}>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialog() : undefined)}>
         <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-white p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border-2 sm:border-black" showCloseButton={false}>
           <div className="relative flex h-full flex-col overflow-hidden px-4 py-4 sm:p-8">
             <Button
               variant="outline"
               size="icon"
-              onClick={() => moveDay(-1)}
+              onClick={() => void moveDay(-1)}
               disabled={currentDayIndex <= 0}
               className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
@@ -1726,7 +1892,7 @@ export function SubjectWheel() {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => moveDay(1)}
+              onClick={() => void moveDay(1)}
               disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
               className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
@@ -1770,7 +1936,7 @@ export function SubjectWheel() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => moveDay(-1)}
+                    onClick={() => void moveDay(-1)}
                     disabled={currentDayIndex <= 0}
                     className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
                   >
@@ -1779,7 +1945,7 @@ export function SubjectWheel() {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => moveDay(1)}
+                    onClick={() => void moveDay(1)}
                     disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
                     className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
                   >
@@ -1834,6 +2000,11 @@ export function SubjectWheel() {
                               </div>
                             ) : (
                               <div className="flex flex-wrap items-center gap-2">
+                                <Checkbox
+                                  checked={entry.is_featured}
+                                  onCheckedChange={() => void toggleFeaturedEntry(entry)}
+                                  className="h-4 w-4"
+                                />
                                 <p className="text-xs font-medium text-black sm:text-sm">{getEntryDisplayTitle(entry)}</p>
                                 <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
                                   <Pencil className="h-4 w-4 text-slate-500" />
@@ -2071,6 +2242,102 @@ export function SubjectWheel() {
               Guardar
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isReviewOpen} onOpenChange={setIsReviewOpen}>
+        <DialogContent className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
+          <DialogHeader className="border-b border-slate-200 bg-white px-6 py-5 sm:px-8">
+            <DialogTitle>Repaso</DialogTitle>
+            <DialogDescription>Selecciona una materia y entra directo a los dias con audio destacado.</DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+            {reviewSubjectId === "" ? (
+              <div className="mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-8">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-slate-400">Acceso rapido</p>
+                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Elegi una materia</h2>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {INITIAL_SUBJECTS.map((subject) => (
+                    <button
+                      key={subject.id}
+                      type="button"
+                      onClick={() => void loadReviewEntries(subject.id)}
+                      className="rounded-3xl border border-slate-200 bg-white px-5 py-6 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+                    >
+                      <p className="text-base font-semibold text-slate-800">{subject.name.replace("\n", " ")}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : isLoadingReview ? (
+              <div className="flex h-full items-center justify-center py-10">
+                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+              </div>
+            ) : (
+              <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-slate-500">Materia</p>
+                    <h2 className="text-2xl font-semibold text-slate-800">
+                      {getSubjectDisplayName(getSubjectById(reviewSubjectId))}
+                    </h2>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setReviewSubjectId("")
+                      setReviewEntries([])
+                      setReviewError("")
+                    }}
+                  >
+                    Otra materia
+                  </Button>
+                </div>
+
+                {reviewError ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{reviewError}</div> : null}
+
+                {Object.keys(reviewEntriesByWeek).length === 0 ? (
+                  <div className="rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+                    <p className="text-sm text-slate-500">No hay audios destacados para esta materia.</p>
+                  </div>
+                ) : (
+                  Object.entries(reviewEntriesByWeek)
+                    .sort(([leftWeek], [rightWeek]) => Number(leftWeek) - Number(rightWeek))
+                    .map(([weekNumber, weekEntries]) => (
+                      <section key={weekNumber} className="space-y-3">
+                        <h3 className="text-lg font-semibold text-slate-800">Semana {weekNumber}</h3>
+                        <div className="space-y-3">
+                          {weekEntries.map((entry) => (
+                            <article key={entry.id} className="rounded-3xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-slate-500">{getWeekdayLabel(entry.session_date)}</p>
+                                  <p className="truncate text-lg font-semibold text-slate-800">{getEntryDisplayTitle(entry)}</p>
+                                </div>
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                  <audio controls preload="none" src={`/api/subject-day-entries/${entry.id}/audio`} className="sm:w-[320px]" />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => void openSubjectDay(entry.subject_id, entry.session_date)}
+                                    className="border-black text-black"
+                                  >
+                                    Ver Dia
+                                  </Button>
+                                </div>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </section>
+                    ))
+                )}
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
