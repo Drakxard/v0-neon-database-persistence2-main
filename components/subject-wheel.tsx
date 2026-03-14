@@ -158,8 +158,7 @@ const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
   6: ["logica", "probabilidad", "calculo3", "fisica", "calculo2", "algebra"],
 }
 
-function getCurrentWeekNumber(): number {
-  const now = new Date()
+function getCurrentWeekNumber(now = new Date()): number {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   // Semana 1 empieza el lunes 16/03/2026. Antes de eso es semana 0.
   const weekOneStart = new Date(2026, 2, 16)
@@ -378,6 +377,7 @@ export function SubjectWheel() {
   const readyToSync = useRef(false)
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
@@ -465,6 +465,7 @@ export function SubjectWheel() {
   const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const todayKey = getTodayDateString()
+  const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
   const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now), [now])
   const mobileShortcutTarget = useMemo(() => {
     if (!activeMobileShortcut) return null
@@ -504,6 +505,9 @@ export function SubjectWheel() {
   const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
   const selectedWeekNumber = useMemo(() => getWeekNumberForDate(selectedDate), [selectedDate])
   const weekDates = useMemo(() => getWeekDates(selectedWeekNumber), [selectedWeekNumber])
+  const selectedWeekNumberRef = useRef(selectedWeekNumber)
+  const currentCalendarWeekRef = useRef(currentCalendarWeek)
+  const previousCalendarWeekRef = useRef(currentCalendarWeek)
   const currentDayIndex = weekDates.findIndex((date) => formatDateKey(date) === currentDateKey)
   const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
     return formatDateKey(date) <= todayKey ? index : lastIndex
@@ -526,6 +530,22 @@ export function SubjectWheel() {
       pendingMaterialCheckupTimersRef.current.clear()
     }
   }, [])
+
+  useEffect(() => {
+    selectedWeekNumberRef.current = selectedWeekNumber
+  }, [selectedWeekNumber])
+
+  useEffect(() => {
+    currentCalendarWeekRef.current = currentCalendarWeek
+  }, [currentCalendarWeek])
+
+  useEffect(() => {
+    const previousWeekNumber = previousCalendarWeekRef.current
+    if (currentCalendarWeek > previousWeekNumber && selectedWeekNumber < currentCalendarWeek) {
+      setCurrentDateKey(todayKey)
+    }
+    previousCalendarWeekRef.current = currentCalendarWeek
+  }, [currentCalendarWeek, selectedWeekNumber, todayKey])
 
   useEffect(() => {
     const loadFromDatabase = async () => {
@@ -661,8 +681,19 @@ export function SubjectWheel() {
   // Global 'g' key listener — registered once, stable via ref
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const isEditable = Boolean(target?.isContentEditable)
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return
+
+      if (e.ctrlKey && e.key === "Enter") {
+        e.preventDefault()
+        if (selectedWeekNumberRef.current < currentCalendarWeekRef.current + 1) {
+          setIsNextWeekDialogOpen(true)
+        }
+        return
+      }
+
       if (e.key === 'g' || e.key === 'G') {
         openAiModal()
       }
@@ -1009,6 +1040,15 @@ export function SubjectWheel() {
     if (nextWeekNumber < 0 || nextWeekNumber > latestWeekNumber) return
 
     setCurrentDateKey(formatDateKey(nextDate))
+  }
+
+  const startNextWeek = async () => {
+    await flushPendingFeaturedUpdate()
+
+    const targetWeekNumber = getCurrentWeekNumber(new Date()) + 1
+    const nextWeekStart = getWeekDates(targetWeekNumber)[0]
+    setCurrentDateKey(formatDateKey(nextWeekStart))
+    setIsNextWeekDialogOpen(false)
   }
 
   const startRecording = async (target: AudioUploadTarget) => {
@@ -1796,7 +1836,7 @@ export function SubjectWheel() {
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
   const practiceTodaySubjects = useMemo(() => getScheduledSubjectsForDate(new Date()), [])
-  const latestWeekNumber = useMemo(() => getCurrentWeekNumber(), [])
+  const latestWeekNumber = currentCalendarWeek
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
@@ -1840,8 +1880,8 @@ export function SubjectWheel() {
     }, {})
   }, [reviewEntries])
   const practiceWeekOptions = useMemo(
-    () => Array.from({ length: getCurrentWeekNumber() + 1 }, (_, index) => String(index)),
-    []
+    () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => String(index)),
+    [currentCalendarWeek]
   )
 
   const handleReset = async () => {
@@ -2283,6 +2323,27 @@ export function SubjectWheel() {
                 Cerrar
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isNextWeekDialogOpen} onOpenChange={setIsNextWeekDialogOpen}>
+        <DialogContent className="max-w-md border-2 border-black bg-white text-black">
+          <DialogHeader className="space-y-2 text-left">
+            <DialogTitle>Comenzar siguiente semana</DialogTitle>
+            <DialogDescription className="text-sm text-slate-700">
+              Adelanta la vista a la proxima semana para cargar material antes del lunes cuando ya este habilitado.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="sm:justify-start">
+            <Button
+              type="button"
+              onClick={() => void startNextWeek()}
+              disabled={selectedWeekNumber >= currentCalendarWeek + 1}
+              className="border-2 border-black bg-black text-white hover:bg-slate-900"
+            >
+              Comenzar semana {currentCalendarWeek + 1}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
