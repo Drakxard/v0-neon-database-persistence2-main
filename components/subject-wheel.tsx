@@ -8,7 +8,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { formatDateKey, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
+import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
 interface Subject {
   id: string
@@ -156,17 +156,6 @@ const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
   4: ["fisica", "logica"],
   5: ["fisica", "calculo2", "probabilidad", "logica"],
   6: ["logica", "probabilidad", "calculo3", "fisica", "calculo2", "algebra"],
-}
-
-function getCurrentWeekNumber(now = new Date()): number {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  // Semana 1 empieza el lunes 16/03/2026. Antes de eso es semana 0.
-  const weekOneStart = new Date(2026, 2, 16)
-  if (today < weekOneStart) return 0
-
-  const msPerDay = 1000 * 60 * 60 * 24
-  const diffDays = Math.floor((today.getTime() - weekOneStart.getTime()) / msPerDay)
-  return Math.floor(diffDays / 7) + 1
 }
 
 function getTodayDateString() {

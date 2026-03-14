@@ -1,4 +1,5 @@
-export const WEEK_ONE_START = new Date(2026, 2, 16)
+export const WEEK_ONE_START = new Date(2026, 2, 14)
+export const WEEK_TWO_START = new Date(2026, 2, 23)
 
 export const WEEKDAY_NAMES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
 
@@ -13,10 +14,11 @@ export function normalizeDate(date: Date) {
 export function getWeekNumberForDate(input: Date): number {
   const current = normalizeDate(input)
   if (current < WEEK_ONE_START) return 0
+  if (current < WEEK_TWO_START) return 1
 
   const msPerDay = 1000 * 60 * 60 * 24
-  const diffDays = Math.floor((current.getTime() - WEEK_ONE_START.getTime()) / msPerDay)
-  return Math.floor(diffDays / 7) + 1
+  const diffDays = Math.floor((current.getTime() - WEEK_TWO_START.getTime()) / msPerDay)
+  return Math.floor(diffDays / 7) + 2
 }
 
 export function formatDateKey(date: Date) {
@@ -42,14 +44,19 @@ export function getWeekStartDate(weekNumber: number) {
     return current
   }
 
-  const start = new Date(WEEK_ONE_START)
-  start.setDate(WEEK_ONE_START.getDate() + (weekNumber - 1) * 7)
+  if (weekNumber === 1) {
+    return new Date(WEEK_ONE_START)
+  }
+
+  const start = new Date(WEEK_TWO_START)
+  start.setDate(WEEK_TWO_START.getDate() + (weekNumber - 2) * 7)
   return start
 }
 
 export function getWeekDates(weekNumber: number) {
   const start = getWeekStartDate(weekNumber)
-  return Array.from({ length: 7 }, (_, index) => {
+  const totalDays = weekNumber === 1 ? Math.round((WEEK_TWO_START.getTime() - WEEK_ONE_START.getTime()) / (1000 * 60 * 60 * 24)) : 7
+  return Array.from({ length: totalDays }, (_, index) => {
     const date = new Date(start)
     date.setDate(start.getDate() + index)
     return date
