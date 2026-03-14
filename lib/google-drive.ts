@@ -78,7 +78,7 @@ export async function ensureSubjectFolderPath(subjectName: string, weekNumber: n
   return dayFolderId
 }
 
-export async function uploadAudioToDrive(params: {
+export async function uploadFileToDrive(params: {
   subjectName: string
   weekNumber: number
   weekdayIndex: number
@@ -115,6 +115,17 @@ export async function uploadAudioToDrive(params: {
     mimeType: string
     webViewLink: string
   }
+}
+
+export async function uploadAudioToDrive(params: {
+  subjectName: string
+  weekNumber: number
+  weekdayIndex: number
+  fileName: string
+  mimeType: string
+  fileBuffer: Buffer
+}) {
+  return uploadFileToDrive(params)
 }
 
 export async function downloadDriveFile(fileId: string) {

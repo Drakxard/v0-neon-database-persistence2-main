@@ -748,8 +748,8 @@ export function SubjectWheel() {
           fetch(`/api/subject-day-materials?${params.toString()}`),
         ])
         const [entriesPayload, materialsPayload] = await Promise.all([
-          entriesResponse.json(),
-          materialsResponse.json(),
+          parseJsonResponse(entriesResponse),
+          parseJsonResponse(materialsResponse),
         ])
 
         if (!entriesResponse.ok) {
@@ -2339,29 +2339,7 @@ export function SubjectWheel() {
               </div>
 
               {practiceSectionView === "theory" ? (
-                <div className="flex items-center justify-between gap-3 md:justify-start md:gap-4">
-                  <div className="flex items-center gap-2 md:hidden">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => void moveDay(-1)}
-                      disabled={currentDayIndex <= 0}
-                      className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => void moveDay(1)}
-                      disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
-                      className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
-                </div>
+                <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
               ) : null}
             </DialogHeader>
 

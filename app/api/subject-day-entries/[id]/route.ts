@@ -7,6 +7,7 @@ const sql = neon(process.env.DATABASE_URL!)
 
 type EntryRow = {
   id: number
+  subject_day_material_id: number | null
   subject_id: string
   week_number: number
   session_date: string
@@ -126,7 +127,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           is_featured = CASE WHEN ${isFeatured !== undefined} THEN ${isFeatured} ELSE is_featured END,
           updated_at = NOW()
         WHERE id = ${entryId}
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
       const isTryingNewFields = "customTitle" in body || practiceState !== undefined || isFeatured !== undefined
@@ -141,7 +142,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           answer_text = CASE WHEN ${"answerText" in body} THEN ${answerText} ELSE answer_text END,
           updated_at = NOW()
         WHERE id = ${entryId}
-        RETURNING id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+        RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     }
 
