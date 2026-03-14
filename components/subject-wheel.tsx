@@ -856,6 +856,7 @@ export function SubjectWheel() {
       mediaRecorderRef.current.onstop = null
       mediaRecorderRef.current.stop()
     }
+    mediaRecorderRef.current = null
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop())
@@ -1036,6 +1037,7 @@ export function SubjectWheel() {
 
       recorder.onstop = () => {
         setIsRecording(false)
+        mediaRecorderRef.current = null
 
         const chunks = recordingChunksRef.current
         recordingChunksRef.current = []
@@ -1064,6 +1066,11 @@ export function SubjectWheel() {
       recorder.start()
       setIsRecording(true)
     } catch (error) {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+        mediaStreamRef.current = null
+      }
+      mediaRecorderRef.current = null
       console.error("Failed to start recording:", error)
       setRecordingError(error instanceof Error ? error.message : "No se pudo iniciar la grabacion.")
       setIsRecording(false)
