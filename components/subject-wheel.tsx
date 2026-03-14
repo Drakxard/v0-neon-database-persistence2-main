@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
@@ -40,6 +40,7 @@ interface SubjectDayEntryLink {
 
 interface SubjectDayEntry {
   id: number
+  subject_day_material_id: number | null
   subject_id: string
   week_number: number
   session_date: string
@@ -60,6 +61,29 @@ interface SubjectDayEntry {
   updated_at: string
 }
 
+type SubjectDayMaterialType = "theory" | "practice"
+
+interface SubjectDayMaterial {
+  id: number
+  subject_id: string
+  week_number: number
+  session_date: string
+  weekday_index: number
+  material_type: SubjectDayMaterialType
+  order_index: number
+  file_name: string
+  drive_file_id: string
+  drive_mime_type: string
+  drive_web_view_link: string
+  is_checkup_done: boolean
+  created_at: string
+  updated_at: string
+}
+
+interface PendingSubjectDayMaterial extends SubjectDayMaterial {
+  is_pending_upload: true
+}
+
 interface ReviewAudio {
   blob: Blob
   url: string
@@ -67,12 +91,13 @@ interface ReviewAudio {
 }
 
 type AudioUploadTarget = {
-  source: "subject-dialog" | "mobile-shortcut" | "manual-mobile-shortcut"
+  source: "subject-dialog" | "mobile-shortcut" | "manual-mobile-shortcut" | "continue-practice" | "continue-context"
   subjectId: string
   subjectName: string
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
+  materialId?: number | null
   shortcutIndex?: number
 }
 
@@ -87,6 +112,11 @@ type MobileShortcutWindow = {
 type PendingFeaturedUpdate = {
   entryId: number
   isFeatured: boolean
+}
+
+type ContinuePayload = {
+  material: SubjectDayMaterial | null
+  previousFeaturedEntry: SubjectDayEntry | null
 }
 
 const INITIAL_SUBJECTS: Subject[] = [
@@ -301,6 +331,40 @@ function sortSubjectDayEntries(entries: SubjectDayEntry[]) {
   )
 }
 
+function sortSubjectDayMaterials(materials: SubjectDayMaterial[]) {
+  return [...materials].sort((left, right) => {
+    if (left.material_type !== right.material_type) {
+      return left.material_type.localeCompare(right.material_type)
+    }
+
+    return left.order_index - right.order_index || left.id - right.id
+  })
+}
+
+function getNextUncheckedPracticeMaterial(
+  materials: SubjectDayMaterial[],
+  {
+    subjectId,
+    sessionDate,
+    weekNumber,
+  }: {
+    subjectId: string
+    sessionDate: string
+    weekNumber: number
+  }
+) {
+  return sortSubjectDayMaterials(
+    materials.filter(
+      (material) =>
+        material.material_type === "practice" &&
+        material.subject_id === subjectId &&
+        material.session_date === sessionDate &&
+        material.week_number === weekNumber &&
+        !material.is_checkup_done
+    )
+  )[0] ?? null
+}
+
 export function SubjectWheel() {
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(new Date()))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
@@ -317,7 +381,10 @@ export function SubjectWheel() {
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
+  const [materials, setMaterials] = useState<SubjectDayMaterial[]>([])
+  const [pendingMaterials, setPendingMaterials] = useState<PendingSubjectDayMaterial[]>([])
   const [isEntriesLoading, setIsEntriesLoading] = useState(false)
+  const [isMaterialsLoading, setIsMaterialsLoading] = useState(false)
   const [entriesError, setEntriesError] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [recordingError, setRecordingError] = useState("")
@@ -341,13 +408,22 @@ export function SubjectWheel() {
   const [loadingAudioEntryId, setLoadingAudioEntryId] = useState<number | null>(null)
   const [audioSourceUrls, setAudioSourceUrls] = useState<Record<number, string>>({})
   const [isCopyingEntries, setIsCopyingEntries] = useState(false)
+  const [practiceSectionView, setPracticeSectionView] = useState<"theory" | "exercises">("theory")
+  const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
   const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
   const [isSavingLink, setIsSavingLink] = useState(false)
+  const [isContinueOpen, setIsContinueOpen] = useState(false)
+  const [isContinueLoading, setIsContinueLoading] = useState(false)
+  const [continueError, setContinueError] = useState("")
+  const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
+  const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
+  const practiceFileInputRef = useRef<HTMLInputElement | null>(null)
 
   // Practice modal state
   const [isPracticeOpen, setIsPracticeOpen] = useState(false)
+  const [practiceLaunchView, setPracticeLaunchView] = useState<"menu" | "theory" | "exercises">("menu")
   const [practiceSubjectIndex, setPracticeSubjectIndex] = useState<number | null>(null)
   const [practiceSubjectId, setPracticeSubjectId] = useState<string>("")
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
@@ -385,6 +461,7 @@ export function SubjectWheel() {
   const recordingChunksRef = useRef<Blob[]>([])
   const audioCacheRef = useRef<Map<number, string>>(new Map())
   const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
+  const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
   const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const todayKey = getTodayDateString()
@@ -439,6 +516,15 @@ export function SubjectWheel() {
     }, 1000)
 
     return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      pendingMaterialCheckupTimersRef.current.forEach((timerId) => {
+        window.clearTimeout(timerId)
+      })
+      pendingMaterialCheckupTimersRef.current.clear()
+    }
   }, [])
 
   useEffect(() => {
@@ -645,8 +731,9 @@ export function SubjectWheel() {
   useEffect(() => {
     if (!isDialogOpen || !currentSubject) return
 
-    const loadEntries = async () => {
+    const loadSubjectDayData = async () => {
       setIsEntriesLoading(true)
+      setIsMaterialsLoading(true)
       setEntriesError("")
 
       try {
@@ -656,23 +743,37 @@ export function SubjectWheel() {
           weekNumber: String(selectedWeekNumber),
         })
 
-        const response = await fetch(`/api/subject-day-entries?${params.toString()}`)
-        const payload = await response.json()
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload, "No se pudieron cargar las dudas del dia."))
+        const [entriesResponse, materialsResponse] = await Promise.all([
+          fetch(`/api/subject-day-entries?${params.toString()}`),
+          fetch(`/api/subject-day-materials?${params.toString()}`),
+        ])
+        const [entriesPayload, materialsPayload] = await Promise.all([
+          entriesResponse.json(),
+          materialsResponse.json(),
+        ])
+
+        if (!entriesResponse.ok) {
+          throw new Error(getErrorMessage(entriesPayload, "No se pudieron cargar las dudas del dia."))
         }
 
-        setEntries(sortSubjectDayEntries(Array.isArray(payload) ? payload : []))
+        if (!materialsResponse.ok) {
+          throw new Error(getErrorMessage(materialsPayload, "No se pudieron cargar los materiales del dia."))
+        }
+
+        setEntries(sortSubjectDayEntries(Array.isArray(entriesPayload) ? entriesPayload : []))
+        setMaterials(sortSubjectDayMaterials(Array.isArray(materialsPayload) ? materialsPayload : []))
       } catch (error) {
-        console.error("Failed to load subject day entries:", error)
+        console.error("Failed to load subject day data:", error)
         setEntries([])
+        setMaterials([])
         setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.")
       } finally {
         setIsEntriesLoading(false)
+        setIsMaterialsLoading(false)
       }
     }
 
-    void loadEntries()
+    void loadSubjectDayData()
   }, [currentDateKey, currentSubject, isDialogOpen, selectedWeekNumber])
 
   useEffect(() => {
@@ -773,6 +874,8 @@ export function SubjectWheel() {
     audioCacheRef.current.clear()
     audioElementRefs.current = {}
     setEntries([])
+    setMaterials([])
+    setPendingMaterials([])
     setEntriesError("")
     setRecordingError("")
     setEditingAnswerId(null)
@@ -786,10 +889,16 @@ export function SubjectWheel() {
     setLoadingAudioEntryId(null)
     setAudioSourceUrls({})
     setIsCopyingEntries(false)
+    setPracticeSectionView("theory")
+    setIsUploadingMaterialType(null)
     setIsLinkDialogOpen(false)
     setLinkEntryId(null)
     setLinkDraft({ label: "", url: "" })
     setIsSavingLink(false)
+    setIsContinueOpen(false)
+    setIsContinueLoading(false)
+    setContinueError("")
+    setContinuePayload(null)
   }
 
   const cancelReview = () => {
@@ -935,7 +1044,9 @@ export function SubjectWheel() {
 
         disposeReviewAudio(nextReviewAudio)
         setReviewAudio(nextReviewAudio)
-        setIsReviewDialogOpen(target.source === "subject-dialog")
+        setIsReviewDialogOpen(
+          target.source === "subject-dialog" || target.source === "continue-practice" || target.source === "continue-context"
+        )
       }
 
       recorder.start()
@@ -968,6 +1079,9 @@ export function SubjectWheel() {
       formData.append("sessionDate", target.sessionDate)
       formData.append("weekNumber", String(target.weekNumber))
       formData.append("weekdayIndex", String(target.weekdayIndex))
+      if (target.materialId != null) {
+        formData.append("materialId", String(target.materialId))
+      }
       formData.append(
         "audio",
         new File([reviewAudio.blob], `${target.subjectId}-${target.sessionDate}.webm`, { type: reviewAudio.mimeType })
@@ -983,11 +1097,36 @@ export function SubjectWheel() {
         throw new Error(getErrorMessage(payload, "No se pudo confirmar el audio."))
       }
 
-      if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
-        setEntries((previousEntries) => {
-          const nextEntries = [...previousEntries, payload as SubjectDayEntry]
-          return sortSubjectDayEntries(nextEntries)
+      let createdEntry = payload as SubjectDayEntry
+      if (target.source === "continue-context") {
+        const featuredResponse = await fetch(`/api/subject-day-entries/${createdEntry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isFeatured: true }),
         })
+        const featuredPayload = await featuredResponse.json()
+        if (!featuredResponse.ok) {
+          throw new Error(getErrorMessage(featuredPayload, "No se pudo guardar el audio de contexto."))
+        }
+        createdEntry = featuredPayload as SubjectDayEntry
+      }
+
+      if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
+        setEntries((previousEntries) =>
+          sortSubjectDayEntries(
+            [...previousEntries.filter((entry) => !(target.source === "continue-context" && entry.is_featured)), createdEntry]
+          )
+        )
+        if (target.source === "continue-context") {
+          setContinuePayload((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  previousFeaturedEntry: createdEntry,
+                }
+              : previous
+          )
+        }
       }
 
       cancelReview()
@@ -1174,6 +1313,195 @@ export function SubjectWheel() {
     }
   }
 
+  const handleMaterialUpload = async (materialType: SubjectDayMaterialType, file: File | null) => {
+    if (!currentSubject || !file) return
+
+    if (file.type !== "application/pdf") {
+      setEntriesError("Solo se permiten archivos PDF.")
+      return
+    }
+
+    setEntriesError("")
+    setIsUploadingMaterialType(materialType)
+    const tempId = -Date.now()
+    const pendingMaterial: PendingSubjectDayMaterial = {
+      id: tempId,
+      subject_id: currentSubject.id,
+      week_number: selectedWeekNumber,
+      session_date: currentDateKey,
+      weekday_index: currentDayIndex >= 0 ? currentDayIndex : 0,
+      material_type: materialType,
+      order_index:
+        (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
+        pendingMaterials.filter((material) => material.material_type === materialType).length +
+        1,
+      file_name: file.name,
+      drive_file_id: "",
+      drive_mime_type: "application/pdf",
+      drive_web_view_link: "",
+      is_checkup_done: false,
+      created_at: "",
+      updated_at: "",
+      is_pending_upload: true,
+    }
+    setPendingMaterials((previousMaterials) => [...previousMaterials, pendingMaterial])
+
+    try {
+      const formData = new FormData()
+      formData.append("subjectId", currentSubject.id)
+      formData.append("subjectName", getSubjectDisplayName(currentSubject))
+      formData.append("sessionDate", currentDateKey)
+      formData.append("weekNumber", String(selectedWeekNumber))
+      formData.append("materialType", materialType)
+      formData.append("file", file)
+
+      const response = await fetch("/api/subject-day-materials", {
+        method: "POST",
+        body: formData,
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo subir el PDF."))
+      }
+
+      setMaterials((previousMaterials) => sortSubjectDayMaterials([...previousMaterials, payload as SubjectDayMaterial]))
+    } catch (error) {
+      console.error("Failed to upload subject day material:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo subir el PDF.")
+    } finally {
+      setPendingMaterials((previousMaterials) => previousMaterials.filter((material) => material.id !== tempId))
+      setIsUploadingMaterialType(null)
+      if (theoryFileInputRef.current) theoryFileInputRef.current.value = ""
+      if (practiceFileInputRef.current) practiceFileInputRef.current.value = ""
+    }
+  }
+
+  const loadContinuePayload = async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (!currentSubject) return
+    const localPayload = buildLocalContinuePayload()
+
+    if (!silent && !localPayload) {
+      setIsContinueLoading(true)
+    }
+    setContinueError("")
+
+    try {
+      const params = new URLSearchParams({
+        subjectId: currentSubject.id,
+        sessionDate: currentDateKey,
+        weekNumber: String(selectedWeekNumber),
+      })
+
+      const response = await fetch(`/api/subject-day-materials/next-practice?${params.toString()}`)
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo cargar el siguiente PDF de practica."))
+      }
+
+      const serverPayload = payload as ContinuePayload
+
+      setContinuePayload({
+        ...serverPayload,
+        material: localPayload?.material ?? serverPayload.material,
+        previousFeaturedEntry: localPayload?.previousFeaturedEntry ?? serverPayload.previousFeaturedEntry,
+      })
+    } catch (error) {
+      console.error("Failed to load next practice material:", error)
+      setContinuePayload((previous) => previous ?? localPayload)
+      setContinueError(error instanceof Error ? error.message : "No se pudo cargar el siguiente PDF de practica.")
+    } finally {
+      if (!silent && !localPayload) {
+        setIsContinueLoading(false)
+      }
+    }
+  }
+
+  const openContinueModal = async () => {
+    const localPayload = buildLocalContinuePayload()
+    setContinuePayload(localPayload)
+    setIsContinueOpen(true)
+    void loadContinuePayload({ silent: Boolean(localPayload) })
+  }
+
+  const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
+    const isCurrentContinueMaterial = currentContinueMaterial?.id === materialToUpdate.id
+    const previousPayload = continuePayload
+    const optimisticMaterial = { ...materialToUpdate, is_checkup_done: checked }
+    const nextMaterials = sortSubjectDayMaterials(
+      materials.map((material) => (material.id === optimisticMaterial.id ? optimisticMaterial : material))
+    )
+    const existingTimer = pendingMaterialCheckupTimersRef.current.get(materialToUpdate.id)
+    const nextContinueMaterial =
+      currentSubject && isCurrentContinueMaterial
+        ? getNextUncheckedPracticeMaterial(nextMaterials, {
+            subjectId: currentSubject.id,
+            sessionDate: currentDateKey,
+            weekNumber: selectedWeekNumber,
+          })
+        : null
+
+    if (existingTimer) {
+      window.clearTimeout(existingTimer)
+      pendingMaterialCheckupTimersRef.current.delete(materialToUpdate.id)
+    }
+
+    setContinueError("")
+    if (isCurrentContinueMaterial) {
+      setContinuePayload((previous) =>
+        previous
+          ? {
+              ...previous,
+              material: checked ? nextContinueMaterial : optimisticMaterial,
+            }
+          : previous
+      )
+    }
+    setMaterials(nextMaterials)
+
+    const timerId = window.setTimeout(async () => {
+      pendingMaterialCheckupTimersRef.current.delete(materialToUpdate.id)
+
+      try {
+        const response = await fetch(`/api/subject-day-materials/${materialToUpdate.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isCheckupDone: checked }),
+        })
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo actualizar el CheckUp."))
+        }
+
+        const updatedMaterial = payload as SubjectDayMaterial
+        setMaterials((previousMaterials) =>
+          sortSubjectDayMaterials(
+            previousMaterials.map((material) => (material.id === updatedMaterial.id ? updatedMaterial : material))
+          )
+        )
+
+        if (!checked && isCurrentContinueMaterial) {
+          setContinuePayload((previous) => (previous ? { ...previous, material: updatedMaterial } : previous))
+        }
+      } catch (error) {
+        console.error("Failed to update practice material checkup:", error)
+        if (isCurrentContinueMaterial) {
+          setContinuePayload(previousPayload)
+        }
+        setMaterials((previousMaterials) =>
+          sortSubjectDayMaterials(
+            previousMaterials.map((material) =>
+              material.id === optimisticMaterial.id ? materialToUpdate : material
+            )
+          )
+        )
+        setContinueError(error instanceof Error ? error.message : "No se pudo actualizar el CheckUp.")
+      }
+    }, 3000)
+
+    pendingMaterialCheckupTimersRef.current.set(materialToUpdate.id, timerId)
+  }
+
   const togglePlayback = async (entryId: number) => {
     try {
       if (expandedAudioEntryId === entryId) {
@@ -1229,6 +1557,7 @@ export function SubjectWheel() {
 
   // Practice modal functions
   const openPracticeModal = () => {
+    setPracticeLaunchView("menu")
     setPracticeSubjectIndex(null)
     setPracticeSubjectId("")
     setPracticeWeekNumber(String(getCurrentWeekNumber()))
@@ -1240,6 +1569,19 @@ export function SubjectWheel() {
     setIsPracticeFinished(false)
     setIsAnswerRevealed(false)
     setIsPracticeOpen(true)
+  }
+
+  const openExercisesPracticeSubject = async (subjectId: string) => {
+    await flushPendingFeaturedUpdate()
+    const subject = getSubjectById(subjectId)
+    if (!subject) return
+
+    setIsPracticeOpen(false)
+    setCurrentSubject(subject)
+    setCurrentDateKey(todayKey)
+    resetSubjectUiState()
+    setPracticeSectionView("exercises")
+    setIsDialogOpen(true)
   }
 
   const openReviewModal = () => {
@@ -1434,6 +1776,41 @@ export function SubjectWheel() {
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
+  const practiceTodaySubjects = useMemo(() => getScheduledSubjectsForDate(new Date()), [])
+  const theoryMaterials = useMemo(
+    () =>
+      sortSubjectDayMaterials(
+        [...materials, ...pendingMaterials].filter((material) => material.material_type === "theory")
+      ),
+    [materials, pendingMaterials]
+  )
+  const practiceMaterials = useMemo(
+    () =>
+      sortSubjectDayMaterials(
+        [...materials, ...pendingMaterials].filter((material) => material.material_type === "practice")
+      ),
+    [materials, pendingMaterials]
+  )
+  const currentContinueMaterial = continuePayload?.material ?? null
+  const continueMaterialEntries = useMemo(
+    () =>
+      currentContinueMaterial
+        ? entries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
+        : [],
+    [currentContinueMaterial, entries]
+  )
+  const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
+    if (!currentSubject) return null
+
+    return {
+      material: getNextUncheckedPracticeMaterial(materials, {
+        subjectId: currentSubject.id,
+        sessionDate: currentDateKey,
+        weekNumber: selectedWeekNumber,
+      }),
+      previousFeaturedEntry: continuePayload?.previousFeaturedEntry ?? null,
+    }
+  }, [continuePayload?.previousFeaturedEntry, currentDateKey, currentSubject, materials, selectedWeekNumber])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -1690,10 +2067,23 @@ export function SubjectWheel() {
       </footer>
 
       <Dialog open={isMobileShortcutPickerOpen} onOpenChange={setIsMobileShortcutPickerOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Elegir materia</DialogTitle>
-            <DialogDescription>Selecciona una de las 6 materias para abrir el modal del celular.</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Elegir materia</DialogTitle>
+                <DialogDescription>Selecciona una de las 6 materias para abrir el modal del celular.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -1904,68 +2294,220 @@ export function SubjectWheel() {
                 <div className="min-w-0 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
-                      Semana {selectedWeekNumber} - {getSubjectDisplayName(currentSubject)} - {getWeekdayLabel(currentDateKey)}
+                      {practiceSectionView === "exercises"
+                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
+                        : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
                     </DialogTitle>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void copyEntriesForDay()}
-                      disabled={entries.length === 0 || isCopyingEntries}
-                      className="h-9 border-black px-3 text-black"
-                    >
-                      {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                      Copiar
-                    </Button>
+                    {practiceSectionView === "theory" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void copyEntriesForDay()}
+                        disabled={entries.length === 0 || isCopyingEntries}
+                        className="h-9 border-black px-3 text-black"
+                      >
+                        {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                        Copiar
+                      </Button>
+                    ) : null}
                   </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
-                    Dudas
+                    {practiceSectionView === "exercises" ? "Teoria y practica por archivo" : "Flujo anterior de dudas"}
                   </DialogDescription>
                 </div>
 
-                <Button
-                  type="button"
-                  onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
-                  className="h-10 rounded-2xl border-2 border-black bg-white px-4 text-sm text-black hover:bg-slate-100 sm:h-11 sm:px-6"
-                >
-                  Terminar
-                </Button>
+                <div className="flex items-start gap-3">
+                  {practiceSectionView === "theory" ? (
+                    <Button
+                      type="button"
+                      onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
+                      className="h-10 rounded-2xl border-2 border-black bg-white px-4 text-sm text-black hover:bg-slate-100 sm:h-11 sm:px-6"
+                    >
+                      Terminar
+                    </Button>
+                  ) : null}
+                  <DialogClose asChild>
+                    <button
+                      type="button"
+                      className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black bg-white text-black transition-colors hover:bg-black hover:text-white"
+                      aria-label="Cerrar modal"
+                    >
+                      <X className="h-7 w-7" />
+                    </button>
+                  </DialogClose>
+                </div>
               </div>
 
-              <div className="flex items-center justify-between gap-3 md:justify-start md:gap-4">
-                <div className="flex items-center gap-2 md:hidden">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => void moveDay(-1)}
-                    disabled={currentDayIndex <= 0}
-                    className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => void moveDay(1)}
-                    disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
-                    className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+              {practiceSectionView === "theory" ? (
+                <div className="flex items-center justify-between gap-3 md:justify-start md:gap-4">
+                  <div className="flex items-center gap-2 md:hidden">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => void moveDay(-1)}
+                      disabled={currentDayIndex <= 0}
+                      className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => void moveDay(1)}
+                      disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
+                      className="h-10 w-10 rounded-full border border-black bg-white text-black disabled:opacity-30"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
                 </div>
-                <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
-              </div>
+              ) : null}
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
+              <input
+                ref={theoryFileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={(event) => void handleMaterialUpload("theory", event.target.files?.[0] ?? null)}
+              />
+              <input
+                ref={practiceFileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={(event) => void handleMaterialUpload("practice", event.target.files?.[0] ?? null)}
+              />
+
               {entriesError ? (
                 <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
               ) : null}
 
-              {isEntriesLoading ? (
+              {practiceSectionView === "theory" ? (
+                <div className="mb-2" />
+              ) : (
+                <div className="mb-6 space-y-4">
+                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Teoria</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => theoryFileInputRef.current?.click()}
+                        disabled={isUploadingMaterialType !== null}
+                        className="border-black text-black"
+                      >
+                        {isUploadingMaterialType === "theory" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {theoryMaterials.length > 0 ? (
+                        theoryMaterials.map((material) => (
+                          "is_pending_upload" in material ? (
+                            <div
+                              key={material.id}
+                              className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500"
+                            >
+                              <span className="truncate">{material.file_name}</span>
+                              <span className="inline-flex items-center gap-2 text-xs">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                Subiendo...
+                              </span>
+                            </div>
+                          ) : (
+                            <a
+                              key={material.id}
+                              href={material.drive_web_view_link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50"
+                            >
+                              <span className="truncate">{material.file_name}</span>
+                            </a>
+                          )
+                        ))
+                      ) : null}
+                    </div>
+                  </section>
+
+                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Practica</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => practiceFileInputRef.current?.click()}
+                          disabled={isUploadingMaterialType !== null}
+                          className="border-black text-black"
+                        >
+                          {isUploadingMaterialType === "practice" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={() => void openContinueModal()}
+                          className="border-black bg-black text-white"
+                        >
+                          Continuar
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {practiceMaterials.length > 0 ? (
+                        practiceMaterials.map((material) => (
+                          <div key={material.id} className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
+                            {"is_pending_upload" in material ? (
+                              <>
+                                <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-slate-500">
+                                  <Checkbox checked={false} disabled />
+                                  {material.file_name}
+                                </span>
+                                <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  Subiendo...
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <Checkbox
+                                  checked={material.is_checkup_done}
+                                  onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
+                                />
+                                <a
+                                  href={material.drive_web_view_link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="min-w-0 flex-1 truncate text-sm text-slate-800 hover:underline"
+                                >
+                                  {material.file_name}
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                          Todavia no hay PDFs de practica para este dia.
+                        </p>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {isEntriesLoading || isMaterialsLoading ? (
                 <div className="flex min-h-56 items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
                 </div>
-              ) : entries.length > 0 ? (
+              ) : practiceSectionView === "theory" && entries.length > 0 ? (
                 <div className="space-y-3 pb-24 sm:space-y-4 sm:pb-28">
                   {entries.map((entry) => {
                     const isRevealed = revealedAnswers[entry.id]
@@ -2085,8 +2627,10 @@ export function SubjectWheel() {
                     )
                   })}
                 </div>
+              ) : practiceSectionView === "theory" ? (
+                <div className="pb-24 text-sm text-slate-700 sm:pb-28"></div>
               ) : (
-                <div className="pb-24 text-sm text-slate-700 sm:pb-28">Todavia no hay dudas cargadas para este dia.</div>
+                <div className="pb-24 sm:pb-28"></div>
               )}
 
               {recordingError ? (
@@ -2101,6 +2645,7 @@ export function SubjectWheel() {
               <button
                 type="button"
                 onClick={() => {
+                  if (practiceSectionView !== "theory") return
                   if (!currentSubject) return
 
                   const target: AudioUploadTarget = {
@@ -2116,8 +2661,9 @@ export function SubjectWheel() {
                 }}
                 className={`absolute bottom-4 right-2 flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:right-4 sm:h-20 sm:w-20 ${
                   isRecording ? "bg-red-500 text-white" : "bg-white text-black"
-                }`}
+                } ${practiceSectionView !== "theory" ? "pointer-events-none opacity-0" : ""}`}
                 aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
+                disabled={practiceSectionView !== "theory"}
               >
                 {isRecording ? <Square className="h-8 w-8 sm:h-10 sm:w-10" /> : <Mic className="h-8 w-8 sm:h-10 sm:w-10" />}
               </button>
@@ -2126,11 +2672,249 @@ export function SubjectWheel() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={isContinueOpen} onOpenChange={setIsContinueOpen}>
+        <DialogContent
+          showCloseButton={false}
+          className="!top-0 !left-0 !h-screen !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-y-auto rounded-none border-0 p-0 shadow-none sm:!max-w-none"
+        >
+          <div className="relative min-h-full bg-white px-5 py-5 sm:px-8 sm:py-6">
+            <DialogHeader className="mb-6 border-b border-black pb-4">
+              <div className="flex items-start justify-between gap-4">
+                <DialogTitle className="text-left text-[2rem] font-normal leading-none text-black sm:text-[2.5rem]">
+                  Continuar
+                </DialogTitle>
+                <DialogClose asChild>
+                  <button
+                    type="button"
+                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                    aria-label="Cerrar modal"
+                  >
+                    <X className="h-7 w-7" />
+                  </button>
+                </DialogClose>
+              </div>
+            </DialogHeader>
+
+            {continueError ? (
+              <div className="mb-4 border border-red-300 bg-red-50 px-4 py-3 text-base text-red-700">{continueError}</div>
+            ) : null}
+
+            {isContinueLoading ? (
+              <div className="flex min-h-40 items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+              </div>
+            ) : (
+              <div className="space-y-8 pb-24">
+                <section className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    {continuePayload?.previousFeaturedEntry ? (
+                      <audio
+                        controls
+                        preload="none"
+                        src={`/api/subject-day-entries/${continuePayload.previousFeaturedEntry.id}/audio`}
+                        className="h-12 w-full flex-1"
+                      />
+                    ) : (
+                      <div className="flex h-12 w-full items-center border border-dashed border-slate-300 px-4 text-base text-slate-400">
+                        Sin audio previo
+                      </div>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-12 border-black px-5 text-base text-black"
+                      onClick={() => {
+                        if (!currentSubject) return
+
+                        const target: AudioUploadTarget = {
+                          source: "continue-context",
+                          subjectId: currentSubject.id,
+                          subjectName: getSubjectDisplayName(currentSubject),
+                          sessionDate: currentDateKey,
+                          weekNumber: selectedWeekNumber,
+                          weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                        }
+
+                        void (isRecording ? stopRecording() : startRecording(target))
+                      }}
+                    >
+                      {isRecording && recordingTarget?.source === "continue-context" ? (
+                        <Square className="h-5 w-5" />
+                      ) : (
+                        <RotateCcw className="h-5 w-5" />
+                      )}
+                      reset
+                    </Button>
+                  </div>
+                </section>
+
+                <section className="space-y-5">
+                  <div className="space-y-3">
+                    <p className="text-lg text-black">Archivo actual</p>
+                    {currentContinueMaterial ? (
+                      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-300 px-4 py-3 text-lg text-black">
+                        <Checkbox
+                          checked={currentContinueMaterial.is_checkup_done}
+                          onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
+                        />
+                        <a
+                          href={currentContinueMaterial.drive_web_view_link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium underline-offset-2 hover:underline"
+                        >
+                          {currentContinueMaterial.file_name}
+                        </a>
+                      </div>
+                    ) : (
+                      <p className="text-base text-slate-500">No hay archivos de practica pendientes.</p>
+                    )}
+                  </div>
+
+                  {continueMaterialEntries.length > 0 ? (
+                    <div className="space-y-5">
+                      {continueMaterialEntries.map((entry) => {
+                        const isExpandedAudio = expandedAudioEntryId === entry.id
+                        const audioSrc = audioSourceUrls[entry.id]
+                        const isEditingTitle = editingTitleId === entry.id
+                        const isRevealed = revealedAnswers[entry.id]
+
+                        return (
+                          <article key={entry.id} className="space-y-3 border-t border-slate-200 pt-5">
+                            {isEditingTitle ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Input
+                                  value={titleDrafts[entry.id] ?? ""}
+                                  onChange={(event) =>
+                                    setTitleDrafts((previous) => ({
+                                      ...previous,
+                                      [entry.id]: event.target.value,
+                                    }))
+                                  }
+                                  className="h-10 max-w-sm text-base"
+                                />
+                                <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
+                                  {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2 text-black">
+                                <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
+                                <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            )}
+
+                            <p className="text-base leading-7 text-slate-800">{entry.transcript_text}</p>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!entry.answer_text) {
+                                  startAnswerEdit(entry)
+                                  return
+                                }
+                                setRevealedAnswers((previous) => ({
+                                  ...previous,
+                                  [entry.id]: !previous[entry.id],
+                                }))
+                              }}
+                              className="block w-full rounded-lg border border-slate-300 px-4 py-3 text-left text-base text-slate-700"
+                            >
+                              {entry.answer_text
+                                ? isRevealed
+                                  ? entry.answer_text
+                                  : "Click para revelar la respuesta"
+                                : "Escribir respuesta"}
+                            </button>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-black px-4 text-base text-black">
+                                Responder
+                              </Button>
+                              <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
+                                {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                audio
+                              </Button>
+                            </div>
+
+                            {isExpandedAudio && audioSrc ? (
+                              <audio
+                                ref={(element) => {
+                                  audioElementRefs.current[entry.id] = element
+                                }}
+                                controls
+                                src={audioSrc}
+                                preload="metadata"
+                                className="h-12 w-full"
+                              />
+                            ) : null}
+                          </article>
+                        )
+                      })}
+                    </div>
+                  ) : currentContinueMaterial ? (
+                    <p className="text-base text-slate-500">Sin audios.</p>
+                  ) : null}
+                </section>
+              </div>
+            )}
+
+            <div className="pointer-events-none absolute bottom-4 right-4">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!currentSubject || !currentContinueMaterial) return
+
+                  const target: AudioUploadTarget = {
+                    source: "continue-practice",
+                    subjectId: currentSubject.id,
+                    subjectName: getSubjectDisplayName(currentSubject),
+                    sessionDate: currentDateKey,
+                    weekNumber: selectedWeekNumber,
+                    weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                    materialId: currentContinueMaterial.id,
+                  }
+
+                  void (isRecording ? stopRecording() : startRecording(target))
+                }}
+                className="pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
+                aria-label={isRecording && recordingTarget?.source === "continue-practice" ? "Detener grabacion" : "Grabar audio"}
+                disabled={!currentContinueMaterial}
+              >
+                {isRecording && recordingTarget?.source === "continue-practice" ? (
+                  <Square className="h-8 w-8" />
+                ) : (
+                  <Mic className="h-8 w-8" />
+                )}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(editingEntry)} onOpenChange={(open) => (!open ? setEditingAnswerId(null) : undefined)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent showCloseButton={false} className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Responder</DialogTitle>
-            <DialogDescription>Escribe la respuesta para esta duda. Luego quedara oculta hasta hacer click.</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Responder</DialogTitle>
+                <DialogDescription>Escribe la respuesta para esta duda. Luego quedara oculta hasta hacer click.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           {editingEntry ? (
@@ -2179,10 +2963,23 @@ export function SubjectWheel() {
       </Dialog>
 
       <Dialog open={isReviewDialogOpen} onOpenChange={(open) => (!open ? cancelReview() : undefined)}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent showCloseButton={false} className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Revisar audio</DialogTitle>
-            <DialogDescription>Escuchalo antes de confirmar. Solo al confirmar se crea la transcripcion.</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Revisar audio</DialogTitle>
+                <DialogDescription>Escuchalo antes de confirmar. Solo al confirmar se crea la transcripcion.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           {reviewAudio ? (
@@ -2207,10 +3004,23 @@ export function SubjectWheel() {
       </Dialog>
 
       <Dialog open={isLinkDialogOpen} onOpenChange={setIsLinkDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Agregar link</DialogTitle>
-            <DialogDescription>Este link queda guardado en la duda seleccionada.</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Agregar link</DialogTitle>
+                <DialogDescription>Este link queda guardado en la duda seleccionada.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -2246,10 +3056,26 @@ export function SubjectWheel() {
       </Dialog>
 
       <Dialog open={isReviewOpen} onOpenChange={setIsReviewOpen}>
-        <DialogContent className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
+        <DialogContent
+          showCloseButton={false}
+          className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
+        >
           <DialogHeader className="border-b border-slate-200 bg-white px-6 py-5 sm:px-8">
-            <DialogTitle>Repaso</DialogTitle>
-            <DialogDescription>Selecciona una materia y entra directo a los dias con audio destacado.</DialogDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Repaso</DialogTitle>
+                <DialogDescription>Selecciona una materia y entra directo a los dias con audio destacado.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
@@ -2343,17 +3169,50 @@ export function SubjectWheel() {
 
       {/* Practice Modal */}
       <Dialog open={isPracticeOpen} onOpenChange={setIsPracticeOpen}>
-        <DialogContent className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
+        <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
           <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-6 py-5 sm:px-8">
-            <DialogTitle className="flex items-center gap-2">
-              <GraduationCap className="h-5 w-5 text-slate-600" />
-              Practicar
-            </DialogTitle>
+            <div className="flex items-start justify-between gap-4">
+              <DialogTitle className="flex items-center gap-2">
+                <GraduationCap className="h-5 w-5 text-slate-600" />
+                Practicar
+              </DialogTitle>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+            {practiceLaunchView === "menu" && (
+              <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
+                <div className="grid w-full gap-6 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setPracticeLaunchView("theory")}
+                    className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-2xl font-semibold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
+                  >
+                    Teoria
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPracticeLaunchView("exercises")}
+                    className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-2xl font-semibold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
+                  >
+                    Ejercitacion
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Subject selection */}
-            {practiceSubjectIndex === null && (
+            {practiceLaunchView === "theory" && practiceSubjectIndex === null && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
                 <div className="space-y-2">
                   <p className="text-sm font-medium uppercase tracking-[0.24em] text-slate-400">Modo practica</p>
@@ -2468,26 +3327,58 @@ export function SubjectWheel() {
                   </div>
                 </div>
                 <div className="flex justify-end">
-                  <Button
-                    onClick={() => practiceSubjectId && practiceWeekNumber && void loadPracticeEntries(practiceSubjectId, practiceWeekNumber, practiceFilters)}
-                    disabled={!practiceSubjectId || !practiceWeekNumber}
-                    className="h-12 px-6"
-                  >
-                    Cargar dudas
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setPracticeLaunchView("menu")} className="h-12 px-6">
+                      Volver
+                    </Button>
+                    <Button
+                      onClick={() => practiceSubjectId && practiceWeekNumber && void loadPracticeEntries(practiceSubjectId, practiceWeekNumber, practiceFilters)}
+                      disabled={!practiceSubjectId || !practiceWeekNumber}
+                      className="h-12 px-6"
+                    >
+                      Cargar dudas
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {practiceLaunchView === "exercises" && (
+              <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
+                <div className="space-y-2">
+                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Materias de hoy</h2>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {practiceTodaySubjects.map((subject) => (
+                    <button
+                      key={subject.id}
+                      type="button"
+                      onClick={() => void openExercisesPracticeSubject(subject.id)}
+                      className="rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
+                    >
+                      <p className="text-lg font-semibold text-slate-800">{subject.name.replace("\n", " ")}</p>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => setPracticeLaunchView("menu")} className="h-12 px-6">
+                    Volver
                   </Button>
                 </div>
               </div>
             )}
 
             {/* Loading state */}
-            {practiceSubjectIndex !== null && isLoadingPractice && (
+            {practiceLaunchView === "theory" && practiceSubjectIndex !== null && isLoadingPractice && (
               <div className="flex h-full items-center justify-center py-10">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
               </div>
             )}
 
             {/* No questions */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length === 0 && (
+            {practiceLaunchView === "theory" && practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length === 0 && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
                 <div className="w-full rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
                   <p className="mb-4 text-sm text-slate-500 sm:text-base">
@@ -2509,7 +3400,7 @@ export function SubjectWheel() {
             )}
 
             {/* Flashcard view */}
-            {practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length > 0 && (
+            {practiceLaunchView === "theory" && practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length > 0 && (
               <div className="mx-auto flex h-full w-full max-w-6xl flex-col">
                 {!isPracticeFinished && currentPracticeIndex < practiceVisibleEntries.length ? (
                   <div className="flex flex-1 flex-col gap-5">
