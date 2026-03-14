@@ -998,6 +998,18 @@ export function SubjectWheel() {
     setCurrentDateKey(formatDateKey(weekDates[nextIndex]))
   }
 
+  const moveWeek = async (direction: -1 | 1) => {
+    await flushPendingFeaturedUpdate()
+    const nextDate = parseDateKey(currentDateKey)
+    nextDate.setDate(nextDate.getDate() + direction * 7)
+
+    const nextWeekNumber = getWeekNumberForDate(nextDate)
+    const latestWeekNumber = getCurrentWeekNumber()
+    if (nextWeekNumber < 0 || nextWeekNumber > latestWeekNumber) return
+
+    setCurrentDateKey(formatDateKey(nextDate))
+  }
+
   const startRecording = async (target: AudioUploadTarget) => {
     setRecordingError("")
     cancelReview()
@@ -1777,6 +1789,7 @@ export function SubjectWheel() {
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
   const practiceTodaySubjects = useMemo(() => getScheduledSubjectsForDate(new Date()), [])
+  const latestWeekNumber = useMemo(() => getCurrentWeekNumber(), [])
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
@@ -2273,8 +2286,8 @@ export function SubjectWheel() {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void moveDay(-1)}
-              disabled={currentDayIndex <= 0}
+              onClick={() => void (practiceSectionView === "exercises" ? moveWeek(-1) : moveDay(-1))}
+              disabled={practiceSectionView === "exercises" ? selectedWeekNumber <= 0 : currentDayIndex <= 0}
               className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -2282,8 +2295,12 @@ export function SubjectWheel() {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void moveDay(1)}
-              disabled={currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex}
+              onClick={() => void (practiceSectionView === "exercises" ? moveWeek(1) : moveDay(1))}
+              disabled={
+                practiceSectionView === "exercises"
+                  ? selectedWeekNumber >= latestWeekNumber
+                  : currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex
+              }
               className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronRight className="h-5 w-5" />
