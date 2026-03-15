@@ -1,6 +1,5 @@
 "use client"
 
-import dynamic from "next/dynamic"
 import { useEffect, useState } from "react"
 
 import { PracticeViewerClient } from "./practice-viewer-client"
@@ -26,20 +25,6 @@ type DraftViewerContext = {
 
 const MOBILE_MEDIA_QUERY = "(max-width: 767px)"
 
-const MobilePracticeViewer = dynamic(
-  () => import("./mobile-practice-viewer").then((module) => module.MobilePracticeViewer),
-  {
-    ssr: false,
-    loading: () => (
-      <main className="flex min-h-screen items-center justify-center bg-neutral-100 px-6 text-neutral-900">
-        <div className="w-full max-w-sm rounded-3xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
-          <p className="text-sm text-neutral-600">Preparando visor...</p>
-        </div>
-      </main>
-    ),
-  }
-)
-
 export function PracticeViewerShell({
   material,
   draftContext,
@@ -61,6 +46,12 @@ export function PracticeViewerShell({
     return () => mediaQuery.removeEventListener("change", sync)
   }, [material])
 
+  useEffect(() => {
+    if (!material || !isMobile) return
+
+    window.location.replace(`/api/subject-day-materials/${material.id}/file`)
+  }, [isMobile, material])
+
   if (material && isMobile === null) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-neutral-100 px-6 text-neutral-900">
@@ -73,14 +64,18 @@ export function PracticeViewerShell({
 
   if (material && isMobile) {
     return (
-      <MobilePracticeViewer
-        material={{
-          id: material.id,
-          fileName: material.fileName,
-          sessionDate: material.sessionDate,
-          subjectName: material.subjectName,
-        }}
-      />
+      <main className="flex min-h-screen items-center justify-center bg-neutral-100 px-6 text-neutral-900">
+        <div className="w-full max-w-sm rounded-3xl border border-neutral-200 bg-white p-6 text-center shadow-sm">
+          <p className="text-sm font-medium text-neutral-800">Abriendo PDF...</p>
+          <p className="mt-2 text-xs text-neutral-500">Se usa el visor nativo del navegador para una experiencia mejor en celular.</p>
+          <a
+            href={`/api/subject-day-materials/${material.id}/file`}
+            className="mt-4 inline-flex text-sm text-sky-700 underline underline-offset-4"
+          >
+            Abrir manualmente
+          </a>
+        </div>
+      </main>
     )
   }
 

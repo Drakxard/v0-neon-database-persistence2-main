@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
-import { preloadPracticePdf } from "@/app/practice/viewer/pdf-memory-cache"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 interface Subject {
   id: string
@@ -111,6 +111,10 @@ function buildPracticeMaterialViewerHref(materialId: number) {
   })
 
   return `/practice/viewer?${searchParams.toString()}`
+}
+
+function buildPracticeMaterialFileHref(materialId: number) {
+  return `/api/subject-day-materials/${materialId}/file`
 }
 
 interface ReviewAudio {
@@ -384,6 +388,7 @@ function getNextUncheckedPracticeMaterial(
 
 export function SubjectWheel() {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(parseDateKey(getTodayDateString())))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
@@ -440,11 +445,11 @@ export function SubjectWheel() {
   const [continueError, setContinueError] = useState("")
   const prefetchPracticeViewer = useCallback(
     (material: SubjectDayMaterial) => {
+      if (isMobile) return
       const href = buildPracticeMaterialViewerHref(material.id)
       router.prefetch(href)
-      void preloadPracticePdf(material.id, material.file_name).catch(() => {})
     },
-    [router]
+    [isMobile, router]
   )
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -2784,7 +2789,7 @@ export function SubjectWheel() {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                 <a
-                                  href={buildPracticeMaterialViewerHref(material.id)}
+                                  href={isMobile ? buildPracticeMaterialFileHref(material.id) : buildPracticeMaterialViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
                                   onPointerDown={() => prefetchPracticeViewer(material)}
                                   onTouchStart={() => prefetchPracticeViewer(material)}
@@ -3196,7 +3201,11 @@ export function SubjectWheel() {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                         <a
-                          href={buildPracticeMaterialViewerHref(currentContinueMaterial.id)}
+                          href={
+                            isMobile
+                              ? buildPracticeMaterialFileHref(currentContinueMaterial.id)
+                              : buildPracticeMaterialViewerHref(currentContinueMaterial.id)
+                          }
                           className="font-medium underline-offset-2 hover:underline"
                           onPointerDown={() => prefetchPracticeViewer(currentContinueMaterial)}
                           onTouchStart={() => prefetchPracticeViewer(currentContinueMaterial)}

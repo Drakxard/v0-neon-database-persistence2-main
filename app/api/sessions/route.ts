@@ -44,7 +44,12 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const { date, activeSubjectIds, completedSubjects } = await request.json()
+    const rawBody = await request.text()
+    if (!rawBody.trim()) {
+      return Response.json({ error: 'Empty request body' }, { status: 400 })
+    }
+
+    const { date, activeSubjectIds, completedSubjects } = JSON.parse(rawBody)
 
     if (!date || !Array.isArray(activeSubjectIds)) {
       return Response.json({ error: 'Invalid request data' }, { status: 400 })
