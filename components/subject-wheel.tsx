@@ -1359,12 +1359,12 @@ export function SubjectWheel() {
     }
   }
 
-  const copyEntriesForDay = async () => {
-    if (entries.length === 0 || isCopyingEntries) return
+  const copyEntries = async (entriesToCopy: SubjectDayEntry[], onError?: (message: string) => void) => {
+    if (entriesToCopy.length === 0 || isCopyingEntries) return
 
     setIsCopyingEntries(true)
     try {
-      const payload = entries
+      const payload = entriesToCopy
         .map((entry) => {
           const title = getEntryDisplayTitle(entry)
           const transcript = entry.transcript_text?.trim() || ""
@@ -1375,10 +1375,23 @@ export function SubjectWheel() {
       await navigator.clipboard.writeText(payload)
     } catch (error) {
       console.error("Failed to copy entries:", error)
-      setEntriesError("No se pudieron copiar las dudas.")
+      if (onError) {
+        onError("No se pudieron copiar las dudas.")
+      } else {
+        setEntriesError("No se pudieron copiar las dudas.")
+      }
     } finally {
       window.setTimeout(() => setIsCopyingEntries(false), 600)
     }
+  }
+
+  const copyEntriesForDay = async () => {
+    await copyEntries(entries)
+  }
+
+  const copyContinueEntries = async () => {
+    setContinueError("")
+    await copyEntries(continueMaterialEntries, setContinueError)
   }
 
   const toggleFeaturedEntry = (entry: SubjectDayEntry) => {
@@ -3191,7 +3204,19 @@ export function SubjectWheel() {
 
                 <section className="space-y-5">
                   <div className="space-y-3">
-                    <p className="text-lg text-black">Archivo actual</p>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-lg text-black">Archivo actual</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void copyContinueEntries()}
+                        disabled={continueMaterialEntries.length === 0 || isCopyingEntries}
+                        className="h-10 border-black px-3 text-black"
+                      >
+                        {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                        Copiar dudas
+                      </Button>
+                    </div>
                     {currentContinueMaterial ? (
                       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-300 px-4 py-3 text-lg text-black">
                         <Checkbox
