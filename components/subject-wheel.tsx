@@ -10,7 +10,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
-import { useIsMobile } from "@/hooks/use-mobile"
 
 interface Subject {
   id: string
@@ -113,8 +112,9 @@ function buildPracticeMaterialViewerHref(materialId: number) {
   return `/practice/viewer?${searchParams.toString()}`
 }
 
-function buildPracticeMaterialFileHref(materialId: number) {
-  return `/api/subject-day-materials/${materialId}/file`
+function buildPracticeDefaultViewerHref(materialId: number) {
+  const fileParam = encodeURIComponent(`/api/subject-day-materials/${materialId}/file`)
+  return `/pdfjs/web/viewer.html?file=${fileParam}#locale=es-AR`
 }
 
 interface ReviewAudio {
@@ -388,7 +388,6 @@ function getNextUncheckedPracticeMaterial(
 
 export function SubjectWheel() {
   const router = useRouter()
-  const isMobile = useIsMobile()
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(parseDateKey(getTodayDateString())))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
@@ -445,11 +444,10 @@ export function SubjectWheel() {
   const [continueError, setContinueError] = useState("")
   const prefetchPracticeViewer = useCallback(
     (material: SubjectDayMaterial) => {
-      if (isMobile) return
-      const href = buildPracticeMaterialViewerHref(material.id)
+      const href = buildPracticeDefaultViewerHref(material.id)
       router.prefetch(href)
     },
-    [isMobile, router]
+    [router]
   )
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -2694,10 +2692,10 @@ export function SubjectWheel() {
                           ) : (
                             <div key={material.id} className="relative flex items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
                               <a
-                                href={material.drive_web_view_link}
-                                target="_blank"
-                                rel="noreferrer"
+                                href={buildPracticeDefaultViewerHref(material.id)}
                                 className="min-w-0 flex-1 truncate pr-7"
+                                onPointerDown={() => prefetchPracticeViewer(material)}
+                                onTouchStart={() => prefetchPracticeViewer(material)}
                               >
                                 <span className="truncate">{material.file_name}</span>
                               </a>
@@ -2789,7 +2787,7 @@ export function SubjectWheel() {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                 <a
-                                  href={isMobile ? buildPracticeMaterialFileHref(material.id) : buildPracticeMaterialViewerHref(material.id)}
+                                  href={buildPracticeDefaultViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
                                   onPointerDown={() => prefetchPracticeViewer(material)}
                                   onTouchStart={() => prefetchPracticeViewer(material)}
@@ -3201,11 +3199,7 @@ export function SubjectWheel() {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                         <a
-                          href={
-                            isMobile
-                              ? buildPracticeMaterialFileHref(currentContinueMaterial.id)
-                              : buildPracticeMaterialViewerHref(currentContinueMaterial.id)
-                          }
+                          href={buildPracticeDefaultViewerHref(currentContinueMaterial.id)}
                           className="font-medium underline-offset-2 hover:underline"
                           onPointerDown={() => prefetchPracticeViewer(currentContinueMaterial)}
                           onTouchStart={() => prefetchPracticeViewer(currentContinueMaterial)}
