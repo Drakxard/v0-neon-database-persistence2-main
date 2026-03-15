@@ -72,6 +72,63 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
+async function readResponsePayload(response: Response) {
+  const contentType = response.headers.get("content-type") || ""
+
+  if (contentType.includes("application/json")) {
+    return response.json()
+  }
+
+  const text = await response.text()
+  if (!text) return null
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { error: text }
+  }
+}
+
+async function requireOkJson(response: Response, fallback: string) {
+  const payload = await readResponsePayload(response)
+  if (!response.ok) {
+    throw new Error(getErrorMessage(payload, fallback))
+  }
+  return payload
+}
+
+type DriveUploadSessionResponse = {
+  uploadUrl: string
+  method?: string
+  headers?: Record<string, string>
+  fileName: string
+}
+
+async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob) {
+  const response = await fetch(session.uploadUrl, {
+    method: session.method || "PUT",
+    headers: session.headers,
+    body: blob,
+  })
+
+  const payload = await readResponsePayload(response)
+  if (!response.ok) {
+    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo a Google Drive."))
+  }
+
+  const driveFileId =
+    payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : ""
+
+  if (!driveFileId) {
+    throw new Error("Google Drive no devolvio el identificador del archivo subido.")
+  }
+
+  return {
+    driveFileId,
+    payload,
+  }
+}
+
 function buildViewerSrc({
   material,
   draftContext,
@@ -301,26 +358,37 @@ export function PracticeViewerClient({
     setRecordingError("")
 
     try {
-      const formData = new FormData()
-      formData.append("subjectId", material.subjectId)
-      formData.append("subjectName", material.subjectName)
-      formData.append("sessionDate", material.sessionDate)
-      formData.append("weekNumber", String(material.weekNumber))
-      formData.append("weekdayIndex", String(material.weekdayIndex))
-      formData.append("materialId", String(material.id))
-      formData.append(
-        "audio",
-        new File([reviewAudio.blob], `${material.subjectId}-${material.sessionDate}.webm`, { type: reviewAudio.mimeType })
-      )
-
-      const entryResponse = await fetch("/api/subject-day-entries", {
+      const sessionResponse = await fetch("/api/subject-day-entries/upload-session", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: material.subjectId,
+          subjectName: material.subjectName,
+          sessionDate: material.sessionDate,
+          weekNumber: material.weekNumber,
+          materialId: material.id,
+          mimeType: reviewAudio.mimeType,
+        }),
       })
-      const entryPayload = await entryResponse.json()
-      if (!entryResponse.ok) {
-        throw new Error(getErrorMessage(entryPayload, "No se pudo confirmar el audio."))
-      }
+      const sessionPayload = (await requireOkJson(
+        sessionResponse,
+        "No se pudo preparar la subida del audio."
+      )) as DriveUploadSessionResponse
+
+      const { driveFileId } = await uploadBlobToDrive(sessionPayload, reviewAudio.blob)
+
+      const entryResponse = await fetch("/api/subject-day-entries/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: material.subjectId,
+          sessionDate: material.sessionDate,
+          weekNumber: material.weekNumber,
+          materialId: material.id,
+          driveFileId,
+        }),
+      })
+      const entryPayload = await requireOkJson(entryResponse, "No se pudo confirmar el audio.")
 
       const createdEntry = entryPayload as { id: number }
       const positionResponse = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, {
@@ -333,10 +401,7 @@ export function PracticeViewerClient({
           yp: pendingAnchor.yp,
         }),
       })
-      const positionPayload = await positionResponse.json()
-      if (!positionResponse.ok) {
-        throw new Error(getErrorMessage(positionPayload, "No se pudo guardar la posicion del audio."))
-      }
+      const positionPayload = await requireOkJson(positionResponse, "No se pudo guardar la posicion del audio.")
 
       const createdPosition = positionPayload as AudioPosition
       setPositions((previous) => {
@@ -367,22 +432,40 @@ export function PracticeViewerClient({
         const safeFileName = rawFileName.trim() || `fragmento-${activeContext.sessionDate}.pdf`
         const fileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
 
-        const formData = new FormData()
-        formData.append("subjectId", activeContext.subjectId)
-        formData.append("subjectName", activeContext.subjectName)
-        formData.append("sessionDate", activeContext.sessionDate)
-        formData.append("weekNumber", String(activeContext.weekNumber))
-        formData.append("materialType", "practice")
-        formData.append("file", new File([payload.blob], fileName, { type: "application/pdf" }))
-
-        const response = await fetch("/api/subject-day-materials", {
+        const sessionResponse = await fetch("/api/subject-day-materials/upload-session", {
           method: "POST",
-          body: formData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subjectId: activeContext.subjectId,
+            subjectName: activeContext.subjectName,
+            sessionDate: activeContext.sessionDate,
+            weekNumber: activeContext.weekNumber,
+            materialType: "practice",
+            mimeType: "application/pdf",
+            fileName,
+          }),
         })
-        const responsePayload = await response.json()
-        if (!response.ok) {
-          throw new Error(getErrorMessage(responsePayload, "No se pudo subir el PDF fragmentado."))
-        }
+        const sessionPayload = (await requireOkJson(
+          sessionResponse,
+          "No se pudo preparar la subida del PDF fragmentado."
+        )) as DriveUploadSessionResponse
+
+        const { driveFileId } = await uploadBlobToDrive(sessionPayload, payload.blob)
+
+        await requireOkJson(
+          await fetch("/api/subject-day-materials/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subjectId: activeContext.subjectId,
+              sessionDate: activeContext.sessionDate,
+              weekNumber: activeContext.weekNumber,
+              materialType: "practice",
+              driveFileId,
+            }),
+          }),
+          "No se pudo confirmar el PDF fragmentado."
+        )
 
         setUploadFeedback(`PDF creado: ${fileName}`)
         postToViewer({
@@ -483,7 +566,7 @@ export function PracticeViewerClient({
             const response = await fetch(`/api/subject-day-entries/${entryId}`, {
               method: "DELETE",
             })
-            const payload = await response.json().catch(() => ({}))
+            const payload = await readResponsePayload(response)
             if (!response.ok) {
               throw new Error(getErrorMessage(payload, "No se pudo borrar el audio."))
             }

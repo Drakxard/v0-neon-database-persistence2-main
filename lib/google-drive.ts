@@ -3,6 +3,8 @@ import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
 const DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink"
+const DRIVE_RESUMABLE_UPLOAD_URL =
+  "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink"
 const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
 function requireRootFolderName() {
@@ -114,6 +116,52 @@ export async function uploadFileToDrive(params: {
     name: string
     mimeType: string
     webViewLink: string
+  }
+}
+
+export async function createDriveResumableUploadSession(params: {
+  subjectName: string
+  weekNumber: number
+  weekdayIndex: number
+  fileName: string
+  mimeType: string
+}) {
+  const parentId = await ensureSubjectFolderPath(params.subjectName, params.weekNumber, params.weekdayIndex)
+  const response = await driveRequest(DRIVE_RESUMABLE_UPLOAD_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": params.mimeType,
+    },
+    body: JSON.stringify({
+      name: params.fileName,
+      mimeType: params.mimeType,
+      parents: [parentId],
+    }),
+  })
+
+  const uploadUrl = response.headers.get("location")
+  if (!uploadUrl) {
+    throw new Error("Google Drive did not return a resumable upload URL.")
+  }
+
+  return {
+    uploadUrl,
+    fileName: params.fileName,
+  }
+}
+
+export async function getDriveFileMetadata(fileId: string) {
+  const response = await driveRequest(
+    `${DRIVE_API_BASE}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,size`
+  )
+
+  return (await response.json()) as {
+    id: string
+    name: string
+    mimeType: string
+    webViewLink?: string
+    size?: string
   }
 }
 
