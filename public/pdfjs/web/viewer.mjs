@@ -11602,7 +11602,10 @@ class Autolinker {
       if (url.startsWith("www.") || url.startsWith("http://") || url.startsWith("https://")) {
         raw = url;
       } else if (emailDomain) {
-        const hostname = URL.parse(`http://${emailDomain}`)?.hostname;
+        let hostname = null;
+        try {
+          hostname = new URL(`http://${emailDomain}`).hostname;
+        } catch {}
         if (!hostname) {
           continue;
         }
@@ -18974,15 +18977,22 @@ initCom(PDFViewerApplication);
 PDFPrintServiceFactory.initGlobals(PDFViewerApplication);
 {
   const HOSTED_VIEWER_ORIGINS = new Set(["null", "http://mozilla.github.io", "https://mozilla.github.io"]);
+  const getUrlOrigin = (value, base = undefined) => {
+    try {
+      return new URL(value, base).origin;
+    } catch {
+      return null;
+    }
+  };
   var validateFileURL = function (file) {
     if (!file) {
       return;
     }
-    const viewerOrigin = URL.parse(window.location)?.origin || "null";
+    const viewerOrigin = getUrlOrigin(window.location.href) || "null";
     if (HOSTED_VIEWER_ORIGINS.has(viewerOrigin)) {
       return;
     }
-    const fileOrigin = URL.parse(file, window.location)?.origin;
+    const fileOrigin = getUrlOrigin(file, window.location.href);
     if (fileOrigin === viewerOrigin) {
       return;
     }
