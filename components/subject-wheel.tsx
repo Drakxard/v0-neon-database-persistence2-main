@@ -84,6 +84,10 @@ interface PendingSubjectDayMaterial extends SubjectDayMaterial {
   is_pending_upload: true
 }
 
+function buildPracticeViewerHref(materialId: number) {
+  return `/practice/viewer?materialId=${materialId}`
+}
+
 interface ReviewAudio {
   blob: Blob
   url: string
@@ -354,7 +358,7 @@ function getNextUncheckedPracticeMaterial(
 }
 
 export function SubjectWheel() {
-  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(new Date()))
+  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(parseDateKey(getTodayDateString())))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -391,6 +395,7 @@ export function SubjectWheel() {
   const [editingTitleId, setEditingTitleId] = useState<number | null>(null)
   const [titleDrafts, setTitleDrafts] = useState<Record<number, string>>({})
   const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
+  const [isDeletingEntryId, setIsDeletingEntryId] = useState<number | null>(null)
   const [isSavingAnswerId, setIsSavingAnswerId] = useState<number | null>(null)
   const [isSavingTitleId, setIsSavingTitleId] = useState<number | null>(null)
   const [expandedAudioEntryId, setExpandedAudioEntryId] = useState<number | null>(null)
@@ -399,6 +404,7 @@ export function SubjectWheel() {
   const [isCopyingEntries, setIsCopyingEntries] = useState(false)
   const [practiceSectionView, setPracticeSectionView] = useState<"theory" | "exercises">("theory")
   const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
+  const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
   const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
@@ -502,15 +508,7 @@ export function SubjectWheel() {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
 
-  // Load from database on mount
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setNow(new Date())
-    }, 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [])
-
+  // Load the persisted session for the currently selected date.
   useEffect(() => {
     return () => {
       pendingMaterialCheckupTimersRef.current.forEach((timerId) => {
@@ -538,28 +536,30 @@ export function SubjectWheel() {
 
   useEffect(() => {
     const loadFromDatabase = async () => {
+      readyToSync.current = false
+
       try {
-        const dateKey = getTodayDateString()
-        const today = new Date()
-        const response = await fetch(`/api/sessions?date=${dateKey}`)
+        const response = await fetch(`/api/sessions?date=${currentDateKey}`)
         if (!response.ok) throw new Error("Failed to fetch session")
         const session = await response.json()
 
         if (session && Array.isArray(session.active_subject_ids)) {
           const completedSubjectsData = session.completed_subjects || {}
           const completedIds = Object.keys(completedSubjectsData)
-          const normalized = normalizeSubjectsForDay(session.active_subject_ids, completedIds, today)
+          const normalized = normalizeSubjectsForDay(session.active_subject_ids, completedIds, selectedDate)
           setActiveSubjects(normalized.activeSubjects)
           setCompletedSubjects(normalized.completedSubjects)
         } else {
-          setActiveSubjects(getScheduledSubjectsForDate(today))
+          setActiveSubjects(getScheduledSubjectsForDate(selectedDate))
           setCompletedSubjects([])
         }
       } catch (error) {
         console.error("Failed to load from database:", error)
-        setActiveSubjects(getScheduledSubjectsForDate(new Date()))
+        setActiveSubjects(getScheduledSubjectsForDate(selectedDate))
         setCompletedSubjects([])
       } finally {
+        setHistory([])
+        setHistoryIndex(-1)
         setIsLoading(false)
         // Only allow syncing AFTER the loaded state has been applied
         setTimeout(() => {
@@ -569,6 +569,14 @@ export function SubjectWheel() {
     }
 
     loadFromDatabase()
+  }, [currentDateKey, selectedDate])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(new Date())
+    }, 1000)
+
+    return () => window.clearInterval(intervalId)
   }, [])
 
   useEffect(() => {
@@ -586,7 +594,6 @@ export function SubjectWheel() {
     const syncToDatabase = async () => {
       setSaveStatus("saving")
       try {
-        const date = getTodayDateString()
         const activeIds = subjectsToIds(activeSubjects)
         const completedObj = completedSubjects.reduce(
           (acc, subject) => {
@@ -600,7 +607,7 @@ export function SubjectWheel() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            date,
+            date: currentDateKey,
             activeSubjectIds: activeIds,
             completedSubjects: completedObj,
           }),
@@ -618,7 +625,7 @@ export function SubjectWheel() {
     }
 
     syncToDatabase()
-  }, [activeSubjects, completedSubjects])
+  }, [activeSubjects, completedSubjects, currentDateKey])
 
   // Load persisted AI prompt on mount
   useEffect(() => {
@@ -979,7 +986,6 @@ export function SubjectWheel() {
 
   const handleSubjectClick = (subject: Subject) => {
     setCurrentSubject(subject)
-    setCurrentDateKey(todayKey)
     resetSubjectUiState()
     setIsDialogOpen(true)
   }
@@ -1109,7 +1115,14 @@ export function SubjectWheel() {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.requestData?.()
+      } catch {}
       mediaRecorderRef.current.stop()
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop())
+      mediaStreamRef.current = null
     }
   }
 
@@ -1313,6 +1326,69 @@ export function SubjectWheel() {
       )
     )
     scheduleFeaturedSave()
+  }
+
+  const deleteEntry = async (entry: SubjectDayEntry) => {
+    if (isDeletingEntryId === entry.id) return
+
+    setIsDeletingEntryId(entry.id)
+    setEntriesError("")
+
+    try {
+      const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
+        method: "DELETE",
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo borrar la duda."))
+      }
+
+      setEntries((previousEntries) =>
+        sortSubjectDayEntries(previousEntries.filter((item) => item.id !== entry.id))
+      )
+      setPracticeEntries((previousEntries) => previousEntries.filter((item) => item.id !== entry.id))
+      setPracticeVisibleEntries((previousEntries) => previousEntries.filter((item) => item.id !== entry.id))
+
+      setRevealedAnswers((previous) => {
+        const next = { ...previous }
+        delete next[entry.id]
+        return next
+      })
+      setAnswerDrafts((previous) => {
+        const next = { ...previous }
+        delete next[entry.id]
+        return next
+      })
+      setQuestionDrafts((previous) => {
+        const next = { ...previous }
+        delete next[entry.id]
+        return next
+      })
+      setTitleDrafts((previous) => {
+        const next = { ...previous }
+        delete next[entry.id]
+        return next
+      })
+
+      if (editingAnswerId === entry.id) setEditingAnswerId(null)
+      if (editingTitleId === entry.id) setEditingTitleId(null)
+      if (expandedAudioEntryId === entry.id) {
+        audioElementRefs.current[entry.id]?.pause()
+        setExpandedAudioEntryId(null)
+      }
+
+      setContinuePayload((previous) =>
+        previous?.previousFeaturedEntry?.id === entry.id
+          ? { ...previous, previousFeaturedEntry: null }
+          : previous
+      )
+    } catch (error) {
+      console.error("Failed to delete entry:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo borrar la duda.")
+    } finally {
+      setIsDeletingEntryId(null)
+    }
   }
 
   const openLinkDialog = (entryId: number) => {
@@ -1548,6 +1624,61 @@ export function SubjectWheel() {
     }, 3000)
 
     pendingMaterialCheckupTimersRef.current.set(materialToUpdate.id, timerId)
+  }
+
+  const deleteMaterial = async (materialToDelete: SubjectDayMaterial) => {
+    if (isDeletingMaterialId === materialToDelete.id) return
+
+    const existingTimer = pendingMaterialCheckupTimersRef.current.get(materialToDelete.id)
+    if (existingTimer) {
+      window.clearTimeout(existingTimer)
+      pendingMaterialCheckupTimersRef.current.delete(materialToDelete.id)
+    }
+
+    setIsDeletingMaterialId(materialToDelete.id)
+    setEntriesError("")
+    setContinueError("")
+
+    try {
+      const response = await fetch(`/api/subject-day-materials/${materialToDelete.id}`, {
+        method: "DELETE",
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo borrar el archivo."))
+      }
+
+      setMaterials((previousMaterials) =>
+        sortSubjectDayMaterials(previousMaterials.filter((material) => material.id !== materialToDelete.id))
+      )
+      setPendingMaterials((previousMaterials) => previousMaterials.filter((material) => material.id !== materialToDelete.id))
+      setEntries((previousEntries) =>
+        sortSubjectDayEntries(previousEntries.filter((entry) => entry.subject_day_material_id !== materialToDelete.id))
+      )
+
+      if (currentContinueMaterial?.id === materialToDelete.id && currentSubject) {
+        const remainingMaterials = materials.filter((material) => material.id !== materialToDelete.id)
+        setContinuePayload((previous) =>
+          previous
+            ? {
+                ...previous,
+                material: getNextUncheckedPracticeMaterial(remainingMaterials, {
+                  subjectId: currentSubject.id,
+                  sessionDate: currentDateKey,
+                  weekNumber: selectedWeekNumber,
+                }),
+              }
+            : previous
+        )
+      }
+    } catch (error) {
+      console.error("Failed to delete material:", error)
+      const message = error instanceof Error ? error.message : "No se pudo borrar el archivo."
+      setEntriesError(message)
+      setContinueError(message)
+    } finally {
+      setIsDeletingMaterialId(null)
+    }
   }
 
   const togglePlayback = async (entryId: number) => {
@@ -1841,6 +1972,20 @@ export function SubjectWheel() {
     [materials, pendingMaterials]
   )
   const currentContinueMaterial = continuePayload?.material ?? null
+  const theoryDayEntries = useMemo(
+    () => entries.filter((entry) => entry.subject_day_material_id == null),
+    [entries]
+  )
+  const practiceEntriesByMaterialId = useMemo(() => {
+    return entries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
+      if (entry.subject_day_material_id == null) return accumulator
+      const materialId = entry.subject_day_material_id
+      const current = accumulator[materialId] ?? []
+      current.push(entry)
+      accumulator[materialId] = current
+      return accumulator
+    }, {})
+  }, [entries])
   const continueMaterialEntries = useMemo(
     () =>
       currentContinueMaterial
@@ -1875,8 +2020,7 @@ export function SubjectWheel() {
 
   const handleReset = async () => {
     try {
-      const date = getTodayDateString()
-      const scheduledSubjects = getScheduledSubjectsForDate(new Date())
+      const scheduledSubjects = getScheduledSubjectsForDate(selectedDate)
       const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
       
       // Reset local state
@@ -1890,7 +2034,7 @@ export function SubjectWheel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date,
+          date: currentDateKey,
           activeSubjectIds: scheduledSubjectIds,
           completedSubjects: {},
         }),
@@ -2472,15 +2616,27 @@ export function SubjectWheel() {
                               </span>
                             </div>
                           ) : (
-                            <a
-                              key={material.id}
-                              href={material.drive_web_view_link}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50"
-                            >
-                              <span className="truncate">{material.file_name}</span>
-                            </a>
+                            <div key={material.id} className="relative flex items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
+                              <a
+                                href={material.drive_web_view_link}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="min-w-0 flex-1 truncate pr-7"
+                              >
+                                <span className="truncate">{material.file_name}</span>
+                              </a>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => void deleteMaterial(material)}
+                                disabled={isDeletingMaterialId === material.id}
+                                className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                aria-label={`Borrar ${material.file_name}`}
+                              >
+                                {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                              </Button>
+                            </div>
                           )
                         ))
                       ) : null}
@@ -2534,13 +2690,24 @@ export function SubjectWheel() {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                 <a
-                                  href={material.drive_web_view_link}
+                                  href={buildPracticeViewerHref(material.id)}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="min-w-0 flex-1 truncate text-sm text-slate-800 hover:underline"
+                                  className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
                                 >
                                   {material.file_name}
                                 </a>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => void deleteMaterial(material)}
+                                  disabled={isDeletingMaterialId === material.id}
+                                  className="h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                  aria-label={`Borrar ${material.file_name}`}
+                                >
+                                  {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                                </Button>
                               </>
                             )}
                           </div>
@@ -2550,6 +2717,120 @@ export function SubjectWheel() {
                           Todavia no hay PDFs de practica para este dia.
                         </p>
                       )}
+                      {practiceMaterials.filter((material) => !("is_pending_upload" in material)).map((material) => {
+                        const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
+                        if (!materialEntries.length) return null
+
+                        return (
+                          <div key={`entries-${material.id}`} className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3">
+                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                              Audios en {material.file_name}
+                            </p>
+                            {materialEntries.map((entry) => {
+                              const isExpandedAudio = expandedAudioEntryId === entry.id
+                              const audioSrc = audioSourceUrls[entry.id]
+                              const isRevealed = revealedAnswers[entry.id]
+                              const isEditingTitle = editingTitleId === entry.id
+
+                              return (
+                                <article key={entry.id} className="relative rounded-lg border border-slate-200 bg-white px-3 py-3">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => void deleteEntry(entry)}
+                                    disabled={isDeletingEntryId === entry.id}
+                                    className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                    aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
+                                  >
+                                    {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                                  </Button>
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 space-y-1">
+                                      {isEditingTitle ? (
+                                        <div className="flex flex-wrap items-center gap-2 pr-8">
+                                          <Input
+                                            value={titleDrafts[entry.id] ?? ""}
+                                            onChange={(event) =>
+                                              setTitleDrafts((previous) => ({
+                                                ...previous,
+                                                [entry.id]: event.target.value,
+                                              }))
+                                            }
+                                            className="h-9 max-w-xs"
+                                          />
+                                          <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
+                                            {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                            Guardar
+                                          </Button>
+                                          <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
+                                            <X className="h-4 w-4" />
+                                            Cancelar
+                                          </Button>
+                                        </div>
+                                      ) : (
+                                        <div className="flex flex-wrap items-center gap-2 pr-8">
+                                          <p className="text-sm font-medium text-black">{getEntryDisplayTitle(entry)}</p>
+                                          <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
+                                            <Pencil className="h-4 w-4 text-slate-500" />
+                                          </Button>
+                                        </div>
+                                      )}
+                                      <p className="text-sm leading-6 text-slate-800">{entry.transcript_text}</p>
+                                    </div>
+                                    <Button
+                                      variant="outline"
+                                      onClick={() => void togglePlayback(entry.id)}
+                                      className="h-10 shrink-0 border-black px-3 text-black"
+                                    >
+                                      {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                      Audio
+                                    </Button>
+                                  </div>
+
+                                  <div className="mt-4 border-t border-slate-200 pt-3">
+                                    {entry.answer_text ? (
+                                      <div className="space-y-2.5">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setRevealedAnswers((previous) => ({
+                                              ...previous,
+                                              [entry.id]: !previous[entry.id],
+                                            }))
+                                          }
+                                          className="block w-full border border-slate-300 px-3 py-2 text-left text-sm text-slate-800"
+                                        >
+                                          {isRevealed ? entry.answer_text : "Click para revelar la respuesta"}
+                                        </button>
+                                        <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
+                                          Responder
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
+                                        Responder
+                                      </Button>
+                                    )}
+                                  </div>
+
+                                  {isExpandedAudio && audioSrc ? (
+                                    <audio
+                                      ref={(element) => {
+                                        audioElementRefs.current[entry.id] = element
+                                      }}
+                                      controls
+                                      src={audioSrc}
+                                      preload="metadata"
+                                      className="mt-3 h-12 w-full"
+                                    />
+                                  ) : null}
+                                </article>
+                              )
+                            })}
+                          </div>
+                        )
+                      })}
                     </div>
                   </section>
                 </div>
@@ -2559,16 +2840,27 @@ export function SubjectWheel() {
                 <div className="flex min-h-56 items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
                 </div>
-              ) : practiceSectionView === "theory" && entries.length > 0 ? (
+              ) : practiceSectionView === "theory" && theoryDayEntries.length > 0 ? (
                 <div className="space-y-3 pb-24 sm:space-y-4 sm:pb-28">
-                  {entries.map((entry) => {
+                  {theoryDayEntries.map((entry) => {
                     const isRevealed = revealedAnswers[entry.id]
                     const isExpandedAudio = expandedAudioEntryId === entry.id
                     const audioSrc = audioSourceUrls[entry.id]
                     const isEditingTitle = editingTitleId === entry.id
 
                     return (
-                      <article key={entry.id} className="border border-slate-300 px-3 py-3 sm:px-4">
+                      <article key={entry.id} className="relative border border-slate-300 px-3 py-3 sm:px-4">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void deleteEntry(entry)}
+                          disabled={isDeletingEntryId === entry.id}
+                          className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
+                        >
+                          {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                        </Button>
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1.5">
                             {isEditingTitle ? (
@@ -2593,17 +2885,17 @@ export function SubjectWheel() {
                                 </Button>
                               </div>
                             ) : (
-                              <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex flex-wrap items-center gap-2 pr-8">
                                 <Checkbox
                                   checked={entry.is_featured}
                                   onCheckedChange={() => void toggleFeaturedEntry(entry)}
                                   className="h-4 w-4"
                                 />
                                 <p className="text-xs font-medium text-black sm:text-sm">{getEntryDisplayTitle(entry)}</p>
-                                <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
-                                  <Pencil className="h-4 w-4 text-slate-500" />
-                                </Button>
-                              </div>
+                              <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
+                                <Pencil className="h-4 w-4 text-slate-500" />
+                              </Button>
+                            </div>
                             )}
                             <div className="flex flex-wrap items-center gap-2">
                               {entry.external_links.map((link) => (
@@ -2810,13 +3102,24 @@ export function SubjectWheel() {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                         <a
-                          href={currentContinueMaterial.drive_web_view_link}
+                          href={buildPracticeViewerHref(currentContinueMaterial.id)}
                           target="_blank"
                           rel="noreferrer"
                           className="font-medium underline-offset-2 hover:underline"
                         >
                           {currentContinueMaterial.file_name}
                         </a>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void deleteMaterial(currentContinueMaterial)}
+                          disabled={isDeletingMaterialId === currentContinueMaterial.id}
+                          className="ml-auto h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          aria-label={`Borrar ${currentContinueMaterial.file_name}`}
+                        >
+                          {isDeletingMaterialId === currentContinueMaterial.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                        </Button>
                       </div>
                     ) : (
                       <p className="text-base text-slate-500">No hay archivos de practica pendientes.</p>
@@ -2832,7 +3135,18 @@ export function SubjectWheel() {
                         const isRevealed = revealedAnswers[entry.id]
 
                         return (
-                          <article key={entry.id} className="space-y-3 border-t border-slate-200 pt-5">
+                          <article key={entry.id} className="relative space-y-3 border-t border-slate-200 pt-5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => void deleteEntry(entry)}
+                              disabled={isDeletingEntryId === entry.id}
+                              className="absolute right-0 top-4 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
+                            >
+                              {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                            </Button>
                             {isEditingTitle ? (
                               <div className="flex flex-wrap items-center gap-2">
                                 <Input
@@ -2853,7 +3167,7 @@ export function SubjectWheel() {
                                 </Button>
                               </div>
                             ) : (
-                              <div className="flex flex-wrap items-center gap-2 text-black">
+                              <div className="flex flex-wrap items-center gap-2 pr-8 text-black">
                                 <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
                                 <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
                                   <Pencil className="h-4 w-4" />

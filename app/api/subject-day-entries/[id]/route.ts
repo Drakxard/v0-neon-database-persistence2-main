@@ -168,3 +168,34 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return NextResponse.json({ error: "Failed to update entry" }, { status: 500 })
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params
+    const entryId = Number.parseInt(id, 10)
+    if (!Number.isInteger(entryId)) {
+      return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
+    }
+
+    const rows = await sql`
+      DELETE FROM subject_day_entries
+      WHERE id = ${entryId}
+      RETURNING id
+    ` as Array<{ id: number }>
+
+    if (!rows[0]) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+    }
+
+    return NextResponse.json({ success: true, id: rows[0].id })
+  } catch (error) {
+    console.error("DELETE /api/subject-day-entries/[id] error:", error)
+    if (isMissingSubjectDayEntriesTable(error)) {
+      return NextResponse.json(
+        { error: "Falta crear la tabla subject_day_entries. Ejecuta scripts/005-create-subject-day-entries.sql y scripts/006-add-subject-day-entry-metadata.sql en Neon." },
+        { status: 503 }
+      )
+    }
+    return NextResponse.json({ error: "Failed to delete entry" }, { status: 500 })
+  }
+}

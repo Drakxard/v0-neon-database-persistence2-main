@@ -85,3 +85,34 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     return NextResponse.json({ error: "Failed to update material" }, { status: 500 })
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params
+    const materialId = Number.parseInt(id, 10)
+    if (!Number.isInteger(materialId)) {
+      return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    const rows = await sql`
+      DELETE FROM subject_day_materials
+      WHERE id = ${materialId}
+      RETURNING id
+    ` as Array<{ id: number }>
+
+    if (!rows[0]) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 })
+    }
+
+    return NextResponse.json({ success: true, id: rows[0].id })
+  } catch (error) {
+    console.error("DELETE /api/subject-day-materials/[id] error:", error)
+    if (isMissingSubjectDayMaterialsTable(error)) {
+      return NextResponse.json(
+        { error: "Falta crear la tabla subject_day_materials. Ejecuta scripts/008-create-subject-day-materials.sql en Neon." },
+        { status: 503 }
+      )
+    }
+    return NextResponse.json({ error: "Failed to delete material" }, { status: 500 })
+  }
+}
