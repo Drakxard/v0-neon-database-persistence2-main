@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { neon } from "@neondatabase/serverless"
 
-import { PracticeViewerClient } from "./practice-viewer-client"
+import { PracticeViewerShell } from "./practice-viewer-shell"
 import { parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
@@ -98,7 +98,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       materialType,
     }
 
-    return <PracticeViewerClient draftContext={draftContext} />
+    return <PracticeViewerShell draftContext={draftContext} />
   }
 
   if (!Number.isInteger(materialId)) {
@@ -158,7 +158,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     }
 
     return (
-      <PracticeViewerClient
+      <PracticeViewerShell
         material={{
           id: material.id,
           subjectId: material.subject_id,

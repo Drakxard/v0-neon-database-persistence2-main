@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -9,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
+import { preloadPracticePdf } from "@/app/practice/viewer/pdf-memory-cache"
 
 interface Subject {
   id: string
@@ -98,6 +100,14 @@ function buildPracticeDraftViewerHref(params: {
     weekNumber: String(params.weekNumber),
     weekdayIndex: String(params.weekdayIndex),
     materialType: "practice",
+  })
+
+  return `/practice/viewer?${searchParams.toString()}`
+}
+
+function buildPracticeMaterialViewerHref(materialId: number) {
+  const searchParams = new URLSearchParams({
+    materialId: String(materialId),
   })
 
   return `/practice/viewer?${searchParams.toString()}`
@@ -373,6 +383,7 @@ function getNextUncheckedPracticeMaterial(
 }
 
 export function SubjectWheel() {
+  const router = useRouter()
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(parseDateKey(getTodayDateString())))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
@@ -427,6 +438,14 @@ export function SubjectWheel() {
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
+  const prefetchPracticeViewer = useCallback(
+    (material: SubjectDayMaterial) => {
+      const href = buildPracticeMaterialViewerHref(material.id)
+      router.prefetch(href)
+      void preloadPracticePdf(material.id, material.file_name).catch(() => {})
+    },
+    [router]
+  )
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
   const practiceFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -2765,10 +2784,10 @@ export function SubjectWheel() {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                 <a
-                                  href={material.drive_web_view_link}
-                                  target="_blank"
-                                  rel="noreferrer"
+                                  href={buildPracticeMaterialViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
+                                  onPointerDown={() => prefetchPracticeViewer(material)}
+                                  onTouchStart={() => prefetchPracticeViewer(material)}
                                 >
                                   {material.file_name}
                                 </a>
@@ -3177,10 +3196,10 @@ export function SubjectWheel() {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                         <a
-                          href={currentContinueMaterial.drive_web_view_link}
-                          target="_blank"
-                          rel="noreferrer"
+                          href={buildPracticeMaterialViewerHref(currentContinueMaterial.id)}
                           className="font-medium underline-offset-2 hover:underline"
+                          onPointerDown={() => prefetchPracticeViewer(currentContinueMaterial)}
+                          onTouchStart={() => prefetchPracticeViewer(currentContinueMaterial)}
                         >
                           {currentContinueMaterial.file_name}
                         </a>
@@ -3971,4 +3990,3 @@ export function SubjectWheel() {
     </div>
   )
 }
-
