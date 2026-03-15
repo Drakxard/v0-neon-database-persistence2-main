@@ -1035,6 +1035,22 @@
             : 'No se pudo borrar el audio.';
           showToast(message, 'error');
           loadAnchoredAudioPositionsFromApi();
+        } else if (e.data.type === 'practiceFragmentUploadState') {
+          if (e.data.status === 'uploading') {
+            showOverlay('Subiendo fragmento a Drive…');
+          } else if (e.data.status === 'success') {
+            hideOverlay();
+            clearInstantSelections();
+            deactivateFocusMode();
+            pdfModal.classList.add('hidden');
+            showToast(`PDF subido: ${e.data.fileName || 'fragmento.pdf'}`, 'success');
+          } else if (e.data.status === 'error') {
+            hideOverlay();
+            const message = typeof e.data.error === 'string' && e.data.error.trim()
+              ? e.data.error
+              : 'No se pudo subir el PDF fragmentado.';
+            showToast(message, 'error');
+          }
         }
       });
       try { window.parent.postMessage({ type: 'viewerReady' }, '*'); } catch {}
@@ -1199,12 +1215,15 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       let currentSessionDate = '';
       let currentWeekNumber = null;
       let currentWeekdayIndex = null;
+      let currentMaterialType = 'practice';
+      let isDraftUploadMode = initialParams.get('draftUpload') === '1';
       currentMaterialId = Number.parseInt(initialParams.get('materialId') || '', 10);
       currentSubjectId = initialParams.get('subjectId') || '';
       currentSubjectName = initialParams.get('subjectName') || '';
       currentSessionDate = initialParams.get('sessionDate') || '';
       currentWeekNumber = Number.parseInt(initialParams.get('weekNumber') || '', 10);
       currentWeekdayIndex = Number.parseInt(initialParams.get('weekdayIndex') || '', 10);
+      currentMaterialType = initialParams.get('materialType') || 'practice';
       let saveTimeout = null;
       let db = null;
 
@@ -1243,6 +1262,8 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       let pdfEntries = [];
       let currentPdfIndex = -1;
       let currentObjectUrl = null;
+      let currentPdfBytes = null;
+      let currentPdfLibDoc = null;
       let pendingAfterLoadGoTo = null; // 'first' | 'last' | null
 
       // Capturas (Teoría / Práctica)
@@ -1254,6 +1275,13 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       const pdfModal = document.getElementById('pdf-modal');
       const closePdfModalBtn = document.getElementById('close-pdf-modal');
       const pdfModalBody = document.getElementById('pdf-modal-body');
+      const uploadTextNode = document.querySelector('.upload-text');
+      const uploadSubtextNode = document.querySelector('.upload-subtext');
+
+      if (isDraftUploadMode) {
+        if (uploadTextNode) uploadTextNode.textContent = 'Agrega un PDF';
+        if (uploadSubtextNode) uploadSubtextNode.textContent = 'Carga un libro en RAM para seleccionar fragmentos y crear un PDF nuevo'
+      }
 
       const drawIndicator = document.createElement('div');
       drawIndicator.id = 'draw-indicator';
@@ -2392,7 +2420,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       // ========================================
       // CARGA DE PDF
       // ========================================
-      async function loadPdf(url, filename, uniqueKey = '') {
+      async function loadPdf(url, filename, uniqueKey = '', sourceBytes = null) {
         try {
           showOverlay('Cargando PDF…');
           clearContainer();
@@ -2406,6 +2434,8 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
           currentPdfName = filename;
           currentPdfKey = uniqueKey ? `${filename}-${uniqueKey}` : filename;
           currentPdfPath = uniqueKey ? String(uniqueKey) : '';
+          currentPdfBytes = sourceBytes instanceof ArrayBuffer ? sourceBytes.slice(0) : sourceBytes;
+          currentPdfLibDoc = currentPdfBytes ? await PDFLib.PDFDocument.load(currentPdfBytes) : null;
           drawMode = false;
           currentCanvas = null;
           updateDrawMode();
@@ -2445,6 +2475,8 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
           currentPdfName = null;
           currentPdfKey = null;
           currentPdfPath = '';
+          currentPdfBytes = null;
+          currentPdfLibDoc = null;
           hideOverlay();
         }
       }
@@ -2480,7 +2512,8 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
 
           const objectUrl = URL.createObjectURL(blob);
           currentObjectUrl = objectUrl;
-          await loadPdf(objectUrl, filename, uniqueKey);
+          const sourceBytes = await blob.arrayBuffer();
+          await loadPdf(objectUrl, filename, uniqueKey, sourceBytes);
         } catch (error) {
           console.error('Error descargando PDF remoto:', error);
           showToast('Error descargando PDF: ' + (error?.message || ''), 'error');
@@ -2760,10 +2793,13 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
         if (files.length > 0) {
           const file = files[0];
           if (file.type === 'application/pdf') {
-            const url = URL.createObjectURL(file);
-            currentObjectUrl = url;
-            currentPdfIndex = -1;
-            loadPdf(url, file.name, file.lastModified);
+            void (async () => {
+              const url = URL.createObjectURL(file);
+              currentObjectUrl = url;
+              currentPdfIndex = -1;
+              const sourceBytes = await file.arrayBuffer();
+              await loadPdf(url, file.name, file.lastModified, sourceBytes);
+            })();
           } else {
             showToast('Por favor selecciona un archivo PDF', 'error');
           }
@@ -2773,10 +2809,13 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
         const file = e.target.files[0];
         if (file) {
           if (file.type === 'application/pdf') {
-            const url = URL.createObjectURL(file);
-            currentObjectUrl = url;
-            currentPdfIndex = -1;
-            loadPdf(url, file.name, file.lastModified);
+            void (async () => {
+              const url = URL.createObjectURL(file);
+              currentObjectUrl = url;
+              currentPdfIndex = -1;
+              const sourceBytes = await file.arrayBuffer();
+              await loadPdf(url, file.name, file.lastModified, sourceBytes);
+            })();
           } else {
             showToast('Por favor selecciona un archivo PDF', 'error');
           }
@@ -2863,7 +2902,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
           const url = URL.createObjectURL(blob);
           currentObjectUrl = url;
           pendingAfterLoadGoTo = after;
-          await loadPdf(url, entry.name, uniqueKey);
+          await loadPdf(url, entry.name, uniqueKey, arrayBuffer);
           currentPdfIndex = index;
           localStorage.setItem('lastPdfIndex', String(index));
           localStorage.setItem('lastPdfName', entry.name);
@@ -2944,6 +2983,24 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
         if (e.ctrlKey && e.key.toLowerCase() === 'm' && !e.shiftKey && !e.altKey) {
           e.preventDefault();
           openPdfModal();
+          return;
+        }
+
+        if (e.ctrlKey && e.key.toLowerCase() === 'i' && !e.shiftKey && !e.altKey && !e.metaKey && !isEditing) {
+          e.preventDefault();
+          if (!pdfDoc) return;
+          if (captureMode) { showToast('Finaliza la captura (W) antes de seleccionar áreas', 'info'); return; }
+          if (focusMode && focusModeType === 'focus') {
+            showToast('Sal del enfoque (tecla O) antes de crear selecciones múltiples', 'info');
+            return;
+          }
+          if (!focusMode || focusModeType !== 'multi') {
+            clearInstantSelections();
+            activateFocusMode('multi', 'Haz dos clics para seleccionar áreas');
+            showToast('Modo selección activado. Delimita fragmentos y luego pulsa Ctrl+M.', 'info');
+          } else {
+            deactivateFocusMode(instantSelections.length ? 'Selecciones listas para crear el PDF' : 'Selección cancelada');
+          }
           return;
         }
 
@@ -4563,6 +4620,71 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
         return (name || 'documento').replace(/[^a-zA-Z0-9._-]/g, '_');
       }
 
+      function normalizePdfFileName(name) {
+        const trimmed = (name || '').trim();
+        const baseName = sanitizeName(trimmed || (currentPdfName ? currentPdfName.replace(/\.pdf$/i, '') : 'fragmento'));
+        return baseName.toLowerCase().endsWith('.pdf') ? baseName : `${baseName}.pdf`;
+      }
+
+      async function buildPdfFromInstantSelections(fileName) {
+        if (!instantSelections.length) {
+          throw new Error('Selecciona al menos un área antes de crear el PDF.');
+        }
+        if (!currentPdfLibDoc) {
+          throw new Error('No se pudo acceder al PDF original para crear el fragmento.');
+        }
+
+        const orderedSelections = [...instantSelections].sort((left, right) => {
+          if (left.pageNum !== right.pageNum) return left.pageNum - right.pageNum;
+          return 0;
+        });
+
+        const pdfDocOut = await PDFLib.PDFDocument.create();
+        for (const selection of orderedSelections) {
+          const pageIndex = Number.parseInt(String(selection.pageNum || ''), 10) - 1;
+          const sourcePage = currentPdfLibDoc.getPage(pageIndex);
+          if (!sourcePage) {
+            throw new Error(`No se pudo leer la página ${selection.pageNum}.`);
+          }
+
+          const cropBox = sourcePage.getCropBox();
+          const cropLeft = cropBox.x || 0;
+          const cropBottom = cropBox.y || 0;
+          const cropWidth = cropBox.width || sourcePage.getWidth();
+          const cropHeight = cropBox.height || sourcePage.getHeight();
+          const minXp = Math.min(selection.xp1, selection.xp2);
+          const maxXp = Math.max(selection.xp1, selection.xp2);
+          const minYp = Math.min(selection.yp1, selection.yp2);
+          const maxYp = Math.max(selection.yp1, selection.yp2);
+          const left = cropLeft + (minXp * cropWidth);
+          const right = cropLeft + (maxXp * cropWidth);
+          const top = cropBottom + cropHeight - (minYp * cropHeight);
+          const bottom = cropBottom + cropHeight - (maxYp * cropHeight);
+          const width = Math.max(1, right - left);
+          const height = Math.max(1, top - bottom);
+
+          const embeddedPage = await pdfDocOut.embedPage(sourcePage, {
+            left,
+            right,
+            bottom,
+            top,
+          });
+          const page = pdfDocOut.addPage([width, height]);
+          page.drawPage(embeddedPage, {
+            x: 0,
+            y: 0,
+            width,
+            height,
+          });
+        }
+
+        const pdfBytes = await pdfDocOut.save();
+        return {
+          blob: new Blob([pdfBytes], { type: 'application/pdf' }),
+          fileName: normalizePdfFileName(fileName),
+        };
+      }
+
       async function saveSelectionsToCategory() {
         const handle = captureCategory === 'teo' ? theoryHandle : practiceHandle;
         if (!handle) throw new Error('Carpeta no configurada');
@@ -4616,168 +4738,80 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       }
 
       // ========================================
-      // PDF desde capturas (Ctrl+M)
+      // PDF temporal desde selecciones (Ctrl+M)
       // ========================================
       function openPdfModal() {
+        if (!pdfDoc) {
+          showToast('Primero carga un PDF.', 'info');
+          return;
+        }
+        if (!instantSelections.length) {
+          showToast('Selecciona al menos un área con Ctrl+I antes de crear el PDF.', 'info');
+          return;
+        }
+
+        const suggestedName = normalizePdfFileName(currentPdfName ? currentPdfName.replace(/\.pdf$/i, '') : 'fragmento').replace(/\.pdf$/i, '');
         pdfModalBody.innerHTML = `
-          <div class="category-actions">
-            <button class="category-btn teo" id="pdf-choose-teo">Teoría</button>
-            <button class="category-btn prac" id="pdf-choose-prac">Práctica</button>
+          <div class="prompt-actions" style="display:flex; flex-direction:column; gap:12px;">
+            <label for="pdf-name-input" style="display:flex; flex-direction:column; gap:8px;">
+              <span>Ingresa nombre:</span>
+              <input id="pdf-name-input" type="text" value="${suggestedName}" style="padding:10px 12px; border-radius:8px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.06); color:inherit;">
+            </label>
+            <button class="category-btn prac" id="pdf-confirm-create">Confirmar</button>
           </div>`;
         pdfModal.classList.remove('hidden');
-        pdfModal.querySelector('#pdf-choose-teo').addEventListener('click', () => handlePdfCategory('teo'));
-        pdfModal.querySelector('#pdf-choose-prac').addEventListener('click', () => handlePdfCategory('practica'));
+
+        const input = document.getElementById('pdf-name-input');
+        const confirmBtn = document.getElementById('pdf-confirm-create');
+        if (input) {
+          input.focus();
+          input.select();
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              confirmBtn.click();
+            }
+          });
+        }
+        confirmBtn.addEventListener('click', async () => {
+          const nextName = input && typeof input.value === 'string' ? input.value : suggestedName;
+          await submitInstantSelectionsPdf(nextName);
+        });
       }
 
-      async function handlePdfCategory(cat) {
-        pdfModalBody.innerHTML = '<p>Generando PDF…</p>';
+      async function submitInstantSelectionsPdf(fileName) {
+        if (!instantSelections.length) {
+          showToast('Selecciona al menos un área antes de crear el PDF.', 'info');
+          return;
+        }
+        if (!currentSubjectId || !currentSessionDate || !Number.isInteger(currentWeekNumber)) {
+          showToast('Este visor no tiene un destino válido para subir el PDF.', 'error');
+          return;
+        }
+
         try {
-          const pdfData = await generatePdfFromCategory(cat);
-          if (!pdfData) {
-            pdfModalBody.innerHTML = '<p>No se generó PDF.</p>';
-            return;
+          showOverlay('Armando PDF fragmentado…');
+          const pdfData = await buildPdfFromInstantSelections(fileName);
+          try {
+            window.parent.postMessage({
+              type: 'uploadPracticeFragment',
+              payload: {
+                blob: pdfData.blob,
+                fileName: pdfData.fileName,
+              }
+            }, '*');
+          } catch {
+            hideOverlay();
+            showToast('No se pudo enviar el PDF al contenedor.', 'error');
           }
-          await loadPromptConfig();
-          triggerDownload(pdfData.blob, pdfData.file.name);
-          renderPromptOptions(cat, pdfData);
-        } catch (e) {
-          console.error('Error generando PDF:', e);
-          showToast('Error generando PDF', 'error');
-          pdfModal.classList.add('hidden');
+        } catch (error) {
+          hideOverlay();
+          console.error('Error generando PDF temporal:', error);
+          const message = error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+            ? error.message
+            : 'No se pudo generar el PDF fragmentado.';
+          showToast(message, 'error');
         }
-      }
-
-      function triggerDownload(blob, filename) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          URL.revokeObjectURL(url);
-          a.remove();
-        }, 1000);
-      }
-
-      function renderPromptOptions(cat, pdfData) {
-        let html = '';
-        if (cat === 'teo') {
-          html += `<div class="prompt-actions">
-            <div class="prompt-item"><button class="category-btn teo" data-prompt="resumen">Resumen</button><button class="edit-prompt" data-edit="resumen">⚙️</button></div>
-            <div class="prompt-item"><button class="category-btn teo" data-prompt="vf">Verdaderos o falsos</button><button class="edit-prompt" data-edit="vf">⚙️</button></div>
-            <div class="prompt-item"><button class="category-btn teo" data-prompt="reciprocos">Recíprocos</button><button class="edit-prompt" data-edit="reciprocos">⚙️</button></div>
-          </div>`;
-        } else {
-          html += `<div class="prompt-actions">
-            <div class="prompt-item"><button class="category-btn prac" data-prompt="practica">Extraer {&quot;tema&quot;,&quot;enunciado&quot;,&quot;ejercicio&quot;}</button><button class="edit-prompt" data-edit="practica">⚙️</button></div>
-          </div>`;
-        }
-        html += '<div id="pdf-drop-area"></div>';
-        pdfModalBody.innerHTML = html;
-
-        pdfModalBody.querySelectorAll('[data-prompt]').forEach(btn => {
-          btn.addEventListener('click', async () => {
-            const key = btn.getAttribute('data-prompt');
-            let text = USER_PROMPTS[key] || '';
-            if (!text) {
-              const input = window.prompt('Ingresa prompt');
-              if (!input) { showToast('Prompt vacío', 'info'); return; }
-              USER_PROMPTS[key] = input;
-              await savePromptConfig();
-              text = input;
-            }
-            try {
-              await navigator.clipboard.writeText(text);
-              showToast('Prompt copiado', 'success');
-            } catch {
-              showToast('No se pudo copiar', 'error');
-            }
-          });
-        });
-        pdfModalBody.querySelectorAll('.edit-prompt').forEach(icon => {
-          icon.addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            const key = icon.getAttribute('data-edit');
-            const current = USER_PROMPTS[key] || '';
-            const input = window.prompt('Editar prompt', current);
-            if (input !== null) {
-              USER_PROMPTS[key] = input;
-              await savePromptConfig();
-            }
-          });
-        });
-
-        const area = document.getElementById('pdf-drop-area');
-        const link = document.createElement('a');
-        link.className = 'pdf-draggable';
-        link.textContent = pdfData.file.name;
-        link.href = URL.createObjectURL(pdfData.file);
-        link.download = pdfData.file.name;
-        link.draggable = true;
-        link.addEventListener('dragstart', (ev) => {
-          const file = new File([pdfData.blob], pdfData.file.name, { type: 'application/pdf' });
-          ev.dataTransfer?.items.add(file);
-        });
-        area.appendChild(link);
-
-        const testBtn = document.createElement('button');
-        testBtn.textContent = 'Simular archivo';
-        testBtn.addEventListener('click', () => {
-          const input = document.createElement('input');
-          input.type = 'file';
-          input.style.display = 'none';
-          const dt = new DataTransfer();
-          const file = new File([pdfData.blob], pdfData.file.name, { type: 'application/pdf' });
-          dt.items.add(file);
-          input.files = dt.files;
-          document.body.appendChild(input);
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.remove();
-        });
-        area.appendChild(testBtn);
-      }
-
-      async function generatePdfFromCategory(cat) {
-        const handle = await ensureCategoryHandle(cat);
-        if (!handle) return null;
-        const files = [];
-        // @ts-ignore
-        for await (const [name, h] of handle.entries()) {
-          if (h.kind === 'file' && name.toLowerCase().endsWith('.png')) {
-            files.push({ name, handle: h });
-          }
-        }
-        if (!files.length) {
-          showToast('No hay capturas en la carpeta', 'info');
-          return null;
-        }
-        files.sort((a,b) => naturalCompare(a.name, b.name));
-        const pdfDoc = await PDFLib.PDFDocument.create();
-        for (const f of files) {
-          const file = await f.handle.getFile();
-          const url = URL.createObjectURL(file);
-          const dims = await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => { resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
-            img.onerror = reject;
-            img.src = url;
-          });
-          URL.revokeObjectURL(url);
-          const bytes = await file.arrayBuffer();
-          const img = await pdfDoc.embedPng(bytes);
-          const page = pdfDoc.addPage([dims.width, dims.height]);
-          page.drawImage(img, { x: 0, y: 0, width: dims.width, height: dims.height });
-        }
-        const pdfBytes = await pdfDoc.save();
-        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-        const pdfName = cat === 'teo' ? 'teoria.pdf' : 'practica.pdf';
-        const fileHandle = await handle.getFileHandle(pdfName, { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        const file = new File([blob], pdfName, { type: 'application/pdf' });
-        return { handle: fileHandle, file, blob };
       }
 
       // --- Dibujo libre ---

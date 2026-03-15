@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -84,8 +84,23 @@ interface PendingSubjectDayMaterial extends SubjectDayMaterial {
   is_pending_upload: true
 }
 
-function buildPracticeViewerHref(materialId: number) {
-  return `/practice/viewer?materialId=${materialId}`
+function buildPracticeDraftViewerHref(params: {
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+}) {
+  const searchParams = new URLSearchParams({
+    subjectId: params.subjectId,
+    subjectName: params.subjectName,
+    sessionDate: params.sessionDate,
+    weekNumber: String(params.weekNumber),
+    weekdayIndex: String(params.weekdayIndex),
+    materialType: "practice",
+  })
+
+  return `/practice/viewer?${searchParams.toString()}`
 }
 
 interface ReviewAudio {
@@ -755,53 +770,90 @@ export function SubjectWheel() {
     }
   }
 
-  useEffect(() => {
+  const loadSubjectDayData = useCallback(async () => {
     if (!isDialogOpen || !currentSubject) return
 
-    const loadSubjectDayData = async () => {
-      setIsEntriesLoading(true)
-      setIsMaterialsLoading(true)
-      setEntriesError("")
+    setIsEntriesLoading(true)
+    setIsMaterialsLoading(true)
+    setEntriesError("")
 
-      try {
-        const params = new URLSearchParams({
-          subjectId: currentSubject.id,
-          sessionDate: currentDateKey,
-          weekNumber: String(selectedWeekNumber),
-        })
+    try {
+      const params = new URLSearchParams({
+        subjectId: currentSubject.id,
+        sessionDate: currentDateKey,
+        weekNumber: String(selectedWeekNumber),
+      })
 
-        const [entriesResponse, materialsResponse] = await Promise.all([
-          fetch(`/api/subject-day-entries?${params.toString()}`),
-          fetch(`/api/subject-day-materials?${params.toString()}`),
-        ])
-        const [entriesPayload, materialsPayload] = await Promise.all([
-          parseJsonResponse(entriesResponse),
-          parseJsonResponse(materialsResponse),
-        ])
+      const [entriesResponse, materialsResponse] = await Promise.all([
+        fetch(`/api/subject-day-entries?${params.toString()}`),
+        fetch(`/api/subject-day-materials?${params.toString()}`),
+      ])
+      const [entriesPayload, materialsPayload] = await Promise.all([
+        parseJsonResponse(entriesResponse),
+        parseJsonResponse(materialsResponse),
+      ])
 
-        if (!entriesResponse.ok) {
-          throw new Error(getErrorMessage(entriesPayload, "No se pudieron cargar las dudas del dia."))
-        }
-
-        if (!materialsResponse.ok) {
-          throw new Error(getErrorMessage(materialsPayload, "No se pudieron cargar los materiales del dia."))
-        }
-
-        setEntries(sortSubjectDayEntries(Array.isArray(entriesPayload) ? entriesPayload : []))
-        setMaterials(sortSubjectDayMaterials(Array.isArray(materialsPayload) ? materialsPayload : []))
-      } catch (error) {
-        console.error("Failed to load subject day data:", error)
-        setEntries([])
-        setMaterials([])
-        setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.")
-      } finally {
-        setIsEntriesLoading(false)
-        setIsMaterialsLoading(false)
+      if (!entriesResponse.ok) {
+        throw new Error(getErrorMessage(entriesPayload, "No se pudieron cargar las dudas del dia."))
       }
+
+      if (!materialsResponse.ok) {
+        throw new Error(getErrorMessage(materialsPayload, "No se pudieron cargar los materiales del dia."))
+      }
+
+      setEntries(sortSubjectDayEntries(Array.isArray(entriesPayload) ? entriesPayload : []))
+      setMaterials(sortSubjectDayMaterials(Array.isArray(materialsPayload) ? materialsPayload : []))
+    } catch (error) {
+      console.error("Failed to load subject day data:", error)
+      setEntries([])
+      setMaterials([])
+      setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.")
+    } finally {
+      setIsEntriesLoading(false)
+      setIsMaterialsLoading(false)
+    }
+  }, [currentDateKey, currentSubject, isDialogOpen, selectedWeekNumber])
+
+  useEffect(() => {
+    void loadSubjectDayData()
+  }, [loadSubjectDayData])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
+    const handleRefreshPayload = (payload: unknown) => {
+      if (!payload || typeof payload !== "object" || !currentSubject || !isDialogOpen) return
+      if (!("subjectId" in payload) || !("sessionDate" in payload) || !("weekNumber" in payload)) return
+
+      const subjectId = typeof payload.subjectId === "string" ? payload.subjectId : ""
+      const sessionDate = typeof payload.sessionDate === "string" ? payload.sessionDate : ""
+      const weekNumber = Number(payload.weekNumber)
+      if (subjectId !== currentSubject.id || sessionDate !== currentDateKey || weekNumber !== selectedWeekNumber) return
+
+      void loadSubjectDayData()
     }
 
-    void loadSubjectDayData()
-  }, [currentDateKey, currentSubject, isDialogOpen, selectedWeekNumber])
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== "practice-materials:refresh" || !event.newValue) return
+      try {
+        handleRefreshPayload(JSON.parse(event.newValue))
+      } catch {}
+    }
+
+    const handleMessage = (event: MessageEvent) => {
+      handleRefreshPayload(event.data)
+    }
+
+    channel?.addEventListener("message", handleMessage)
+    window.addEventListener("storage", handleStorage)
+
+    return () => {
+      channel?.removeEventListener("message", handleMessage)
+      channel?.close()
+      window.removeEventListener("storage", handleStorage)
+    }
+  }, [currentDateKey, currentSubject, isDialogOpen, loadSubjectDayData, selectedWeekNumber])
 
   useEffect(() => {
     return () => {
@@ -2652,6 +2704,29 @@ export function SubjectWheel() {
                         <Button
                           type="button"
                           variant="outline"
+                          onClick={() => {
+                            if (!currentSubject) return
+                            window.open(
+                              buildPracticeDraftViewerHref({
+                                subjectId: currentSubject.id,
+                                subjectName: getSubjectDisplayName(currentSubject),
+                                sessionDate: currentDateKey,
+                                weekNumber: selectedWeekNumber,
+                                weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                              }),
+                              "_blank",
+                              "noopener,noreferrer"
+                            )
+                          }}
+                          disabled={isUploadingMaterialType !== null || !currentSubject}
+                          className="border-black text-black"
+                          aria-label="Abrir visor para fragmentar un libro"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
                           onClick={() => practiceFileInputRef.current?.click()}
                           disabled={isUploadingMaterialType !== null}
                           className="border-black text-black"
@@ -2690,7 +2765,7 @@ export function SubjectWheel() {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                 <a
-                                  href={buildPracticeViewerHref(material.id)}
+                                  href={material.drive_web_view_link}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
@@ -3102,7 +3177,7 @@ export function SubjectWheel() {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                         <a
-                          href={buildPracticeViewerHref(currentContinueMaterial.id)}
+                          href={currentContinueMaterial.drive_web_view_link}
                           target="_blank"
                           rel="noreferrer"
                           className="font-medium underline-offset-2 hover:underline"

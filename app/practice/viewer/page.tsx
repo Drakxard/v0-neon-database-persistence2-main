@@ -2,6 +2,7 @@ import Link from "next/link"
 import { neon } from "@neondatabase/serverless"
 
 import { PracticeViewerClient } from "./practice-viewer-client"
+import { parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
 
@@ -19,7 +20,22 @@ const SUBJECT_NAMES: Record<string, string> = {
 type ViewerPageProps = {
   searchParams: Promise<{
     materialId?: string
+    subjectId?: string
+    subjectName?: string
+    sessionDate?: string
+    weekNumber?: string
+    weekdayIndex?: string
+    materialType?: string
   }>
+}
+
+type DraftViewerContext = {
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+  materialType: "practice"
 }
 
 function normalizeSessionDateKey(sessionDate: string | Date) {
@@ -54,6 +70,36 @@ async function getMaterial(materialId: number) {
 export default async function PracticeViewerPage({ searchParams }: ViewerPageProps) {
   const params = await searchParams
   const materialId = Number.parseInt(params.materialId || "", 10)
+
+  const subjectId = (params.subjectId || "").trim()
+  const subjectName = (params.subjectName || "").trim()
+  const sessionDate = (params.sessionDate || "").trim()
+  const parsedSessionDate = parseDateKey(sessionDate)
+  const weekNumber = Number.parseInt(params.weekNumber || "", 10)
+  const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
+  const materialType = params.materialType === "practice" ? "practice" : null
+
+  const hasDraftContext =
+    Boolean(subjectId) &&
+    Boolean(subjectName) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(sessionDate) &&
+    !Number.isNaN(parsedSessionDate.getTime()) &&
+    Number.isInteger(weekNumber) &&
+    Number.isInteger(weekdayIndex) &&
+    materialType === "practice"
+
+  if (!Number.isInteger(materialId) && hasDraftContext) {
+    const draftContext: DraftViewerContext = {
+      subjectId,
+      subjectName,
+      sessionDate,
+      weekNumber,
+      weekdayIndex,
+      materialType,
+    }
+
+    return <PracticeViewerClient draftContext={draftContext} />
+  }
 
   if (!Number.isInteger(materialId)) {
     return (

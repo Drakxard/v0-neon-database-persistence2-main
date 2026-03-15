@@ -12,6 +12,15 @@ type MaterialContext = {
   fileName: string
 }
 
+type DraftViewerContext = {
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+  materialType: "practice"
+}
+
 type AudioPosition = {
   entryId: number
   materialId: number
@@ -36,12 +45,18 @@ type PendingAnchor = {
   yp: number
 }
 
+type FragmentUploadPayload = {
+  blob: Blob
+  fileName?: string | null
+}
+
 type ViewerMessage =
   | { type: "startAnchoredAudio"; payload?: PendingAnchor }
   | { type: "cancelAnchoredAudio" }
   | { type: "playAnchoredAudio"; entryId?: number }
   | { type: "deleteAnchoredAudio"; entryId?: number }
   | { type: "viewerReady" }
+  | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
 function getRecorderMimeType() {
   if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
@@ -57,23 +72,61 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
-function buildViewerSrc(material: MaterialContext) {
-  const params = new URLSearchParams({
-    url: `/api/subject-day-materials/${material.id}/file`,
-    name: material.fileName,
-    key: `subject-day-material-${material.id}`,
-    materialId: String(material.id),
-    subjectId: material.subjectId,
-    subjectName: material.subjectName,
-    sessionDate: material.sessionDate,
-    weekNumber: String(material.weekNumber),
-    weekdayIndex: String(material.weekdayIndex),
-  })
+function buildViewerSrc({
+  material,
+  draftContext,
+}: {
+  material?: MaterialContext
+  draftContext?: DraftViewerContext
+}) {
+  const params = new URLSearchParams()
+
+  if (material) {
+    params.set("url", `/api/subject-day-materials/${material.id}/file`)
+    params.set("name", material.fileName)
+    params.set("key", `subject-day-material-${material.id}`)
+    params.set("materialId", String(material.id))
+    params.set("subjectId", material.subjectId)
+    params.set("subjectName", material.subjectName)
+    params.set("sessionDate", material.sessionDate)
+    params.set("weekNumber", String(material.weekNumber))
+    params.set("weekdayIndex", String(material.weekdayIndex))
+  }
+
+  if (draftContext) {
+    params.set("draftUpload", "1")
+    params.set("subjectId", draftContext.subjectId)
+    params.set("subjectName", draftContext.subjectName)
+    params.set("sessionDate", draftContext.sessionDate)
+    params.set("weekNumber", String(draftContext.weekNumber))
+    params.set("weekdayIndex", String(draftContext.weekdayIndex))
+    params.set("materialType", draftContext.materialType)
+  }
 
   return `/visor/index.html?${params.toString()}`
 }
 
-export function PracticeViewerClient({ material }: { material: MaterialContext }) {
+function notifyPracticeMaterialsRefresh(payload: { subjectId: string; sessionDate: string; weekNumber: number }) {
+  if (typeof window === "undefined") return
+
+  try {
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
+    channel?.postMessage(payload)
+    channel?.close()
+  } catch {}
+
+  try {
+    window.localStorage.setItem("practice-materials:refresh", JSON.stringify({ ...payload, timestamp: Date.now() }))
+  } catch {}
+}
+
+export function PracticeViewerClient({
+  material,
+  draftContext,
+}: {
+  material?: MaterialContext
+  draftContext?: DraftViewerContext
+}) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -90,8 +143,11 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
   const [reviewAudio, setReviewAudio] = useState<ReviewAudio | null>(null)
   const [pendingAnchor, setPendingAnchor] = useState<PendingAnchor | null>(null)
   const [activeEntryId, setActiveEntryId] = useState<number | null>(null)
+  const [uploadFeedback, setUploadFeedback] = useState("")
 
-  const viewerSrc = useMemo(() => buildViewerSrc(material), [material])
+  const viewerSrc = useMemo(() => buildViewerSrc({ material, draftContext }), [draftContext, material])
+  const activeContext = material ?? draftContext
+  const hasMaterial = Boolean(material)
 
   const postToViewer = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
@@ -118,6 +174,12 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
   )
 
   const loadPositions = useCallback(async () => {
+    if (!material) {
+      setPositions([])
+      syncPositionsToViewer([])
+      return
+    }
+
     try {
       setPositionsError("")
       const response = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, { cache: "no-store" })
@@ -134,7 +196,7 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
       setPositionsError(message)
       syncPositionsToViewer([])
     }
-  }, [material.id, syncPositionsToViewer])
+  }, [material, syncPositionsToViewer])
 
   const resetRecorderState = useCallback(() => {
     setIsRecording(false)
@@ -233,7 +295,7 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
   }, [stopMediaTracks])
 
   const confirmRecording = useCallback(async () => {
-    if (!pendingAnchor || !reviewAudio) return
+    if (!material || !pendingAnchor || !reviewAudio) return
 
     setIsUploading(true)
     setRecordingError("")
@@ -293,6 +355,60 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
     }
   }, [closeRecorder, material, pendingAnchor, postToViewer, reviewAudio, syncPositionsToViewer])
 
+  const uploadPracticeFragment = useCallback(
+    async (payload: FragmentUploadPayload) => {
+      if (!activeContext) return
+
+      setUploadFeedback("Subiendo PDF fragmentado...")
+      postToViewer({ type: "practiceFragmentUploadState", status: "uploading" })
+
+      try {
+        const rawFileName = typeof payload.fileName === "string" ? payload.fileName : ""
+        const safeFileName = rawFileName.trim() || `fragmento-${activeContext.sessionDate}.pdf`
+        const fileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
+
+        const formData = new FormData()
+        formData.append("subjectId", activeContext.subjectId)
+        formData.append("subjectName", activeContext.subjectName)
+        formData.append("sessionDate", activeContext.sessionDate)
+        formData.append("weekNumber", String(activeContext.weekNumber))
+        formData.append("materialType", "practice")
+        formData.append("file", new File([payload.blob], fileName, { type: "application/pdf" }))
+
+        const response = await fetch("/api/subject-day-materials", {
+          method: "POST",
+          body: formData,
+        })
+        const responsePayload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(responsePayload, "No se pudo subir el PDF fragmentado."))
+        }
+
+        setUploadFeedback(`PDF creado: ${fileName}`)
+        postToViewer({
+          type: "practiceFragmentUploadState",
+          status: "success",
+          fileName,
+        })
+        notifyPracticeMaterialsRefresh({
+          subjectId: activeContext.subjectId,
+          sessionDate: activeContext.sessionDate,
+          weekNumber: activeContext.weekNumber,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo subir el PDF fragmentado."
+        console.error("Failed to upload practice fragment:", error)
+        setUploadFeedback(message)
+        postToViewer({
+          type: "practiceFragmentUploadState",
+          status: "error",
+          error: message,
+        })
+      }
+    },
+    [activeContext, postToViewer]
+  )
+
   const handleViewerMessage = useCallback(
     (event: MessageEvent<ViewerMessage>) => {
       if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow || !event.data?.type) {
@@ -300,7 +416,18 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
       }
 
       if (event.data.type === "viewerReady") {
-        syncPositionsToViewer(positions)
+        syncPositionsToViewer(hasMaterial ? positions : [])
+        return
+      }
+
+      if (event.data.type === "uploadPracticeFragment") {
+        const payload = event.data.payload
+        if (!payload?.blob || !(payload.blob instanceof Blob)) return
+        void uploadPracticeFragment(payload)
+        return
+      }
+
+      if (!material) {
         return
       }
 
@@ -381,11 +508,11 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
         })()
       }
     },
-    [activeEntryId, closeRecorder, loadPositions, positions, postToViewer, syncPositionsToViewer]
+    [activeEntryId, closeRecorder, hasMaterial, loadPositions, material, positions, postToViewer, syncPositionsToViewer, uploadPracticeFragment]
   )
 
   useEffect(() => {
-    loadPositions()
+    void loadPositions()
   }, [loadPositions])
 
   useEffect(() => {
@@ -424,12 +551,12 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
     <main className="min-h-screen bg-slate-950 text-white">
       <iframe
         ref={iframeRef}
-        title={`Visor PDF: ${material.fileName}`}
+        title={`Visor PDF: ${material?.fileName || "fragmentador"}`}
         src={viewerSrc}
         className="h-screen w-full border-0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
-        onLoad={() => syncPositionsToViewer(positions)}
+        onLoad={() => syncPositionsToViewer(hasMaterial ? positions : [])}
       />
 
       <audio ref={audioRef} hidden preload="none" />
@@ -440,7 +567,13 @@ export function PracticeViewerClient({ material }: { material: MaterialContext }
         </div>
       ) : null}
 
-      {isRecorderOpen ? (
+      {uploadFeedback ? (
+        <div className="fixed bottom-4 right-4 z-[1400] max-w-md rounded-xl border border-white/10 bg-slate-900/95 px-4 py-3 text-sm text-slate-100 shadow-2xl">
+          {uploadFeedback}
+        </div>
+      ) : null}
+
+      {material && isRecorderOpen ? (
         <div className="fixed inset-0 z-[1500] flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
             <div className="space-y-2">
