@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import { transcribeAudioWithGemini } from "@/lib/gemini"
 import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
+import { downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
@@ -120,7 +121,9 @@ export async function POST(request: Request) {
       return badRequest("Missing completion metadata")
     }
 
-    const driveFile = await getDriveFileMetadata(payload.driveFileId)
+    const driveFile = isR2ObjectKey(payload.driveFileId)
+      ? await getR2ObjectMetadata(payload.driveFileId)
+      : await getDriveFileMetadata(payload.driveFileId)
 
     if (!driveFile.mimeType.startsWith("audio/")) {
       return badRequest("Invalid audio mime type")
@@ -146,7 +149,9 @@ export async function POST(request: Request) {
 
     let transcriptText = "Transcripcion pendiente."
     try {
-      const downloadedFile = await downloadDriveFile(driveFile.id)
+      const downloadedFile = isR2ObjectKey(driveFile.id)
+        ? await downloadR2Object(driveFile.id)
+        : await downloadDriveFile(driveFile.id)
       transcriptText = await transcribeAudioWithGemini({
         audioBuffer: downloadedFile.buffer,
         mimeType: downloadedFile.mimeType || driveFile.mimeType,

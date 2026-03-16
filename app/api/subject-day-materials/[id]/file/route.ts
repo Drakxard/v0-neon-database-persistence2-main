@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 
 import { downloadDriveFile } from "@/lib/google-drive"
+import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 
 export const runtime = "nodejs"
 
@@ -34,7 +35,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return Response.json({ error: "Material not found" }, { status: 404 })
     }
 
-    const file = await downloadDriveFile(material.drive_file_id)
+    const file = isR2ObjectKey(material.drive_file_id)
+      ? await downloadR2Object(material.drive_file_id)
+      : await downloadDriveFile(material.drive_file_id)
 
     return new Response(file.buffer, {
       headers: {

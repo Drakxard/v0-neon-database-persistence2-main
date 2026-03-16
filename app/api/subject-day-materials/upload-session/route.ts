@@ -1,7 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
-import { createDriveResumableUploadSession } from "@/lib/google-drive"
+import { buildR2ObjectKey, createR2UploadSession } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
@@ -68,11 +68,14 @@ export async function POST(request: Request) {
     const safeFileName = rawFileName || `${materialType}-${sessionDate}-${nextOrderIndex + 1}.pdf`
     const finalFileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
 
-    const session = await createDriveResumableUploadSession({
+    const objectKey = buildR2ObjectKey({
       subjectName,
       weekNumber,
       weekdayIndex,
       fileName: finalFileName,
+    })
+    const session = await createR2UploadSession({
+      objectKey,
       mimeType,
     })
 
@@ -83,6 +86,7 @@ export async function POST(request: Request) {
         "Content-Type": mimeType,
       },
       fileName: session.fileName,
+      driveFileId: session.driveFileId,
     })
   } catch (error) {
     console.error("POST /api/subject-day-materials/upload-session error:", error)

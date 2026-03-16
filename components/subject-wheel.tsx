@@ -327,6 +327,7 @@ type DriveUploadSessionResponse = {
   method?: string
   headers?: Record<string, string>
   fileName: string
+  driveFileId?: string
 }
 
 async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob) {
@@ -338,14 +339,16 @@ async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob
 
   const payload = await parseJsonResponse(response)
   if (!response.ok) {
-    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo a Google Drive."))
+    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo al storage."))
   }
 
   const driveFileId =
-    payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : ""
+    (payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : "") ||
+    session.driveFileId ||
+    ""
 
   if (!driveFileId) {
-    throw new Error("Google Drive no devolvio el identificador del archivo subido.")
+    throw new Error("El storage no devolvio el identificador del archivo subido.")
   }
 
   return {

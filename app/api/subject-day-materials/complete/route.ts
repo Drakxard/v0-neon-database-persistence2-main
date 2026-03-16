@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { getDriveFileMetadata } from "@/lib/google-drive"
+import { getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
@@ -80,7 +81,9 @@ export async function POST(request: Request) {
       return badRequest("Invalid materialType")
     }
 
-    const driveFile = await getDriveFileMetadata(driveFileId)
+    const driveFile = isR2ObjectKey(driveFileId)
+      ? await getR2ObjectMetadata(driveFileId)
+      : await getDriveFileMetadata(driveFileId)
     if (driveFile.mimeType !== "application/pdf") {
       return badRequest("Only PDF files are allowed")
     }
