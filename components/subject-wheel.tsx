@@ -3178,12 +3178,15 @@ export function SubjectWheel() {
                 <section className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                     {continuePayload?.previousFeaturedEntry ? (
-                      <audio
-                        controls
-                        preload="none"
-                        src={`/api/subject-day-entries/${continuePayload.previousFeaturedEntry.id}/audio`}
-                        className="h-12 w-full flex-1"
-                      />
+                      <div className="w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-300 bg-white px-2 py-2">
+                        <audio
+                          key={continuePayload.previousFeaturedEntry.id}
+                          controls
+                          preload="none"
+                          src={`/api/subject-day-entries/${continuePayload.previousFeaturedEntry.id}/audio`}
+                          className="block w-full min-w-0"
+                        />
+                      </div>
                     ) : (
                       <div className="flex h-12 w-full items-center border border-dashed border-slate-300 px-4 text-base text-slate-400">
                         Sin audio previo
