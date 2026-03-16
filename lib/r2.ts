@@ -43,19 +43,6 @@ function getFileNameFromKey(objectKey: string) {
   return segments[segments.length - 1] || objectKey
 }
 
-function encodeOriginalFileName(fileName: string) {
-  return encodeURIComponent(fileName)
-}
-
-function decodeOriginalFileName(value?: string) {
-  if (!value) return null
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
-}
-
 export function isR2ObjectKey(value: string) {
   return value.startsWith(R2_KEY_PREFIX)
 }
@@ -76,31 +63,23 @@ export function buildR2ObjectKey(params: {
 export async function createR2UploadSession(params: {
   objectKey: string
   mimeType: string
-  originalFileName: string
   expiresInSeconds?: number
 }) {
   const client = createR2Client()
-  const encodedOriginalFileName = encodeOriginalFileName(params.originalFileName)
   const uploadUrl = await getSignedUrl(
     client,
     new PutObjectCommand({
       Bucket: getBucketName(),
       Key: params.objectKey,
       ContentType: params.mimeType,
-      Metadata: {
-        originalfilename: encodedOriginalFileName,
-      },
     }),
     { expiresIn: params.expiresInSeconds ?? 900 }
   )
 
   return {
     uploadUrl,
-    fileName: params.originalFileName,
+    fileName: getFileNameFromKey(params.objectKey),
     driveFileId: params.objectKey,
-    headers: {
-      "x-amz-meta-originalfilename": encodedOriginalFileName,
-    },
   }
 }
 
@@ -115,7 +94,7 @@ export async function getR2ObjectMetadata(objectKey: string) {
 
   return {
     id: objectKey,
-    name: decodeOriginalFileName(response.Metadata?.originalfilename) || getFileNameFromKey(objectKey),
+    name: getFileNameFromKey(objectKey),
     mimeType: response.ContentType || "application/octet-stream",
     size: typeof response.ContentLength === "number" ? String(response.ContentLength) : undefined,
   }

@@ -84,7 +84,6 @@ export async function POST(request: Request) {
     const session = await createR2UploadSession({
       objectKey,
       mimeType,
-      originalFileName: fileName,
     })
 
     return NextResponse.json({
@@ -92,7 +91,6 @@ export async function POST(request: Request) {
       method: "PUT",
       headers: {
         "Content-Type": mimeType,
-        ...(session.headers || {}),
       },
       fileName: session.fileName,
       driveFileId: session.driveFileId,

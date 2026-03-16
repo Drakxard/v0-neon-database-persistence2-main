@@ -1284,6 +1284,7 @@ export function SubjectWheel() {
           weekNumber: target.weekNumber,
           materialId: target.materialId ?? null,
           driveFileId,
+          fileName: audioFile.name,
         }),
       })
       const payload = await requireOkJson(response, "No se pudo confirmar el audio.")
@@ -1640,6 +1641,7 @@ export function SubjectWheel() {
           weekNumber: selectedWeekNumber,
           materialType,
           driveFileId,
+          fileName: file.name,
         }),
       })
       const payload = await requireOkJson(response, "No se pudo confirmar el PDF.")

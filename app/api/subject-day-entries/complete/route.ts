@@ -85,6 +85,7 @@ type CompletionPayload =
     weekNumber: number
     materialId: number | null
     driveFileId: string
+    fileName: string
   }
 
 async function parseCompletionPayload(request: Request): Promise<CompletionPayload> {
@@ -96,6 +97,7 @@ async function parseCompletionPayload(request: Request): Promise<CompletionPaylo
     weekNumber: Number.parseInt(String(payload?.weekNumber || ""), 10),
     materialId: Number.isNaN(rawMaterialId) ? null : rawMaterialId,
     driveFileId: String(payload?.driveFileId || "").trim(),
+    fileName: String(payload?.fileName || "").trim(),
   }
 }
 
@@ -116,6 +118,7 @@ export async function POST(request: Request) {
     const parsedSessionDate = parseSessionDate(sessionDate)
     const requestedWeekNumber = payload.weekNumber
     const materialId = payload.materialId
+    const uploadedFileName = payload.fileName
 
     if (!subjectId || !sessionDate || !parsedSessionDate || !payload.driveFileId) {
       return badRequest("Missing completion metadata")
@@ -188,7 +191,7 @@ export async function POST(request: Request) {
           ${nextOrderIndex},
           ${transcriptText},
           ${driveFile.id},
-          ${driveFile.name},
+          ${uploadedFileName || driveFile.name},
           ${driveFile.mimeType},
           ${driveFile.webViewLink || ""}
         )
@@ -218,7 +221,7 @@ export async function POST(request: Request) {
           ${nextOrderIndex},
           ${transcriptText},
           ${driveFile.id},
-          ${driveFile.name},
+          ${uploadedFileName || driveFile.name},
           ${driveFile.mimeType},
           ${driveFile.webViewLink || ""}
         )

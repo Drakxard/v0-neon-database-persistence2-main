@@ -393,6 +393,7 @@ export function PracticeViewerClient({
           weekNumber: material.weekNumber,
           materialId: material.id,
           driveFileId,
+          fileName: audioFile.name,
         }),
       })
       const entryPayload = await requireOkJson(entryResponse, "No se pudo confirmar el audio.")
@@ -469,6 +470,7 @@ export function PracticeViewerClient({
               weekNumber: activeContext.weekNumber,
               materialType: "practice",
               driveFileId,
+              fileName,
             }),
           }),
           "No se pudo confirmar el PDF fragmentado."

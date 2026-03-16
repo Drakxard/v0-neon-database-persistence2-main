@@ -71,6 +71,7 @@ export async function POST(request: Request) {
     const materialType = String(payload?.materialType || "").trim() as MaterialType
     const requestedWeekNumber = Number.parseInt(String(payload?.weekNumber || ""), 10)
     const driveFileId = String(payload?.driveFileId || "").trim()
+    const uploadedFileName = String(payload?.fileName || "").trim()
 
     const parsedSessionDate = parseSessionDate(sessionDate)
     if (!subjectId || !parsedSessionDate || !driveFileId) {
@@ -100,6 +101,8 @@ export async function POST(request: Request) {
     `
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
+    const persistedFileName = uploadedFileName || driveFile.name
+
     const rows = await sql`
       INSERT INTO subject_day_materials (
         subject_id,
@@ -120,7 +123,7 @@ export async function POST(request: Request) {
         ${weekdayIndex},
         ${materialType},
         ${nextOrderIndex},
-        ${driveFile.name},
+        ${persistedFileName},
         ${driveFile.id},
         ${driveFile.mimeType},
         ${driveFile.webViewLink || ""}
