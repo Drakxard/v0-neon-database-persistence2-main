@@ -1613,11 +1613,15 @@ export function SubjectWheel() {
 
       const serverPayload = payload as ContinuePayload
 
-      setContinuePayload({
+      setContinuePayload((previous) => ({
         ...serverPayload,
-        material: localPayload?.material ?? serverPayload.material,
-        previousFeaturedEntry: localPayload?.previousFeaturedEntry ?? serverPayload.previousFeaturedEntry,
-      })
+        material: localPayload?.material ?? previous?.material ?? serverPayload.material,
+        previousFeaturedEntry:
+          localContinueFeaturedEntry ??
+          previous?.previousFeaturedEntry ??
+          localPayload?.previousFeaturedEntry ??
+          serverPayload.previousFeaturedEntry,
+      }))
     } catch (error) {
       console.error("Failed to load next practice material:", error)
       setContinuePayload((previous) => previous ?? localPayload)
@@ -2081,6 +2085,17 @@ export function SubjectWheel() {
         : [],
     [currentContinueMaterial, entries]
   )
+  const localContinueFeaturedEntry = useMemo(
+    () =>
+      entries.find(
+        (entry) =>
+          entry.subject_id === currentSubject?.id &&
+          entry.session_date === currentDateKey &&
+          entry.is_featured &&
+          entry.subject_day_material_id == null
+      ) ?? null,
+    [currentDateKey, currentSubject?.id, entries]
+  )
   const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
     if (!currentSubject) return null
 
@@ -2090,9 +2105,9 @@ export function SubjectWheel() {
         sessionDate: currentDateKey,
         weekNumber: selectedWeekNumber,
       }),
-      previousFeaturedEntry: continuePayload?.previousFeaturedEntry ?? null,
+      previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentDateKey, currentSubject, materials, selectedWeekNumber])
+  }, [continuePayload?.previousFeaturedEntry, currentDateKey, currentSubject, localContinueFeaturedEntry, materials, selectedWeekNumber])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
