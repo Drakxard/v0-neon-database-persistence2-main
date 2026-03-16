@@ -322,38 +322,6 @@ async function requireOkJson(response: Response, fallback: string) {
   return payload
 }
 
-type DriveUploadSessionResponse = {
-  uploadUrl: string
-  method?: string
-  headers?: Record<string, string>
-  fileName: string
-}
-
-async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob) {
-  const response = await fetch(session.uploadUrl, {
-    method: session.method || "PUT",
-    headers: session.headers,
-    body: blob,
-  })
-
-  const payload = await parseJsonResponse(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo a Google Drive."))
-  }
-
-  const driveFileId =
-    payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : ""
-
-  if (!driveFileId) {
-    throw new Error("Google Drive no devolvio el identificador del archivo subido.")
-  }
-
-  return {
-    driveFileId,
-    payload,
-  }
-}
-
 function getErrorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
     return payload.error
@@ -1249,35 +1217,22 @@ export function SubjectWheel() {
     setEntriesError("")
 
     try {
-      const sessionResponse = await fetch("/api/subject-day-entries/upload-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: target.subjectId,
-          subjectName: target.subjectName,
-          sessionDate: target.sessionDate,
-          weekNumber: target.weekNumber,
-          materialId: target.materialId ?? null,
-          mimeType: reviewAudio.mimeType,
-        }),
-      })
-      const sessionPayload = (await requireOkJson(
-        sessionResponse,
-        "No se pudo preparar la subida del audio."
-      )) as DriveUploadSessionResponse
-
-      const { driveFileId } = await uploadBlobToDrive(sessionPayload, reviewAudio.blob)
+      const formData = new FormData()
+      formData.append("subjectId", target.subjectId)
+      formData.append("subjectName", target.subjectName)
+      formData.append("sessionDate", target.sessionDate)
+      formData.append("weekNumber", String(target.weekNumber))
+      if (target.materialId != null) {
+        formData.append("materialId", String(target.materialId))
+      }
+      formData.append(
+        "audio",
+        new File([reviewAudio.blob], `${target.subjectId}-${target.sessionDate}.webm`, { type: reviewAudio.mimeType })
+      )
 
       const response = await fetch("/api/subject-day-entries/complete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: target.subjectId,
-          sessionDate: target.sessionDate,
-          weekNumber: target.weekNumber,
-          materialId: target.materialId ?? null,
-          driveFileId,
-        }),
+        body: formData,
       })
       const payload = await requireOkJson(response, "No se pudo confirmar el audio.")
 

@@ -358,35 +358,20 @@ export function PracticeViewerClient({
     setRecordingError("")
 
     try {
-      const sessionResponse = await fetch("/api/subject-day-entries/upload-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: material.subjectId,
-          subjectName: material.subjectName,
-          sessionDate: material.sessionDate,
-          weekNumber: material.weekNumber,
-          materialId: material.id,
-          mimeType: reviewAudio.mimeType,
-        }),
-      })
-      const sessionPayload = (await requireOkJson(
-        sessionResponse,
-        "No se pudo preparar la subida del audio."
-      )) as DriveUploadSessionResponse
-
-      const { driveFileId } = await uploadBlobToDrive(sessionPayload, reviewAudio.blob)
+      const formData = new FormData()
+      formData.append("subjectId", material.subjectId)
+      formData.append("subjectName", material.subjectName)
+      formData.append("sessionDate", material.sessionDate)
+      formData.append("weekNumber", String(material.weekNumber))
+      formData.append("materialId", String(material.id))
+      formData.append(
+        "audio",
+        new File([reviewAudio.blob], `${material.subjectId}-${material.sessionDate}.webm`, { type: reviewAudio.mimeType })
+      )
 
       const entryResponse = await fetch("/api/subject-day-entries/complete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: material.subjectId,
-          sessionDate: material.sessionDate,
-          weekNumber: material.weekNumber,
-          materialId: material.id,
-          driveFileId,
-        }),
+        body: formData,
       })
       const entryPayload = await requireOkJson(entryResponse, "No se pudo confirmar el audio.")
 

@@ -2,7 +2,7 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { transcribeAudioWithGemini } from "@/lib/gemini"
-import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
+import { downloadDriveFile, getDriveFileMetadata, uploadAudioToDrive } from "@/lib/google-drive"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
@@ -77,6 +77,67 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
 }
 
+type CompletionPayload =
+  | {
+      subjectId: string
+      subjectName?: string
+      sessionDate: string
+      weekNumber: number
+      materialId: number | null
+      driveFileId: string
+      uploadedFile: null
+    }
+  | {
+      subjectId: string
+      subjectName: string
+      sessionDate: string
+      weekNumber: number
+      materialId: number | null
+      driveFileId: ""
+      uploadedFile: File
+    }
+
+async function parseCompletionPayload(request: Request): Promise<CompletionPayload> {
+  const contentType = request.headers.get("content-type") || ""
+
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await request.formData()
+    const subjectId = String(formData.get("subjectId") || "").trim()
+    const subjectName = String(formData.get("subjectName") || "").trim()
+    const sessionDate = String(formData.get("sessionDate") || "").trim()
+    const weekNumber = Number.parseInt(String(formData.get("weekNumber") || ""), 10)
+    const rawMaterialId = Number.parseInt(String(formData.get("materialId") || ""), 10)
+    const materialId = Number.isNaN(rawMaterialId) ? null : rawMaterialId
+    const audio = formData.get("audio")
+
+    if (!(audio instanceof File)) {
+      throw new Error("Missing audio file")
+    }
+
+    return {
+      subjectId,
+      subjectName,
+      sessionDate,
+      weekNumber,
+      materialId,
+      driveFileId: "",
+      uploadedFile: audio,
+    }
+  }
+
+  const payload = await request.json()
+  const rawMaterialId = Number.parseInt(String(payload?.materialId || ""), 10)
+  return {
+    subjectId: String(payload?.subjectId || "").trim(),
+    subjectName: String(payload?.subjectName || "").trim() || undefined,
+    sessionDate: String(payload?.sessionDate || "").trim(),
+    weekNumber: Number.parseInt(String(payload?.weekNumber || ""), 10),
+    materialId: Number.isNaN(rawMaterialId) ? null : rawMaterialId,
+    driveFileId: String(payload?.driveFileId || "").trim(),
+    uploadedFile: null,
+  }
+}
+
 function formatEntry(row: EntryRow) {
   return {
     ...row,
@@ -88,20 +149,38 @@ function formatEntry(row: EntryRow) {
 
 export async function POST(request: Request) {
   try {
-    const payload = await request.json()
-    const subjectId = String(payload?.subjectId || "").trim()
-    const sessionDate = String(payload?.sessionDate || "").trim()
+    const payload = await parseCompletionPayload(request)
+    const subjectId = payload.subjectId
+    const sessionDate = payload.sessionDate
     const parsedSessionDate = parseSessionDate(sessionDate)
-    const requestedWeekNumber = Number.parseInt(String(payload?.weekNumber || ""), 10)
-    const rawMaterialId = Number.parseInt(String(payload?.materialId || ""), 10)
-    const materialId = Number.isNaN(rawMaterialId) ? null : rawMaterialId
-    const driveFileId = String(payload?.driveFileId || "").trim()
+    const requestedWeekNumber = payload.weekNumber
+    const materialId = payload.materialId
 
-    if (!subjectId || !sessionDate || !parsedSessionDate || !driveFileId) {
+    if (!subjectId || !sessionDate || !parsedSessionDate || (!payload.driveFileId && !payload.uploadedFile)) {
       return badRequest("Missing completion metadata")
     }
 
-    const driveFile = await getDriveFileMetadata(driveFileId)
+    const driveFile = payload.uploadedFile
+      ? await (async () => {
+          if (!payload.subjectName) {
+            throw new Error("Missing subjectName")
+          }
+          if (!payload.uploadedFile.type.startsWith("audio/")) {
+            throw new Error("Invalid audio mime type")
+          }
+
+          const fileBuffer = Buffer.from(await payload.uploadedFile.arrayBuffer())
+          return await uploadAudioToDrive({
+            subjectName: payload.subjectName,
+            weekNumber: Number.isNaN(requestedWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : requestedWeekNumber,
+            weekdayIndex: getWeekdayIndexFromDateKey(sessionDate),
+            fileName: payload.uploadedFile.name || `${subjectId}-${sessionDate}.webm`,
+            mimeType: payload.uploadedFile.type || "audio/webm",
+            fileBuffer,
+          })
+        })()
+      : await getDriveFileMetadata(payload.driveFileId)
+
     if (!driveFile.mimeType.startsWith("audio/")) {
       return badRequest("Invalid audio mime type")
     }
