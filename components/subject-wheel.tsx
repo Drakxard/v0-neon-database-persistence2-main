@@ -2707,8 +2707,6 @@ export function SubjectWheel() {
                               <a
                                 href={buildPracticeDefaultViewerHref(material.id)}
                                 className="min-w-0 flex-1 truncate pr-7"
-                                target="_blank"
-                                rel="noreferrer"
                                 onPointerDown={() => prefetchPracticeViewer(material)}
                                 onTouchStart={() => prefetchPracticeViewer(material)}
                               >
@@ -2804,8 +2802,6 @@ export function SubjectWheel() {
                                 <a
                                   href={buildPracticeDefaultViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
-                                  target="_blank"
-                                  rel="noreferrer"
                                   onPointerDown={() => prefetchPracticeViewer(material)}
                                   onTouchStart={() => prefetchPracticeViewer(material)}
                                 >
@@ -3230,8 +3226,6 @@ export function SubjectWheel() {
                         <a
                           href={buildPracticeDefaultViewerHref(currentContinueMaterial.id)}
                           className="font-medium underline-offset-2 hover:underline"
-                          target="_blank"
-                          rel="noreferrer"
                           onPointerDown={() => prefetchPracticeViewer(currentContinueMaterial)}
                           onTouchStart={() => prefetchPracticeViewer(currentContinueMaterial)}
                         >
