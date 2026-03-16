@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   experimental: {
-    middlewareClientMaxBodySize: "50mb",
+    middlewareClientMaxBodySize: "100mb",
   },
   typescript: {
     ignoreBuildErrors: true,
