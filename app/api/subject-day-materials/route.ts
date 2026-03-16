@@ -1,7 +1,8 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
-import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
+import { uploadFileToDrive } from "@/lib/google-drive"
+import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
 
@@ -97,9 +98,89 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  void request
-  return NextResponse.json(
-    { error: "Legacy upload is disabled. Use /api/subject-day-materials/upload-session and /complete." },
-    { status: 410 }
-  )
+  try {
+    const formData = await request.formData()
+    const subjectId = String(formData.get("subjectId") || "").trim()
+    const subjectName = String(formData.get("subjectName") || "").trim()
+    const sessionDate = String(formData.get("sessionDate") || "").trim()
+    const materialType = String(formData.get("materialType") || "").trim() as MaterialType
+    const requestedWeekNumber = Number.parseInt(String(formData.get("weekNumber") || ""), 10)
+    const file = formData.get("file")
+
+    const parsedSessionDate = parseSessionDate(sessionDate)
+    if (!subjectId || !subjectName || !parsedSessionDate || !(file instanceof File)) {
+      return badRequest("Missing subject metadata")
+    }
+
+    if (materialType !== "theory" && materialType !== "practice") {
+      return badRequest("Invalid materialType")
+    }
+
+    if (file.type !== "application/pdf") {
+      return badRequest("Only PDF files are allowed")
+    }
+
+    const derivedWeekNumber = getWeekNumberForDate(parsedSessionDate)
+    const weekNumber =
+      Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
+    const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
+
+    const [orderRow] = await sql`
+      SELECT COALESCE(MAX(order_index), -1) AS max_order
+      FROM subject_day_materials
+      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
+    `
+    const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
+    const safeFileName = file.name.trim() || `${materialType}-${sessionDate}-${nextOrderIndex + 1}.pdf`
+    const finalFileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
+
+    const driveFile = await uploadFileToDrive({
+      subjectName,
+      weekNumber,
+      weekdayIndex,
+      fileName: finalFileName,
+      mimeType: "application/pdf",
+      fileBuffer: Buffer.from(await file.arrayBuffer()),
+    })
+
+    const rows = await sql`
+      INSERT INTO subject_day_materials (
+        subject_id,
+        week_number,
+        session_date,
+        weekday_index,
+        material_type,
+        order_index,
+        file_name,
+        drive_file_id,
+        drive_mime_type,
+        drive_web_view_link
+      )
+      VALUES (
+        ${subjectId},
+        ${weekNumber},
+        ${sessionDate},
+        ${weekdayIndex},
+        ${materialType},
+        ${nextOrderIndex},
+        ${driveFile.name},
+        ${driveFile.id},
+        ${driveFile.mimeType},
+        ${driveFile.webViewLink || ""}
+      )
+      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+    ` as SubjectDayMaterialRow[]
+
+    return NextResponse.json(normalizeRows(rows)[0])
+  } catch (error) {
+    console.error("POST /api/subject-day-materials error:", error)
+    if (isMissingSubjectDayMaterialsTable(error)) {
+      return NextResponse.json(
+        { error: "Falta crear la tabla subject_day_materials. Ejecuta scripts/008-create-subject-day-materials.sql en Neon." },
+        { status: 503 }
+      )
+    }
+    const message = error instanceof Error ? error.message : "Failed to upload material"
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }
