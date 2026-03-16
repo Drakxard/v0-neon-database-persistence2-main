@@ -2,7 +2,6 @@ import { getGoogleAccessToken } from "@/lib/google-oauth"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
-const DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink"
 const DRIVE_RESUMABLE_UPLOAD_URL =
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink"
 const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
@@ -80,45 +79,6 @@ export async function ensureSubjectFolderPath(subjectName: string, weekNumber: n
   return dayFolderId
 }
 
-export async function uploadFileToDrive(params: {
-  subjectName: string
-  weekNumber: number
-  weekdayIndex: number
-  fileName: string
-  mimeType: string
-  fileBuffer: Buffer
-}) {
-  const parentId = await ensureSubjectFolderPath(params.subjectName, params.weekNumber, params.weekdayIndex)
-  const boundary = `boundary-${Date.now()}`
-  const metadata = {
-    name: params.fileName,
-    mimeType: params.mimeType,
-    parents: [parentId],
-  }
-
-  const preamble = Buffer.from(
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${params.mimeType}\r\n\r\n`,
-    "utf8"
-  )
-  const closing = Buffer.from(`\r\n--${boundary}--`, "utf8")
-  const body = Buffer.concat([preamble, params.fileBuffer, closing])
-
-  const response = await driveRequest(DRIVE_UPLOAD_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": `multipart/related; boundary=${boundary}`,
-    },
-    body,
-  })
-
-  return (await response.json()) as {
-    id: string
-    name: string
-    mimeType: string
-    webViewLink: string
-  }
-}
-
 export async function createDriveResumableUploadSession(params: {
   subjectName: string
   weekNumber: number
@@ -163,17 +123,6 @@ export async function getDriveFileMetadata(fileId: string) {
     webViewLink?: string
     size?: string
   }
-}
-
-export async function uploadAudioToDrive(params: {
-  subjectName: string
-  weekNumber: number
-  weekdayIndex: number
-  fileName: string
-  mimeType: string
-  fileBuffer: Buffer
-}) {
-  return uploadFileToDrive(params)
 }
 
 export async function downloadDriveFile(fileId: string) {
