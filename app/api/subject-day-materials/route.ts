@@ -65,25 +65,46 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const subjectId = searchParams.get("subjectId")
     const sessionDate = searchParams.get("sessionDate")
+    const scope = searchParams.get("scope")
 
-    if (!subjectId || !sessionDate) {
-      return badRequest("Missing subjectId or sessionDate")
-    }
-
-    const parsedSessionDate = parseSessionDate(sessionDate)
-    if (!parsedSessionDate) {
-      return badRequest("Invalid sessionDate")
+    if (!subjectId) {
+      return badRequest("Missing subjectId")
     }
 
     const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
-    const weekNumber = Number.isNaN(rawWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : rawWeekNumber
+    let weekNumber = rawWeekNumber
 
-    const rows = await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-      FROM subject_day_materials
-      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
-      ORDER BY material_type ASC, order_index ASC, id ASC
-    ` as SubjectDayMaterialRow[]
+    let rows: SubjectDayMaterialRow[]
+    if (scope === "week") {
+      if (Number.isNaN(rawWeekNumber)) {
+        return badRequest("Missing weekNumber")
+      }
+
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND material_type = 'practice'
+        ORDER BY session_date ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    } else {
+      if (!sessionDate) {
+        return badRequest("Missing sessionDate")
+      }
+
+      const parsedSessionDate = parseSessionDate(sessionDate)
+      if (!parsedSessionDate) {
+        return badRequest("Invalid sessionDate")
+      }
+
+      weekNumber = Number.isNaN(rawWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : rawWeekNumber
+
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
+        ORDER BY material_type ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    }
 
     return NextResponse.json(normalizeRows(rows))
   } catch (error) {

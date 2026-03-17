@@ -412,6 +412,11 @@ function sortSubjectDayEntries(entries: SubjectDayEntry[]) {
 
 function sortSubjectDayMaterials(materials: SubjectDayMaterial[]) {
   return [...materials].sort((left, right) => {
+    const sessionDateComparison = left.session_date.localeCompare(right.session_date)
+    if (sessionDateComparison !== 0) {
+      return sessionDateComparison
+    }
+
     if (left.material_type !== right.material_type) {
       return left.material_type.localeCompare(right.material_type)
     }
@@ -604,6 +609,7 @@ export function SubjectWheel() {
   const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
+  const isWeeklyExercisesScope = practiceSectionView === "exercises" && showAllSubjectsForDay
 
   // Load the persisted session for the currently selected date.
   useEffect(() => {
@@ -868,15 +874,25 @@ export function SubjectWheel() {
     setEntriesError("")
 
     try {
-      const params = new URLSearchParams({
+      const entriesParams = new URLSearchParams({
         subjectId: currentSubject.id,
-        sessionDate: currentDateKey,
+        weekNumber: String(selectedWeekNumber),
+      })
+      const materialsParams = new URLSearchParams({
+        subjectId: currentSubject.id,
         weekNumber: String(selectedWeekNumber),
       })
 
+      if (isWeeklyExercisesScope) {
+        materialsParams.set("scope", "week")
+      } else {
+        entriesParams.set("sessionDate", currentDateKey)
+        materialsParams.set("sessionDate", currentDateKey)
+      }
+
       const [entriesResponse, materialsResponse] = await Promise.all([
-        fetch(`/api/subject-day-entries?${params.toString()}`),
-        fetch(`/api/subject-day-materials?${params.toString()}`),
+        fetch(`/api/subject-day-entries?${entriesParams.toString()}`),
+        fetch(`/api/subject-day-materials?${materialsParams.toString()}`),
       ])
       const [entriesPayload, materialsPayload] = await Promise.all([
         parseJsonResponse(entriesResponse),
@@ -902,7 +918,7 @@ export function SubjectWheel() {
       setIsEntriesLoading(false)
       setIsMaterialsLoading(false)
     }
-  }, [currentDateKey, currentSubject, isDialogOpen, selectedWeekNumber])
+  }, [currentDateKey, currentSubject, isDialogOpen, isWeeklyExercisesScope, selectedWeekNumber])
 
   useEffect(() => {
     void loadSubjectDayData()
@@ -2743,7 +2759,11 @@ export function SubjectWheel() {
                     ) : null}
                   </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
-                    {practiceSectionView === "exercises" ? "Teoria y practica por archivo" : "Flujo anterior de dudas"}
+                    {practiceSectionView === "exercises"
+                      ? isWeeklyExercisesScope
+                        ? "Practica de toda la semana por archivo"
+                        : "Teoria y practica por archivo"
+                      : "Flujo anterior de dudas"}
                   </DialogDescription>
                 </div>
 
@@ -2912,7 +2932,10 @@ export function SubjectWheel() {
                               <>
                                 <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-slate-500">
                                   <Checkbox checked={false} disabled />
-                                  {material.file_name}
+                                  <span className="truncate">
+                                    {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}
+                                    {material.file_name}
+                                  </span>
                                 </span>
                                 <span className="inline-flex items-center gap-2 text-xs text-slate-500">
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2931,6 +2954,7 @@ export function SubjectWheel() {
                                   onPointerDown={() => prefetchPracticeViewer(material)}
                                   onTouchStart={() => prefetchPracticeViewer(material)}
                                 >
+                                  {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}
                                   {material.file_name}
                                 </a>
                                 <Button
@@ -2950,7 +2974,9 @@ export function SubjectWheel() {
                         ))
                       ) : (
                         <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
-                          Todavia no hay PDFs de practica para este dia.
+                          {isWeeklyExercisesScope
+                            ? "Todavia no hay PDFs de practica para esta semana."
+                            : "Todavia no hay PDFs de practica para este dia."}
                         </p>
                       )}
                       {practiceMaterials.filter((material) => !("is_pending_upload" in material)).map((material) => {
@@ -2960,7 +2986,7 @@ export function SubjectWheel() {
                         return (
                           <div key={`entries-${material.id}`} className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3">
                             <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                              Audios en {material.file_name}
+                              Audios en {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}{material.file_name}
                             </p>
                             {materialEntries.map((entry) => {
                               const isExpandedAudio = expandedAudioEntryId === entry.id
