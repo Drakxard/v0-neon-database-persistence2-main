@@ -498,6 +498,7 @@ export function SubjectWheel() {
   const [audioSourceUrls, setAudioSourceUrls] = useState<Record<number, string>>({})
   const [isCopyingEntries, setIsCopyingEntries] = useState(false)
   const [practiceSectionView, setPracticeSectionView] = useState<"theory" | "exercises">("theory")
+  const [exerciseWeeklyScopeEnabled, setExerciseWeeklyScopeEnabled] = useState(false)
   const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
@@ -609,7 +610,7 @@ export function SubjectWheel() {
   const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
-  const isWeeklyExercisesScope = practiceSectionView === "exercises" && showAllSubjectsForDay
+  const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
 
   // Load the persisted session for the currently selected date.
   useEffect(() => {
@@ -1076,6 +1077,7 @@ export function SubjectWheel() {
     setAudioSourceUrls({})
     setIsCopyingEntries(false)
     setPracticeSectionView("theory")
+    setExerciseWeeklyScopeEnabled(false)
     setIsUploadingMaterialType(null)
     setIsLinkDialogOpen(false)
     setLinkEntryId(null)
@@ -1961,6 +1963,7 @@ export function SubjectWheel() {
     setIsPracticeOpen(false)
     setCurrentSubject(subject)
     resetSubjectUiState()
+    setExerciseWeeklyScopeEnabled(showAllSubjectsForDay)
     setPracticeSectionView("exercises")
     setIsDialogOpen(true)
   }
@@ -2277,8 +2280,12 @@ export function SubjectWheel() {
     setHistory([])
     setHistoryIndex(-1)
 
-    if (!checked && currentSubject && !getScheduledSubjectIdsForDate(selectedDate).includes(currentSubject.id)) {
-      void closeSubjectDialog()
+    if (!checked && isDialogOpen && practiceSectionView === "exercises") {
+      if (currentSubject && !getScheduledSubjectIdsForDate(selectedDate).includes(currentSubject.id)) {
+        void closeSubjectDialog()
+      } else {
+        setExerciseWeeklyScopeEnabled(false)
+      }
     }
   }
 
