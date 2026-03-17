@@ -2265,12 +2265,21 @@ export function SubjectWheel() {
   }
 
   const handleShowAllSubjectsChange = (checked: boolean) => {
+    const nextCompletedIds = checked
+      ? allCompletedSubjectIds
+      : allCompletedSubjectIds.filter((subjectId) => getScheduledSubjectIdsForDate(selectedDate).includes(subjectId))
+
     setShowAllSubjectsForDay(checked)
-    const normalized = normalizeSubjectsForDay(allCompletedSubjectIds, selectedDate, checked)
+    setAllCompletedSubjectIds(nextCompletedIds)
+    const normalized = normalizeSubjectsForDay(nextCompletedIds, selectedDate, checked)
     setActiveSubjects(normalized.activeSubjects)
     setCompletedSubjects(normalized.completedSubjects)
     setHistory([])
     setHistoryIndex(-1)
+
+    if (!checked && currentSubject && !getScheduledSubjectIdsForDate(selectedDate).includes(currentSubject.id)) {
+      void closeSubjectDialog()
+    }
   }
 
   // Helper function to calculate optimal font size based on text length and segment width
