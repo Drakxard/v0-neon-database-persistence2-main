@@ -3801,7 +3801,6 @@ export function SubjectWheel() {
                     aria-label="Mostrar todas las materias del dia"
                     className="h-5 w-9 data-[state=checked]:bg-slate-900 data-[state=unchecked]:bg-slate-300"
                   />
-                  <span className="min-w-7">{showAllSubjectsForDay ? "on" : "off"}</span>
                 </div>
               </div>
               <DialogClose asChild>
