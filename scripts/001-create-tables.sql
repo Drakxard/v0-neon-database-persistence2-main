@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS daily_sessions (
   date DATE NOT NULL UNIQUE DEFAULT CURRENT_DATE,
   active_subject_ids JSONB NOT NULL DEFAULT '[]',
   completed_subjects JSONB NOT NULL DEFAULT '{}',
+  show_all_subjects BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

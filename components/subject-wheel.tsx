@@ -9,6 +9,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
 interface Subject {
@@ -152,6 +153,15 @@ type ContinuePayload = {
   previousFeaturedEntry: SubjectDayEntry | null
 }
 
+type SubjectVisibilityState = {
+  activeSubjects: Subject[]
+  completedSubjects: Subject[]
+}
+
+type SubjectHistoryState = SubjectVisibilityState & {
+  allCompletedIds: string[]
+}
+
 const INITIAL_SUBJECTS: Subject[] = [
   { id: "algebra", name: "Álgebra 2", color: "#0098C8" },
   { id: "calculo2", name: "Cálculo 2", color: "#2563eb" },
@@ -210,8 +220,12 @@ function getScheduledSubjectIdsForDate(date: Date) {
   return SUBJECT_IDS_BY_WEEKDAY[weekdayIndex] ?? []
 }
 
-function getScheduledSubjectsForDate(date: Date) {
-  return getScheduledSubjectIdsForDate(date)
+function getDisplaySubjectIdsForDate(date: Date, showAllSubjects: boolean) {
+  return showAllSubjects ? INITIAL_SUBJECTS.map((subject) => subject.id) : getScheduledSubjectIdsForDate(date)
+}
+
+function getDisplaySubjectsForDate(date: Date, showAllSubjects: boolean) {
+  return getDisplaySubjectIdsForDate(date, showAllSubjects)
     .map((subjectId) => getSubjectById(subjectId))
     .filter(Boolean) as Subject[]
 }
@@ -268,16 +282,16 @@ function subjectsToIds(subjects: Subject[]): string[] {
   return subjects.map((s) => s.id)
 }
 
-function normalizeSubjectsForDay(activeIds: string[], completedIds: string[], date: Date) {
-  const scheduledIds = getScheduledSubjectIdsForDate(date)
-  const completedSet = new Set(completedIds.filter((id) => scheduledIds.includes(id)))
+function normalizeSubjectsForDay(completedIds: string[], date: Date, showAllSubjects: boolean): SubjectVisibilityState {
+  const displayIds = getDisplaySubjectIdsForDate(date, showAllSubjects)
+  const completedSet = new Set(completedIds.filter((id) => displayIds.includes(id)))
 
-  const completedSubjects = scheduledIds
+  const completedSubjects = displayIds
     .filter((id) => completedSet.has(id))
     .map((id) => getSubjectById(id))
     .filter(Boolean) as Subject[]
 
-  const activeSubjects = scheduledIds
+  const activeSubjects = displayIds
     .filter((id) => !completedSet.has(id))
     .map((id) => getSubjectById(id))
     .filter(Boolean) as Subject[]
@@ -432,9 +446,9 @@ function getNextUncheckedPracticeMaterial(
 
 export function SubjectWheel() {
   const router = useRouter()
-  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getScheduledSubjectsForDate(parseDateKey(getTodayDateString())))
+  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
-  const [history, setHistory] = useState<{ active: Subject[]; completed: Subject[] }[]>([])
+  const [history, setHistory] = useState<SubjectHistoryState[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [isLoading, setIsLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
@@ -447,6 +461,8 @@ export function SubjectWheel() {
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
+  const [showAllSubjectsForDay, setShowAllSubjectsForDay] = useState(false)
+  const [allCompletedSubjectIds, setAllCompletedSubjectIds] = useState<string[]>([])
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
   const [materials, setMaterials] = useState<SubjectDayMaterial[]>([])
   const [pendingMaterials, setPendingMaterials] = useState<PendingSubjectDayMaterial[]>([])
@@ -627,16 +643,23 @@ export function SubjectWheel() {
         if (session && Array.isArray(session.active_subject_ids)) {
           const completedSubjectsData = session.completed_subjects || {}
           const completedIds = Object.keys(completedSubjectsData)
-          const normalized = normalizeSubjectsForDay(session.active_subject_ids, completedIds, selectedDate)
+          const nextShowAllSubjects = Boolean(session.show_all_subjects)
+          const normalized = normalizeSubjectsForDay(completedIds, selectedDate, nextShowAllSubjects)
+          setShowAllSubjectsForDay(nextShowAllSubjects)
+          setAllCompletedSubjectIds(completedIds)
           setActiveSubjects(normalized.activeSubjects)
           setCompletedSubjects(normalized.completedSubjects)
         } else {
-          setActiveSubjects(getScheduledSubjectsForDate(selectedDate))
+          setShowAllSubjectsForDay(false)
+          setAllCompletedSubjectIds([])
+          setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false))
           setCompletedSubjects([])
         }
       } catch (error) {
         console.error("Failed to load from database:", error)
-        setActiveSubjects(getScheduledSubjectsForDate(selectedDate))
+        setShowAllSubjectsForDay(false)
+        setAllCompletedSubjectIds([])
+        setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false))
         setCompletedSubjects([])
       } finally {
         setHistory([])
@@ -676,9 +699,9 @@ export function SubjectWheel() {
       setSaveStatus("saving")
       try {
         const activeIds = subjectsToIds(activeSubjects)
-        const completedObj = completedSubjects.reduce(
+        const completedObj = allCompletedSubjectIds.reduce(
           (acc, subject) => {
-            acc[subject.id] = true
+            acc[subject] = true
             return acc
           },
           {} as Record<string, boolean>
@@ -691,6 +714,7 @@ export function SubjectWheel() {
             date: currentDateKey,
             activeSubjectIds: activeIds,
             completedSubjects: completedObj,
+            showAllSubjects: showAllSubjectsForDay,
           }),
         })
 
@@ -706,7 +730,7 @@ export function SubjectWheel() {
     }
 
     syncToDatabase()
-  }, [activeSubjects, completedSubjects, currentDateKey])
+  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, showAllSubjectsForDay])
 
   // Load persisted AI prompt on mount
   useEffect(() => {
@@ -1124,11 +1148,13 @@ export function SubjectWheel() {
     if (!completedSubjects.some((item) => item.id === subject.id)) {
       const nextActive = activeSubjects.filter((item) => item.id !== subject.id)
       const nextCompleted = [...completedSubjects, subject]
+      const nextCompletedIds = Array.from(new Set([...allCompletedSubjectIds, subject.id]))
       const nextHistory = history.slice(0, historyIndex + 1)
-      nextHistory.push({ active: nextActive, completed: nextCompleted })
+      nextHistory.push({ activeSubjects: nextActive, completedSubjects: nextCompleted, allCompletedIds: nextCompletedIds })
 
       setActiveSubjects(nextActive)
       setCompletedSubjects(nextCompleted)
+      setAllCompletedSubjectIds(nextCompletedIds)
       setHistory(nextHistory)
       setHistoryIndex(nextHistory.length - 1)
     }
@@ -1918,7 +1944,6 @@ export function SubjectWheel() {
 
     setIsPracticeOpen(false)
     setCurrentSubject(subject)
-    setCurrentDateKey(todayKey)
     resetSubjectUiState()
     setPracticeSectionView("exercises")
     setIsDialogOpen(true)
@@ -2097,8 +2122,9 @@ export function SubjectWheel() {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1
       const state = history[newIndex]
-      setActiveSubjects(state.active)
-      setCompletedSubjects(state.completed)
+      setActiveSubjects(state.activeSubjects)
+      setCompletedSubjects(state.completedSubjects)
+      setAllCompletedSubjectIds(state.allCompletedIds)
       setHistoryIndex(newIndex)
     }
   }
@@ -2107,8 +2133,9 @@ export function SubjectWheel() {
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1
       const state = history[newIndex]
-      setActiveSubjects(state.active)
-      setCompletedSubjects(state.completed)
+      setActiveSubjects(state.activeSubjects)
+      setCompletedSubjects(state.completedSubjects)
+      setAllCompletedSubjectIds(state.allCompletedIds)
       setHistoryIndex(newIndex)
     }
   }
@@ -2116,7 +2143,10 @@ export function SubjectWheel() {
   const canUndo = historyIndex > 0
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
-  const practiceTodaySubjects = useMemo(() => getScheduledSubjectsForDate(new Date()), [])
+  const practiceDaySubjects = useMemo(
+    () => getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay),
+    [selectedDate, showAllSubjectsForDay]
+  )
   const latestWeekNumber = currentCalendarWeek
   const theoryMaterials = useMemo(
     () =>
@@ -2192,12 +2222,13 @@ export function SubjectWheel() {
 
   const handleReset = async () => {
     try {
-      const scheduledSubjects = getScheduledSubjectsForDate(selectedDate)
+      const scheduledSubjects = getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay)
       const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
       
       // Reset local state
       setActiveSubjects(scheduledSubjects)
       setCompletedSubjects([])
+      setAllCompletedSubjectIds([])
       setHistory([])
       setHistoryIndex(-1)
 
@@ -2209,11 +2240,21 @@ export function SubjectWheel() {
           date: currentDateKey,
           activeSubjectIds: scheduledSubjectIds,
           completedSubjects: {},
+          showAllSubjects: showAllSubjectsForDay,
         }),
       })
     } catch (error) {
       console.error("[v0] Failed to reset:", error)
     }
+  }
+
+  const handleShowAllSubjectsChange = (checked: boolean) => {
+    setShowAllSubjectsForDay(checked)
+    const normalized = normalizeSubjectsForDay(allCompletedSubjectIds, selectedDate, checked)
+    setActiveSubjects(normalized.activeSubjects)
+    setCompletedSubjects(normalized.completedSubjects)
+    setHistory([])
+    setHistoryIndex(-1)
   }
 
   // Helper function to calculate optimal font size based on text length and segment width
@@ -3765,6 +3806,24 @@ export function SubjectWheel() {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+            <div className="mx-auto mb-6 w-full max-w-5xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">allMaterias</p>
+                  <p className="text-base font-semibold text-slate-800">Mostrar todas las materias de este dia</p>
+                  <p className="text-sm text-slate-500">
+                    {showAllSubjectsForDay
+                      ? "Este dia usa las 6 materias en practica y en la rueda."
+                      : "Este dia usa solo las materias programadas normalmente."}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 self-start sm:self-center">
+                  <span className="text-sm font-medium text-slate-500">{showAllSubjectsForDay ? "On" : "Off"}</span>
+                  <Switch checked={showAllSubjectsForDay} onCheckedChange={handleShowAllSubjectsChange} aria-label="Mostrar todas las materias del dia" />
+                </div>
+              </div>
+            </div>
+
             {practiceLaunchView === "menu" && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
                 <div className="grid w-full gap-6 md:grid-cols-2">
@@ -3922,11 +3981,11 @@ export function SubjectWheel() {
             {practiceLaunchView === "exercises" && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
                 <div className="space-y-2">
-                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Materias de hoy</h2>
+                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Materias del dia</h2>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {practiceTodaySubjects.map((subject) => (
+                  {practiceDaySubjects.map((subject) => (
                     <button
                       key={subject.id}
                       type="button"

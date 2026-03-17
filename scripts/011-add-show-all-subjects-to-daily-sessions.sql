@@ -1,0 +1,2 @@
+ALTER TABLE daily_sessions
+ADD COLUMN IF NOT EXISTS show_all_subjects BOOLEAN NOT NULL DEFAULT FALSE;
