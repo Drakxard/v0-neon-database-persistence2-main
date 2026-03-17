@@ -3789,10 +3789,21 @@ export function SubjectWheel() {
         <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
           <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-6 py-5 sm:px-8">
             <div className="flex items-start justify-between gap-4">
-              <DialogTitle className="flex items-center gap-2">
-                <GraduationCap className="h-5 w-5 text-slate-600" />
-                Practicar
-              </DialogTitle>
+              <div className="flex min-w-0 items-center gap-4">
+                <DialogTitle className="flex items-center gap-2">
+                  <GraduationCap className="h-5 w-5 text-slate-600" />
+                  Practicar
+                </DialogTitle>
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Switch
+                    checked={showAllSubjectsForDay}
+                    onCheckedChange={handleShowAllSubjectsChange}
+                    aria-label="Mostrar todas las materias del dia"
+                    className="h-5 w-9 data-[state=checked]:bg-slate-900 data-[state=unchecked]:bg-slate-300"
+                  />
+                  <span className="min-w-7">{showAllSubjectsForDay ? "on" : "off"}</span>
+                </div>
+              </div>
               <DialogClose asChild>
                 <button
                   type="button"
@@ -3806,24 +3817,6 @@ export function SubjectWheel() {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
-            <div className="mx-auto mb-6 w-full max-w-5xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">allMaterias</p>
-                  <p className="text-base font-semibold text-slate-800">Mostrar todas las materias de este dia</p>
-                  <p className="text-sm text-slate-500">
-                    {showAllSubjectsForDay
-                      ? "Este dia usa las 6 materias en practica y en la rueda."
-                      : "Este dia usa solo las materias programadas normalmente."}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 self-start sm:self-center">
-                  <span className="text-sm font-medium text-slate-500">{showAllSubjectsForDay ? "On" : "Off"}</span>
-                  <Switch checked={showAllSubjectsForDay} onCheckedChange={handleShowAllSubjectsChange} aria-label="Mostrar todas las materias del dia" />
-                </div>
-              </div>
-            </div>
-
             {practiceLaunchView === "menu" && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
                 <div className="grid w-full gap-6 md:grid-cols-2">
