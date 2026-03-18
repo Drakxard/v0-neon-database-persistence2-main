@@ -1675,6 +1675,7 @@ export function SubjectWheel() {
       )) as DriveUploadSessionResponse
 
       const { driveFileId } = await uploadBlobToDrive(sessionPayload, file)
+      const persistedFileName = file.name.trim()
 
       const response = await fetch("/api/subject-day-materials/complete", {
         method: "POST",
@@ -1685,7 +1686,7 @@ export function SubjectWheel() {
           weekNumber: selectedWeekNumber,
           materialType,
           driveFileId,
-          fileName: file.name,
+          fileName: persistedFileName,
         }),
       })
       const payload = await requireOkJson(response, "No se pudo confirmar el PDF.")

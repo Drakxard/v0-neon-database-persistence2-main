@@ -459,6 +459,7 @@ export function PracticeViewerClient({
         )) as DriveUploadSessionResponse
 
         const { driveFileId } = await uploadBlobToDrive(sessionPayload, payload.blob)
+        const persistedFileName = fileName.trim()
 
         await requireOkJson(
           await fetch("/api/subject-day-materials/complete", {
@@ -470,7 +471,7 @@ export function PracticeViewerClient({
               weekNumber: activeContext.weekNumber,
               materialType: "practice",
               driveFileId,
-              fileName,
+              fileName: persistedFileName,
             }),
           }),
           "No se pudo confirmar el PDF fragmentado."

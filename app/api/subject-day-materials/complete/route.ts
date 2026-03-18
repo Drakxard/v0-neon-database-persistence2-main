@@ -48,6 +48,12 @@ function parseSessionDate(sessionDate: string) {
   return parsed
 }
 
+function normalizeUploadedPdfFileName(fileName: string) {
+  const trimmed = fileName.trim()
+  if (!trimmed) return ""
+  return trimmed.toLowerCase().endsWith(".pdf") ? trimmed : `${trimmed}.pdf`
+}
+
 function normalizeSessionDateKey(sessionDate: string | Date) {
   if (sessionDate instanceof Date) {
     return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
@@ -89,6 +95,14 @@ export async function POST(request: Request) {
       return badRequest("Only PDF files are allowed")
     }
 
+    const persistedFileName = isR2ObjectKey(driveFileId)
+      ? normalizeUploadedPdfFileName(uploadedFileName)
+      : normalizeUploadedPdfFileName(uploadedFileName) || driveFile.name
+
+    if (!persistedFileName) {
+      return badRequest("Missing fileName for uploaded PDF")
+    }
+
     const derivedWeekNumber = getWeekNumberForDate(parsedSessionDate)
     const weekNumber =
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
@@ -100,8 +114,6 @@ export async function POST(request: Request) {
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
     `
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
-
-    const persistedFileName = uploadedFileName || driveFile.name
 
     const rows = await sql`
       INSERT INTO subject_day_materials (
