@@ -2949,11 +2949,13 @@ export function SubjectWheel() {
                               <>
                                 <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-slate-500">
                                   <Checkbox checked={false} disabled />
-                                  <span className="truncate">
-                                    {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}
-                                    {material.file_name}
-                                  </span>
+                                  <span className="truncate">{material.file_name}</span>
                                 </span>
+                                {isWeeklyExercisesScope ? (
+                                  <span className="shrink-0 text-xs text-slate-400">
+                                    {getWeekdayLabel(material.session_date)} {material.session_date}
+                                  </span>
+                                ) : null}
                                 <span className="inline-flex items-center gap-2 text-xs text-slate-500">
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                   Subiendo...
@@ -2971,9 +2973,13 @@ export function SubjectWheel() {
                                   onPointerDown={() => prefetchPracticeViewer(material)}
                                   onTouchStart={() => prefetchPracticeViewer(material)}
                                 >
-                                  {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}
                                   {material.file_name}
                                 </a>
+                                {isWeeklyExercisesScope ? (
+                                  <span className="shrink-0 text-xs text-slate-400">
+                                    {getWeekdayLabel(material.session_date)} {material.session_date}
+                                  </span>
+                                ) : null}
                                 <Button
                                   type="button"
                                   variant="ghost"
@@ -3003,7 +3009,8 @@ export function SubjectWheel() {
                         return (
                           <div key={`entries-${material.id}`} className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3">
                             <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                              Audios en {isWeeklyExercisesScope ? `${getWeekdayLabel(material.session_date)} ${material.session_date} - ` : ""}{material.file_name}
+                              Audios en {material.file_name}
+                              {isWeeklyExercisesScope ? ` (${getWeekdayLabel(material.session_date)} ${material.session_date})` : ""}
                             </p>
                             {materialEntries.map((entry) => {
                               const isExpandedAudio = expandedAudioEntryId === entry.id
