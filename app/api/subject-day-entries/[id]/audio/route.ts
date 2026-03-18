@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless"
 
 import { downloadDriveFile } from "@/lib/google-drive"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -18,6 +19,9 @@ function isMissingSubjectDayEntriesTable(error: unknown) {
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
@@ -25,7 +29,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     }
 
     const rows = await sql`
-      SELECT drive_file_id, drive_file_name, drive_mime_type
+      SELECT drive_file_id, drive_file_name, drive_mime_type, subject_id
       FROM subject_day_entries
       WHERE id = ${entryId}
       LIMIT 1
@@ -34,6 +38,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!entry) {
       return Response.json({ error: "Entry not found" }, { status: 404 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, String(entry.subject_id || ""))
+    if (forbidden) return forbidden
 
     const file = isR2ObjectKey(entry.drive_file_id)
       ? await downloadR2Object(entry.drive_file_id)

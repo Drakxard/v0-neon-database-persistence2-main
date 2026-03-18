@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { neon } from "@neondatabase/serverless"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -50,12 +51,28 @@ function normalizeRow(row: PositionRow) {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const materialId = Number.parseInt(id, 10)
 
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
     }
+
+    const scopeRows = await sql`
+      SELECT subject_id
+      FROM subject_day_materials
+      WHERE id = ${materialId}
+      LIMIT 1
+    ` as Array<{ subject_id: string }>
+    if (!scopeRows[0]) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 })
+    }
+
+    const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
+    if (forbidden) return forbidden
 
     const rows = await sql`
       SELECT
@@ -91,12 +108,28 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const materialId = Number.parseInt(id, 10)
 
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
     }
+
+    const scopeRows = await sql`
+      SELECT subject_id
+      FROM subject_day_materials
+      WHERE id = ${materialId}
+      LIMIT 1
+    ` as Array<{ subject_id: string }>
+    if (!scopeRows[0]) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 })
+    }
+
+    const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
+    if (forbidden) return forbidden
 
     const body = await request.json().catch(() => null)
     const entryId = Number.parseInt(String(body?.entryId ?? ""), 10)

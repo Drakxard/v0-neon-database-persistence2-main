@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -16,6 +17,9 @@ function isMissingSubjectDayEntriesTable(error: unknown) {
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
@@ -38,7 +42,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     const existingEntry = await sql`
-      SELECT id
+      SELECT id, subject_id
       FROM subject_day_entries
       WHERE id = ${entryId}
     `
@@ -46,6 +50,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!existingEntry[0]) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, String(existingEntry[0].subject_id || ""))
+    if (forbidden) return forbidden
 
     const [orderRow] = await sql`
       SELECT COALESCE(MAX(order_index), -1) AS max_order

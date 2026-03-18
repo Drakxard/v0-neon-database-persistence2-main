@@ -4,6 +4,13 @@ const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 export const APP_AUTH_COOKIE_NAME = "app_auth_session"
 export const APP_AUTH_STATE_COOKIE_NAME = "app_auth_state"
 
+export type AppSessionTokenPayload = {
+  email: string
+  isAdmin: boolean
+  allowedSubjectIds: string[]
+  expiresAtMs: number
+}
+
 function requireEnv(name: string) {
   const value = process.env[name]
   if (!value) {
@@ -18,7 +25,7 @@ export function getAppAuthConfig() {
     clientId: requireEnv("GOOGLE_OAUTH_CLIENT_ID"),
     clientSecret: requireEnv("GOOGLE_OAUTH_CLIENT_SECRET"),
     redirectUri: requireEnv("GOOGLE_AUTH_REDIRECT_URI"),
-    allowedEmail: requireEnv("ALLOWED_GOOGLE_EMAIL").toLowerCase(),
+    adminEmail: requireEnv("ALLOWED_GOOGLE_EMAIL").toLowerCase(),
     sessionSecret: requireEnv("APP_AUTH_SECRET"),
   }
 }
@@ -44,25 +51,61 @@ async function signPayload(payload: string, secret: string) {
 }
 
 export async function createSessionToken(email: string, secret: string, expiresAtMs: number) {
-  const payload = `${toBase64Url(email.toLowerCase())}.${expiresAtMs}`
-  const signature = await signPayload(payload, secret)
-  return `${payload}.${signature}`
+  const payload = toBase64Url(
+    JSON.stringify({
+      email: email.toLowerCase(),
+      isAdmin: false,
+      allowedSubjectIds: [],
+    })
+  )
+  const signature = await signPayload(`${payload}.${expiresAtMs}`, secret)
+  return `${payload}.${expiresAtMs}.${signature}`
 }
 
-export async function verifySessionToken(token: string, secret: string) {
+export async function createSessionTokenFromPayload(payload: Omit<AppSessionTokenPayload, "expiresAtMs">, secret: string, expiresAtMs: number) {
+  const encodedPayload = toBase64Url(
+    JSON.stringify({
+      email: payload.email.toLowerCase(),
+      isAdmin: payload.isAdmin,
+      allowedSubjectIds: payload.allowedSubjectIds,
+    })
+  )
+  const signature = await signPayload(`${encodedPayload}.${expiresAtMs}`, secret)
+  return `${encodedPayload}.${expiresAtMs}.${signature}`
+}
+
+export async function verifySessionToken(token: string, secret: string): Promise<AppSessionTokenPayload | null> {
   const parts = token.split(".")
   if (parts.length !== 3) return null
 
-  const [encodedEmail, encodedExpiry, signature] = parts
-  const payload = `${encodedEmail}.${encodedExpiry}`
+  const [encodedPayload, encodedExpiry, providedSignature] = parts
+  const payload = `${encodedPayload}.${encodedExpiry}`
   const expectedSignature = await signPayload(payload, secret)
-  if (signature !== expectedSignature) return null
+  if (providedSignature !== expectedSignature) return null
 
   const expiresAtMs = Number.parseInt(encodedExpiry, 10)
   if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) return null
 
-  const email = fromBase64Url(encodedEmail).toLowerCase()
-  return { email, expiresAtMs }
+  try {
+    const parsedPayload = JSON.parse(fromBase64Url(encodedPayload)) as {
+      email?: unknown
+      isAdmin?: unknown
+      allowedSubjectIds?: unknown
+    }
+
+    if (typeof parsedPayload.email !== "string") return null
+
+    return {
+      email: parsedPayload.email.toLowerCase(),
+      isAdmin: Boolean(parsedPayload.isAdmin),
+      allowedSubjectIds: Array.isArray(parsedPayload.allowedSubjectIds)
+        ? parsedPayload.allowedSubjectIds.filter((value): value is string => typeof value === "string")
+        : [],
+      expiresAtMs,
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function exchangeCodeForIdentity(code: string) {

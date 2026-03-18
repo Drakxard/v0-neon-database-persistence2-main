@@ -1,9 +1,14 @@
 import { neon } from '@neondatabase/serverless'
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { normalizeAllowedSubjectIds } from "@/lib/subjects"
 
 const sql = neon(process.env.DATABASE_URL!)
 
 export async function GET(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const date = searchParams.get('date')
 
@@ -31,10 +36,20 @@ export async function GET(request: Request) {
       ? JSON.parse(row.completed_subjects)
       : row.completed_subjects
 
+    const allowedSubjectIds = auth.session!.allowedSubjectIds
+    const filteredActiveSubjectIds = auth.session!.isAdmin
+      ? activeSubjectIds
+      : normalizeAllowedSubjectIds(activeSubjectIds).filter((subjectId: string) => allowedSubjectIds.includes(subjectId))
+    const filteredCompletedSubjects = auth.session!.isAdmin
+      ? completedSubjects
+      : Object.fromEntries(
+          Object.entries(completedSubjects || {}).filter(([subjectId]) => allowedSubjectIds.includes(subjectId))
+        )
+
     return Response.json({
       ...row,
-      active_subject_ids: activeSubjectIds,
-      completed_subjects: completedSubjects,
+      active_subject_ids: filteredActiveSubjectIds,
+      completed_subjects: filteredCompletedSubjects,
       show_all_subjects: Boolean(row.show_all_subjects),
     })
   } catch (error) {
@@ -45,6 +60,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const rawBody = await request.text()
     if (!rawBody.trim()) {
       return Response.json({ error: 'Empty request body' }, { status: 400 })
@@ -55,6 +73,16 @@ export async function POST(request: Request) {
     if (!date || !Array.isArray(activeSubjectIds)) {
       return Response.json({ error: 'Invalid request data' }, { status: 400 })
     }
+
+    const normalizedActiveSubjectIds = normalizeAllowedSubjectIds(activeSubjectIds)
+    for (const subjectId of normalizedActiveSubjectIds) {
+      const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+      if (forbidden) return forbidden
+    }
+
+    const normalizedCompletedSubjects = Object.fromEntries(
+      Object.entries(completedSubjects || {}).filter(([subjectId]) => !ensureSubjectAccess(auth.session!, subjectId))
+    )
 
     // Check if session exists
     const existing = await sql`
@@ -68,8 +96,8 @@ export async function POST(request: Request) {
       // Update
       result = await sql`
         UPDATE daily_sessions
-        SET active_subject_ids = ${JSON.stringify(activeSubjectIds)},
-            completed_subjects = ${JSON.stringify(completedSubjects || {})},
+        SET active_subject_ids = ${JSON.stringify(normalizedActiveSubjectIds)},
+            completed_subjects = ${JSON.stringify(normalizedCompletedSubjects)},
             show_all_subjects = ${Boolean(showAllSubjects)},
             updated_at = NOW()
         WHERE date = ${date}
@@ -79,7 +107,7 @@ export async function POST(request: Request) {
       // Insert
       result = await sql`
         INSERT INTO daily_sessions (date, active_subject_ids, completed_subjects, show_all_subjects)
-        VALUES (${date}, ${JSON.stringify(activeSubjectIds)}, ${JSON.stringify(completedSubjects || {})}, ${Boolean(showAllSubjects)})
+        VALUES (${date}, ${JSON.stringify(normalizedActiveSubjectIds)}, ${JSON.stringify(normalizedCompletedSubjects)}, ${Boolean(showAllSubjects)})
         RETURNING id, date, active_subject_ids, completed_subjects, show_all_subjects
       `
     }

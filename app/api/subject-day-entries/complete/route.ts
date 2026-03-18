@@ -5,6 +5,7 @@ import { transcribeAudioWithGemini } from "@/lib/gemini"
 import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
 import { downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -112,6 +113,9 @@ function formatEntry(row: EntryRow) {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const payload = await parseCompletionPayload(request)
     const subjectId = payload.subjectId
     const sessionDate = payload.sessionDate
@@ -123,6 +127,9 @@ export async function POST(request: Request) {
     if (!subjectId || !sessionDate || !parsedSessionDate || !payload.driveFileId) {
       return badRequest("Missing completion metadata")
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     const driveFile = isR2ObjectKey(payload.driveFileId)
       ? await getR2ObjectMetadata(payload.driveFileId)
@@ -193,7 +200,7 @@ export async function POST(request: Request) {
           ${driveFile.id},
           ${uploadedFileName || driveFile.name},
           ${driveFile.mimeType},
-          ${driveFile.webViewLink || ""}
+          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
         )
         RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
@@ -223,7 +230,7 @@ export async function POST(request: Request) {
           ${driveFile.id},
           ${uploadedFileName || driveFile.name},
           ${driveFile.mimeType},
-          ${driveFile.webViewLink || ""}
+          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
         )
         RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]

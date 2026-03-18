@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -10,6 +11,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import type { AuthSession } from "@/lib/authz"
+import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
 interface Subject {
@@ -162,25 +165,6 @@ type SubjectHistoryState = SubjectVisibilityState & {
   allCompletedIds: string[]
 }
 
-const INITIAL_SUBJECTS: Subject[] = [
-  { id: "algebra", name: "Álgebra 2", color: "#0098C8" },
-  { id: "calculo2", name: "Cálculo 2", color: "#2563eb" },
-  { id: "calculo3", name: "Cálculo 3", color: "#ea580c" },
-  { id: "fisica", name: "Física 1", color: "#dc2626" },
-  { id: "logica", name: "Lógica y\ncomputabilidad", color: "#16a34a" },
-  { id: "probabilidad", name: "Probabilidad y\nEstadística", color: "#a855f7" },
-]
-
-// Map subject id to numeric index (0-5) for DB
-const SUBJECT_ID_TO_INDEX: Record<string, number> = {
-  algebra: 0,
-  calculo2: 1,
-  calculo3: 2,
-  fisica: 3,
-  logica: 4,
-  probabilidad: 5,
-}
-
 const MOBILE_SHORTCUT_WINDOWS: MobileShortcutWindow[] = [
   { index: 1, weekdayIndex: 0, startMinutes: 11 * 60, endMinutes: 12 * 60, subjectId: "fisica" },
   { index: 2, weekdayIndex: 0, startMinutes: 17 * 60, endMinutes: 18 * 60, subjectId: "calculo3" },
@@ -210,8 +194,8 @@ function getMinutesOfDay(date: Date) {
   return date.getHours() * 60 + date.getMinutes()
 }
 
-function getSubjectById(subjectId: string) {
-  return INITIAL_SUBJECTS.find((subject) => subject.id === subjectId) || null
+function getSubjectById(subjectId: string, subjects: Subject[]) {
+  return subjects.find((subject) => subject.id === subjectId) || null
 }
 
 function getScheduledSubjectIdsForDate(date: Date) {
@@ -220,17 +204,19 @@ function getScheduledSubjectIdsForDate(date: Date) {
   return SUBJECT_IDS_BY_WEEKDAY[weekdayIndex] ?? []
 }
 
-function getDisplaySubjectIdsForDate(date: Date, showAllSubjects: boolean) {
-  return showAllSubjects ? INITIAL_SUBJECTS.map((subject) => subject.id) : getScheduledSubjectIdsForDate(date)
+function getDisplaySubjectIdsForDate(date: Date, showAllSubjects: boolean, visibleSubjectIds: string[]) {
+  const scheduledSubjectIds = getScheduledSubjectIdsForDate(date).filter((subjectId) => visibleSubjectIds.includes(subjectId))
+  return showAllSubjects ? visibleSubjectIds : scheduledSubjectIds
 }
 
-function getDisplaySubjectsForDate(date: Date, showAllSubjects: boolean) {
-  return getDisplaySubjectIdsForDate(date, showAllSubjects)
-    .map((subjectId) => getSubjectById(subjectId))
+function getDisplaySubjectsForDate(date: Date, showAllSubjects: boolean, subjects: Subject[]) {
+  const visibleSubjectIds = subjects.map((subject) => subject.id)
+  return getDisplaySubjectIdsForDate(date, showAllSubjects, visibleSubjectIds)
+    .map((subjectId) => getSubjectById(subjectId, subjects))
     .filter(Boolean) as Subject[]
 }
 
-function getActiveMobileShortcutWindow(date: Date) {
+function getActiveMobileShortcutWindow(date: Date, visibleSubjectIds: string[]) {
   const jsDay = date.getDay()
   const weekdayIndex = jsDay === 0 ? 6 : jsDay - 1
   const currentMinutes = getMinutesOfDay(date)
@@ -239,6 +225,7 @@ function getActiveMobileShortcutWindow(date: Date) {
     MOBILE_SHORTCUT_WINDOWS.find(
       (window) =>
         window.weekdayIndex === weekdayIndex &&
+        visibleSubjectIds.includes(window.subjectId) &&
         currentMinutes >= window.startMinutes &&
         currentMinutes < window.endMinutes
     ) || null
@@ -274,26 +261,26 @@ function getSubjectDisplayName(subject: Subject | null) {
   return subject?.name.replace("\n", " ") || ""
 }
 
-function idsToSubjects(ids: string[]): Subject[] {
-  return ids.map((id) => INITIAL_SUBJECTS.find((s) => s.id === id)).filter(Boolean) as Subject[]
+function idsToSubjects(ids: string[], subjects: Subject[]): Subject[] {
+  return ids.map((id) => subjects.find((subject) => subject.id === id)).filter(Boolean) as Subject[]
 }
 
 function subjectsToIds(subjects: Subject[]): string[] {
   return subjects.map((s) => s.id)
 }
 
-function normalizeSubjectsForDay(completedIds: string[], date: Date, showAllSubjects: boolean): SubjectVisibilityState {
-  const displayIds = getDisplaySubjectIdsForDate(date, showAllSubjects)
+function normalizeSubjectsForDay(completedIds: string[], date: Date, showAllSubjects: boolean, subjects: Subject[]): SubjectVisibilityState {
+  const displayIds = getDisplaySubjectIdsForDate(date, showAllSubjects, subjects.map((subject) => subject.id))
   const completedSet = new Set(completedIds.filter((id) => displayIds.includes(id)))
 
   const completedSubjects = displayIds
     .filter((id) => completedSet.has(id))
-    .map((id) => getSubjectById(id))
+    .map((id) => getSubjectById(id, subjects))
     .filter(Boolean) as Subject[]
 
   const activeSubjects = displayIds
     .filter((id) => !completedSet.has(id))
-    .map((id) => getSubjectById(id))
+    .map((id) => getSubjectById(id, subjects))
     .filter(Boolean) as Subject[]
 
   return { activeSubjects, completedSubjects }
@@ -449,9 +436,14 @@ function getNextUncheckedPracticeMaterial(
   )[0] ?? null
 }
 
-export function SubjectWheel() {
+export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const router = useRouter()
-  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false))
+  const visibleSubjects = useMemo<Subject[]>(
+    () => SUBJECTS.filter((subject) => authSession.isAdmin || authSession.allowedSubjectIds.includes(subject.id)),
+    [authSession.allowedSubjectIds, authSession.isAdmin]
+  )
+  const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
+  const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
@@ -508,6 +500,7 @@ export function SubjectWheel() {
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
   const prefetchPracticeViewer = useCallback(
     (material: SubjectDayMaterial) => {
       const href = buildPracticeDefaultViewerHref(material.id)
@@ -564,11 +557,11 @@ export function SubjectWheel() {
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
-  const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now), [now])
+  const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now, visibleSubjectIds), [now, visibleSubjectIds])
   const mobileShortcutTarget = useMemo(() => {
     if (!activeMobileShortcut) return null
 
-    const subject = getSubjectById(activeMobileShortcut.subjectId)
+    const subject = getSubjectById(activeMobileShortcut.subjectId, visibleSubjects)
     if (!subject) return null
 
     const sessionDate = formatDateKey(now)
@@ -581,9 +574,9 @@ export function SubjectWheel() {
       weekdayIndex: activeMobileShortcut.weekdayIndex,
       shortcutIndex: activeMobileShortcut.index,
     }
-  }, [activeMobileShortcut, now])
+  }, [activeMobileShortcut, now, visibleSubjects])
   const manualMobileShortcutTarget = useMemo(() => {
-    const subject = getSubjectById(manualMobileSubjectId)
+    const subject = getSubjectById(manualMobileSubjectId, visibleSubjects)
     if (!subject) return null
 
     return {
@@ -597,7 +590,7 @@ export function SubjectWheel() {
         return jsDay === 0 ? 6 : jsDay - 1
       })(),
     }
-  }, [manualMobileSubjectId, mobileShortcutTarget?.weekdayIndex, now])
+  }, [manualMobileSubjectId, mobileShortcutTarget?.weekdayIndex, now, visibleSubjects])
   const activeMobileModalTarget = manualMobileShortcutTarget ?? mobileShortcutTarget
   const mobileClockLabel = useMemo(() => formatClockTime(now), [now])
   const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
@@ -651,7 +644,7 @@ export function SubjectWheel() {
           const completedSubjectsData = session.completed_subjects || {}
           const completedIds = Object.keys(completedSubjectsData)
           const nextShowAllSubjects = Boolean(session.show_all_subjects)
-          const normalized = normalizeSubjectsForDay(completedIds, selectedDate, nextShowAllSubjects)
+          const normalized = normalizeSubjectsForDay(completedIds, selectedDate, nextShowAllSubjects, visibleSubjects)
           setShowAllSubjectsForDay(nextShowAllSubjects)
           setAllCompletedSubjectIds(completedIds)
           setActiveSubjects(normalized.activeSubjects)
@@ -659,14 +652,14 @@ export function SubjectWheel() {
         } else {
           setShowAllSubjectsForDay(false)
           setAllCompletedSubjectIds([])
-          setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false))
+          setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false, visibleSubjects))
           setCompletedSubjects([])
         }
       } catch (error) {
         console.error("Failed to load from database:", error)
         setShowAllSubjectsForDay(false)
         setAllCompletedSubjectIds([])
-        setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false))
+        setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false, visibleSubjects))
         setCompletedSubjects([])
       } finally {
         setHistory([])
@@ -680,7 +673,7 @@ export function SubjectWheel() {
     }
 
     loadFromDatabase()
-  }, [currentDateKey, selectedDate])
+  }, [currentDateKey, selectedDate, visibleSubjects])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -1152,7 +1145,7 @@ export function SubjectWheel() {
 
   const openSubjectDay = async (subjectId: string, dateKey: string) => {
     await flushPendingFeaturedUpdate()
-    const subject = getSubjectById(subjectId)
+    const subject = getSubjectById(subjectId, visibleSubjects)
     if (!subject) return
 
     setCurrentSubject(subject)
@@ -1958,7 +1951,7 @@ export function SubjectWheel() {
 
   const openExercisesPracticeSubject = async (subjectId: string) => {
     await flushPendingFeaturedUpdate()
-    const subject = getSubjectById(subjectId)
+    const subject = getSubjectById(subjectId, visibleSubjects)
     if (!subject) return
 
     setIsPracticeOpen(false)
@@ -2164,8 +2157,8 @@ export function SubjectWheel() {
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
   const practiceDaySubjects = useMemo(
-    () => getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay),
-    [selectedDate, showAllSubjectsForDay]
+    () => getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay, visibleSubjects),
+    [selectedDate, showAllSubjectsForDay, visibleSubjects]
   )
   const latestWeekNumber = currentCalendarWeek
   const theoryMaterials = useMemo(
@@ -2242,7 +2235,7 @@ export function SubjectWheel() {
 
   const handleReset = async () => {
     try {
-      const scheduledSubjects = getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay)
+      const scheduledSubjects = getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay, visibleSubjects)
       const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
       
       // Reset local state
@@ -2271,18 +2264,18 @@ export function SubjectWheel() {
   const handleShowAllSubjectsChange = (checked: boolean) => {
     const nextCompletedIds = checked
       ? allCompletedSubjectIds
-      : allCompletedSubjectIds.filter((subjectId) => getScheduledSubjectIdsForDate(selectedDate).includes(subjectId))
+      : allCompletedSubjectIds.filter((subjectId) => getDisplaySubjectIdsForDate(selectedDate, false, visibleSubjectIds).includes(subjectId))
 
     setShowAllSubjectsForDay(checked)
     setAllCompletedSubjectIds(nextCompletedIds)
-    const normalized = normalizeSubjectsForDay(nextCompletedIds, selectedDate, checked)
+    const normalized = normalizeSubjectsForDay(nextCompletedIds, selectedDate, checked, visibleSubjects)
     setActiveSubjects(normalized.activeSubjects)
     setCompletedSubjects(normalized.completedSubjects)
     setHistory([])
     setHistoryIndex(-1)
 
     if (!checked && isDialogOpen && practiceSectionView === "exercises") {
-      if (currentSubject && !getScheduledSubjectIdsForDate(selectedDate).includes(currentSubject.id)) {
+      if (currentSubject && !getDisplaySubjectIdsForDate(selectedDate, false, visibleSubjectIds).includes(currentSubject.id)) {
         void closeSubjectDialog()
       } else {
         setExerciseWeeklyScopeEnabled(false)
@@ -2400,6 +2393,15 @@ export function SubjectWheel() {
         </div>
 
         <div className="flex gap-2 items-center">
+          {authSession.isAdmin ? (
+            <Button
+              onClick={() => setIsAdminModalOpen(true)}
+              variant="outline"
+              className="h-9 border-slate-900 bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(51,65,85,0.92))] px-4 text-white shadow-[0_10px_30px_rgba(15,23,42,0.16)] hover:bg-slate-800 hover:text-white"
+            >
+              Admin
+            </Button>
+          ) : null}
           <Button
             onClick={openManualMobileShortcutPicker}
             variant="outline"
@@ -2505,13 +2507,17 @@ export function SubjectWheel() {
         <p>Las materias se reiniciarán mañana</p>
       </footer>
 
+      {authSession.isAdmin ? (
+        <AdminAccessModal open={isAdminModalOpen} onOpenChange={setIsAdminModalOpen} subjectOptions={SUBJECTS} />
+      ) : null}
+
       <Dialog open={isMobileShortcutPickerOpen} onOpenChange={setIsMobileShortcutPickerOpen}>
         <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <DialogTitle>Elegir materia</DialogTitle>
-                <DialogDescription>Selecciona una de las 6 materias para abrir el modal del celular.</DialogDescription>
+                <DialogDescription>Selecciona una de las materias disponibles para abrir el modal del celular.</DialogDescription>
               </div>
               <DialogClose asChild>
                 <button
@@ -2526,7 +2532,7 @@ export function SubjectWheel() {
           </DialogHeader>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {INITIAL_SUBJECTS.map((subject) => (
+            {visibleSubjects.map((subject) => (
               <button
                 key={subject.id}
                 type="button"
@@ -3753,7 +3759,7 @@ export function SubjectWheel() {
                   <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Elegi una materia</h2>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {INITIAL_SUBJECTS.map((subject) => (
+                  {visibleSubjects.map((subject) => (
                     <button
                       key={subject.id}
                       type="button"
@@ -3775,7 +3781,7 @@ export function SubjectWheel() {
                   <div>
                     <p className="text-sm text-slate-500">Materia</p>
                     <h2 className="text-2xl font-semibold text-slate-800">
-                      {getSubjectDisplayName(getSubjectById(reviewSubjectId))}
+                      {getSubjectDisplayName(getSubjectById(reviewSubjectId, visibleSubjects))}
                     </h2>
                   </div>
                   <Button
@@ -3908,7 +3914,7 @@ export function SubjectWheel() {
                         <SelectValue placeholder="Seleccionar materia..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {INITIAL_SUBJECTS.map((s) => (
+                        {visibleSubjects.map((s) => (
                           <SelectItem key={s.id} value={s.id}>
                             {s.name.replace("\n", " ")}
                           </SelectItem>

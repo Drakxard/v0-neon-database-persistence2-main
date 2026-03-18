@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 import { del } from "@vercel/blob"
 import { NextResponse } from "next/server"
+import { ensureQuestionSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 const sql = neon(process.env.DATABASE_URL!)
 
@@ -23,14 +24,25 @@ function toInt(value: string | null) {
 // GET - fetch questions, optionally filtered by id_materia and/or semana
 export async function GET(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const idMateria = toInt(searchParams.get("id_materia"))
     const semana = toInt(searchParams.get("semana"))
     const id = toInt(searchParams.get("id"))
 
     if (id !== null) {
-      const rows = await sql`SELECT * FROM preguntas_respuestas WHERE id = ${id}`
-      return NextResponse.json(rows[0] || null)
+      const [question] = await sql`SELECT * FROM preguntas_respuestas WHERE id = ${id}`
+      if (!question) return NextResponse.json(null)
+      const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(question.id_materia))
+      if (forbidden) return forbidden
+      return NextResponse.json(question)
+    }
+
+    if (idMateria !== null) {
+      const forbidden = ensureQuestionSubjectAccess(auth.session!, idMateria)
+      if (forbidden) return forbidden
     }
 
     if (idMateria !== null && semana !== null) {
@@ -53,7 +65,8 @@ export async function GET(request: Request) {
 
     // Return all questions
     const rows = await sql`SELECT * FROM preguntas_respuestas ORDER BY created_at DESC`
-    return NextResponse.json(rows)
+    const visibleRows = rows.filter((row) => !ensureQuestionSubjectAccess(auth.session!, Number(row.id_materia)))
+    return NextResponse.json(visibleRows)
   } catch (error) {
     console.error("Failed to fetch questions:", error)
     return NextResponse.json({ error: "Failed to fetch questions" }, { status: 500 })
@@ -63,12 +76,18 @@ export async function GET(request: Request) {
 // POST - create a new question
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const body = await request.json()
     const { pregunta, respuesta, id_materia, semana, items, example_image_url, example_link } = body
 
     if (id_materia === undefined || semana === undefined) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
+
+    const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(id_materia))
+    if (forbidden) return forbidden
 
     const normalizedItems: { pregunta: string; respuesta: string; example_image_url?: string | null; example_link?: string }[] = Array.isArray(items)
       ? items
@@ -122,11 +141,22 @@ export async function POST(request: Request) {
 // PUT - update a question (including estado for practice mode)
 export async function PUT(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id, pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link } = await request.json()
 
     if (!id) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 })
     }
+
+    const [existingQuestion] = await sql`SELECT id_materia FROM preguntas_respuestas WHERE id = ${id}`
+    if (!existingQuestion) {
+      return NextResponse.json(null)
+    }
+
+    const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(id_materia ?? existingQuestion.id_materia))
+    if (forbidden) return forbidden
 
     // Build dynamic update
     const rows = await sql`
@@ -153,6 +183,9 @@ export async function PUT(request: Request) {
 // DELETE - delete a question
 export async function DELETE(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const id = searchParams.get("id")
 
@@ -165,7 +198,12 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 })
     }
 
-    const existing = await sql`SELECT example_image_url FROM preguntas_respuestas WHERE id = ${parsedId}`
+    const existing = await sql`SELECT example_image_url, id_materia FROM preguntas_respuestas WHERE id = ${parsedId}`
+    if (!existing[0]) {
+      return NextResponse.json({ error: "Question not found" }, { status: 404 })
+    }
+    const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(existing[0]?.id_materia))
+    if (forbidden) return forbidden
     await deleteStoredExampleImage(existing[0]?.example_image_url)
     await sql`DELETE FROM preguntas_respuestas WHERE id = ${parsedId}`
     return NextResponse.json({ success: true })

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import { deleteDriveFile } from "@/lib/google-drive"
 import { deleteR2Object, isR2ObjectKey } from "@/lib/r2"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -89,11 +90,27 @@ async function withLinks(row: EntryRow | null) {
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
       return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
     }
+
+    const scopeRows = await sql`
+      SELECT subject_id
+      FROM subject_day_entries
+      WHERE id = ${entryId}
+      LIMIT 1
+    ` as Array<{ subject_id: string }>
+    if (!scopeRows[0]) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+    }
+
+    const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
+    if (forbidden) return forbidden
 
     const body = await request.json()
     const answerText = typeof body.answerText === "string" ? body.answerText.trim() : null
@@ -174,6 +191,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
@@ -181,15 +201,18 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     const entries = await sql`
-      SELECT id, drive_file_id
+      SELECT id, drive_file_id, subject_id
       FROM subject_day_entries
       WHERE id = ${entryId}
-    ` as Array<{ id: number; drive_file_id: string }>
+    ` as Array<{ id: number; drive_file_id: string; subject_id: string }>
 
     const entry = entries[0]
     if (!entry) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
+    if (forbidden) return forbidden
 
     if (entry.drive_file_id) {
       if (isR2ObjectKey(entry.drive_file_id)) {

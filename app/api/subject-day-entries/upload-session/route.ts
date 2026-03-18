@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import { buildR2ObjectKey, createR2UploadSession } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -37,6 +38,9 @@ function getFileExtension(mimeType: string) {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const payload = await request.json()
     const subjectId = String(payload?.subjectId || "").trim()
     const subjectName = String(payload?.subjectName || "").trim()
@@ -50,6 +54,9 @@ export async function POST(request: Request) {
     if (!subjectId || !subjectName || !sessionDate || !parsedSessionDate) {
       return badRequest("Missing subject metadata")
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     if (!mimeType.startsWith("audio/")) {
       return badRequest("Invalid audio mime type")

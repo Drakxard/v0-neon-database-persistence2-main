@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -62,6 +63,9 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 
 export async function GET(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const subjectId = searchParams.get("subjectId")
     const sessionDate = searchParams.get("sessionDate")
@@ -70,6 +74,9 @@ export async function GET(request: Request) {
     if (!subjectId) {
       return badRequest("Missing subjectId")
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
     let weekNumber = rawWeekNumber

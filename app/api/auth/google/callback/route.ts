@@ -4,10 +4,11 @@ import { NextResponse } from "next/server"
 import {
   APP_AUTH_COOKIE_NAME,
   APP_AUTH_STATE_COOKIE_NAME,
-  createSessionToken,
+  createSessionTokenFromPayload,
   exchangeCodeForIdentity,
   getAppAuthConfig,
 } from "@/lib/app-auth"
+import { getAdminSession, getAllowedAccountByEmail } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -43,10 +44,15 @@ export async function GET(request: Request) {
   }
 
   try {
-    const { allowedEmail, sessionSecret } = getAppAuthConfig()
+    const { adminEmail, sessionSecret } = getAppAuthConfig()
     const identity = await exchangeCodeForIdentity(code)
+    const isAdmin = identity.email === adminEmail
+    const allowedAccount = isAdmin ? null : await getAllowedAccountByEmail(identity.email)
+    const allowedSubjectIds = isAdmin
+      ? getAdminSession().allowedSubjectIds
+      : (allowedAccount?.allowed_subject_ids ?? [])
 
-    if (identity.email !== allowedEmail) {
+    if (!isAdmin && allowedSubjectIds.length === 0) {
       const deniedResponse = renderHtml("Acceso denegado", "", 403)
       deniedResponse.headers.append(
         "Set-Cookie",
@@ -55,7 +61,15 @@ export async function GET(request: Request) {
       return deniedResponse
     }
 
-    const token = await createSessionToken(identity.email, sessionSecret, Date.now() + 1000 * 60 * 60 * 24 * 30)
+    const token = await createSessionTokenFromPayload(
+      {
+        email: identity.email,
+        isAdmin,
+        allowedSubjectIds,
+      },
+      sessionSecret,
+      Date.now() + 1000 * 60 * 60 * 24 * 30
+    )
     const response = NextResponse.redirect(new URL(next.startsWith("/") ? next : "/", url.origin))
     response.cookies.set(APP_AUTH_STATE_COOKIE_NAME, "", {
       httpOnly: true,

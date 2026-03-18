@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 
 import { deleteDriveFile } from "@/lib/google-drive"
 import { deleteR2Object, isR2ObjectKey } from "@/lib/r2"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -52,11 +53,27 @@ function normalizeRow(row: SubjectDayMaterialRow | null) {
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const materialId = Number.parseInt(id, 10)
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
     }
+
+    const scopeRows = await sql`
+      SELECT subject_id
+      FROM subject_day_materials
+      WHERE id = ${materialId}
+      LIMIT 1
+    ` as Array<{ subject_id: string }>
+    if (!scopeRows[0]) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 })
+    }
+
+    const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
+    if (forbidden) return forbidden
 
     const body = await request.json()
     if (typeof body.isCheckupDone !== "boolean") {
@@ -91,6 +108,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { id } = await context.params
     const materialId = Number.parseInt(id, 10)
     if (!Number.isInteger(materialId)) {
@@ -98,15 +118,18 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     const materials = await sql`
-      SELECT id, drive_file_id
+      SELECT id, drive_file_id, subject_id
       FROM subject_day_materials
       WHERE id = ${materialId}
-    ` as Array<{ id: number; drive_file_id: string }>
+    ` as Array<{ id: number; drive_file_id: string; subject_id: string }>
 
     const material = materials[0]
     if (!material) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+    if (forbidden) return forbidden
 
     if (material.drive_file_id) {
       if (isR2ObjectKey(material.drive_file_id)) {

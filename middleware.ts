@@ -40,17 +40,33 @@ async function verifySession(token: string, secret: string) {
   const parts = token.split(".")
   if (parts.length !== 3) return null
 
-  const [encodedEmail, encodedExpiry, providedSignature] = parts
-  const payload = `${encodedEmail}.${encodedExpiry}`
+  const [encodedPayload, encodedExpiry, providedSignature] = parts
+  const payload = `${encodedPayload}.${encodedExpiry}`
   const expectedSignature = await signPayload(payload, secret)
   if (!constantTimeEquals(providedSignature, expectedSignature)) return null
 
   const expiresAtMs = Number.parseInt(encodedExpiry, 10)
   if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) return null
 
-  return {
-    email: decodeBase64Url(encodedEmail).toLowerCase(),
-    expiresAtMs,
+  try {
+    const parsed = JSON.parse(decodeBase64Url(encodedPayload)) as {
+      email?: unknown
+      isAdmin?: unknown
+      allowedSubjectIds?: unknown
+    }
+
+    if (typeof parsed.email !== "string") return null
+
+    return {
+      email: parsed.email.toLowerCase(),
+      isAdmin: Boolean(parsed.isAdmin),
+      allowedSubjectIds: Array.isArray(parsed.allowedSubjectIds)
+        ? parsed.allowedSubjectIds.filter((value): value is string => typeof value === "string")
+        : [],
+      expiresAtMs,
+    }
+  } catch {
+    return null
   }
 }
 
@@ -75,10 +91,9 @@ export async function middleware(request: NextRequest) {
       if (!token) return NextResponse.next()
 
       try {
-        const allowedEmail = (process.env.ALLOWED_GOOGLE_EMAIL || "").toLowerCase()
         const sessionSecret = process.env.APP_AUTH_SECRET || ""
         const session = await verifySession(token, sessionSecret)
-        if (session?.email === allowedEmail) {
+        if (session && (session.isAdmin || session.allowedSubjectIds.length > 0)) {
           return NextResponse.redirect(new URL("/", request.url))
         }
       } catch {}
@@ -87,12 +102,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  let allowedEmail = ""
   let sessionSecret = ""
   try {
-    allowedEmail = (process.env.ALLOWED_GOOGLE_EMAIL || "").toLowerCase()
     sessionSecret = process.env.APP_AUTH_SECRET || ""
-    if (!allowedEmail || !sessionSecret) {
+    if (!sessionSecret) {
       throw new Error("Missing auth configuration")
     }
   } catch (error) {
@@ -105,7 +118,7 @@ export async function middleware(request: NextRequest) {
   const token = request.cookies.get(APP_AUTH_COOKIE_NAME)?.value
   const session = token ? await verifySession(token, sessionSecret) : null
 
-  if (!session || session.email !== allowedEmail) {
+  if (!session || (!session.isAdmin && session.allowedSubjectIds.length === 0)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }

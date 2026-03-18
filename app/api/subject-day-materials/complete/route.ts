@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 import { getDriveFileMetadata } from "@/lib/google-drive"
 import { getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
@@ -71,6 +72,9 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const payload = await request.json()
     const subjectId = String(payload?.subjectId || "").trim()
     const sessionDate = String(payload?.sessionDate || "").trim()
@@ -83,6 +87,9 @@ export async function POST(request: Request) {
     if (!subjectId || !parsedSessionDate || !driveFileId) {
       return badRequest("Missing completion metadata")
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     if (materialType !== "theory" && materialType !== "practice") {
       return badRequest("Invalid materialType")
@@ -138,7 +145,7 @@ export async function POST(request: Request) {
         ${persistedFileName},
         ${driveFile.id},
         ${driveFile.mimeType},
-        ${driveFile.webViewLink || ""}
+        ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
       )
       RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     ` as SubjectDayMaterialRow[]

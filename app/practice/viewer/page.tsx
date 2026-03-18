@@ -2,7 +2,9 @@ import Link from "next/link"
 import { neon } from "@neondatabase/serverless"
 
 import { PracticeViewerShell } from "./practice-viewer-shell"
+import { getRequestAuthSession, canAccessSubject } from "@/lib/authz"
 import { parseDateKey } from "@/lib/subject-utils"
+import { getSubjectById } from "@/lib/subjects"
 
 export const runtime = "nodejs"
 
@@ -68,6 +70,11 @@ async function getMaterial(materialId: number) {
 }
 
 export default async function PracticeViewerPage({ searchParams }: ViewerPageProps) {
+  const session = await getRequestAuthSession()
+  if (!session) {
+    return null
+  }
+
   const params = await searchParams
   const materialId = Number.parseInt(params.materialId || "", 10)
 
@@ -89,6 +96,21 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     materialType === "practice"
 
   if (!Number.isInteger(materialId) && hasDraftContext) {
+    if (!canAccessSubject(session, subjectId)) {
+      return (
+        <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-white">
+          <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-6">
+            <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Visor PDF</p>
+            <h1 className="mt-3 text-2xl font-semibold">Acceso restringido</h1>
+            <p className="mt-3 text-sm text-slate-300">No tenes permiso para abrir esta materia.</p>
+            <Link href="/" className="mt-6 inline-flex text-sm text-sky-300 underline-offset-4 hover:underline">
+              Volver al inicio
+            </Link>
+          </div>
+        </main>
+      )
+    }
+
     const draftContext: DraftViewerContext = {
       subjectId,
       subjectName,
@@ -134,6 +156,21 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       )
     }
 
+    if (!canAccessSubject(session, material.subject_id)) {
+      return (
+        <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-white">
+          <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-6">
+            <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Visor PDF</p>
+            <h1 className="mt-3 text-2xl font-semibold">Acceso restringido</h1>
+            <p className="mt-3 text-sm text-slate-300">No tenes permiso para abrir este material.</p>
+            <Link href="/" className="mt-6 inline-flex text-sm text-sky-300 underline-offset-4 hover:underline">
+              Volver al inicio
+            </Link>
+          </div>
+        </main>
+      )
+    }
+
     const isPdf = (material.drive_mime_type || "").toLowerCase().includes("pdf")
 
     if (!isPdf) {
@@ -162,7 +199,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
         material={{
           id: material.id,
           subjectId: material.subject_id,
-          subjectName: SUBJECT_NAMES[material.subject_id] || material.subject_id,
+          subjectName: getSubjectById(material.subject_id)?.name.replace("\n", " ") || SUBJECT_NAMES[material.subject_id] || material.subject_id,
           sessionDate: normalizeSessionDateKey(material.session_date),
           weekNumber: material.week_number,
           weekdayIndex: material.weekday_index,

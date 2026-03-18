@@ -1,9 +1,13 @@
 import { neon } from '@neondatabase/serverless'
+import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 const sql = neon(process.env.DATABASE_URL!)
 
 export async function GET(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const date = searchParams.get('date')
     const subjectId = searchParams.get('subjectId')
@@ -11,6 +15,9 @@ export async function GET(request: Request) {
     if (!date || !subjectId) {
       return Response.json({ error: 'Missing parameters' }, { status: 400 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     const result = await sql`
       SELECT id, date, subject_id, panorama, created_at, updated_at
@@ -32,11 +39,17 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { date, subjectId, panorama } = await request.json()
 
     if (!date || !subjectId) {
       return Response.json({ error: 'Invalid request data' }, { status: 400 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     // Check if completion exists
     const existing = await sql`
@@ -73,6 +86,9 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const auth = await requireAuthSession()
+    if (auth.response) return auth.response
+
     const { searchParams } = new URL(request.url)
     const date = searchParams.get('date')
     const subjectId = searchParams.get('subjectId')
@@ -80,6 +96,9 @@ export async function DELETE(request: Request) {
     if (!date || !subjectId) {
       return Response.json({ error: 'Missing parameters' }, { status: 400 })
     }
+
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
+    if (forbidden) return forbidden
 
     await sql`
       DELETE FROM subject_completions
