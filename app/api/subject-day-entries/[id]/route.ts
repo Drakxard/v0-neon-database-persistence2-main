@@ -1,6 +1,9 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
+import { deleteDriveFile } from "@/lib/google-drive"
+import { deleteR2Object, isR2ObjectKey } from "@/lib/r2"
+
 export const runtime = "nodejs"
 
 const sql = neon(process.env.DATABASE_URL!)
@@ -177,15 +180,30 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
       return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
     }
 
+    const entries = await sql`
+      SELECT id, drive_file_id
+      FROM subject_day_entries
+      WHERE id = ${entryId}
+    ` as Array<{ id: number; drive_file_id: string }>
+
+    const entry = entries[0]
+    if (!entry) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+    }
+
+    if (entry.drive_file_id) {
+      if (isR2ObjectKey(entry.drive_file_id)) {
+        await deleteR2Object(entry.drive_file_id)
+      } else {
+        await deleteDriveFile(entry.drive_file_id)
+      }
+    }
+
     const rows = await sql`
       DELETE FROM subject_day_entries
       WHERE id = ${entryId}
       RETURNING id
     ` as Array<{ id: number }>
-
-    if (!rows[0]) {
-      return NextResponse.json({ error: "Entry not found" }, { status: 404 })
-    }
 
     return NextResponse.json({ success: true, id: rows[0].id })
   } catch (error) {

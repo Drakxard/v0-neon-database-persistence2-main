@@ -133,3 +133,22 @@ export async function downloadDriveFile(fileId: string) {
     mimeType: response.headers.get("content-type") || "application/octet-stream",
   }
 }
+
+export async function deleteDriveFile(fileId: string) {
+  const accessToken = await getGoogleAccessToken()
+  const response = await fetch(`${DRIVE_API_BASE}/${encodeURIComponent(fileId)}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  })
+
+  if (response.status === 404) {
+    return
+  }
+
+  if (!response.ok) {
+    const payload = await response.text()
+    throw new Error(payload || "Google Drive delete failed")
+  }
+}
