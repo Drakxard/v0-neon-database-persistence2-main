@@ -963,12 +963,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [currentSubject, isDialogOpen, loadSubjectDayData, selectedWeekNumber, subjectDialogDateKey])
 
   useEffect(() => {
-    if (selectedPracticeMaterialId == null) return
-    if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
-    setSelectedPracticeMaterialId(null)
-  }, [selectedPracticeMaterial, selectedPracticeMaterialEntries.length, selectedPracticeMaterialId])
-
-  useEffect(() => {
     return () => {
       if (reviewAudio) {
         URL.revokeObjectURL(reviewAudio.url)
@@ -2252,6 +2246,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
     [practiceMaterials, selectedPracticeMaterialId]
   )
+  useEffect(() => {
+    if (selectedPracticeMaterialId == null) return
+    if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
+    setSelectedPracticeMaterialId(null)
+  }, [selectedPracticeMaterial, selectedPracticeMaterialEntries.length, selectedPracticeMaterialId])
   const localContinueFeaturedEntry = useMemo(
     () =>
       entries.find(
