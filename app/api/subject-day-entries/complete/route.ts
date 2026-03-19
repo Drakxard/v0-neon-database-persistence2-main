@@ -50,11 +50,6 @@ function isMissingColumn(error: unknown) {
   )
 }
 
-function isGeminiQuotaError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || "")
-  return message.toLowerCase().includes("quota exceeded")
-}
-
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
 }
@@ -162,15 +157,17 @@ export async function POST(request: Request) {
       const downloadedFile = isR2ObjectKey(driveFile.id)
         ? await downloadR2Object(driveFile.id)
         : await downloadDriveFile(driveFile.id)
-      transcriptText = await transcribeAudioWithGemini({
-        audioBuffer: downloadedFile.buffer,
-        mimeType: downloadedFile.mimeType || driveFile.mimeType,
-      })
-    } catch (error) {
-      console.error("Gemini transcription failed, keeping pending placeholder:", error)
-      if (!isGeminiQuotaError(error)) {
-        throw error
+
+      try {
+        transcriptText = await transcribeAudioWithGemini({
+          audioBuffer: downloadedFile.buffer,
+          mimeType: downloadedFile.mimeType || driveFile.mimeType,
+        })
+      } catch (error) {
+        console.error("Gemini transcription failed, keeping pending placeholder:", error)
       }
+    } catch (error) {
+      console.error("Audio download failed before transcription, keeping pending placeholder:", error)
     }
 
     let rows: EntryRow[]
