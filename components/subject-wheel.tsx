@@ -1777,11 +1777,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const openContinueModal = async () => {
-    const localPayload = buildLocalContinuePayload()
+  const openContinueModal = async (materialId?: number) => {
+    const selectedMaterial =
+      typeof materialId === "number"
+        ? practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === materialId) ?? null
+        : null
+
+    setSelectedPracticeMaterialId(selectedMaterial?.id ?? null)
+
+    const localPayload: ContinuePayload | null = currentSubject
+      ? {
+          material: selectedMaterial ?? buildLocalContinuePayload()?.material ?? null,
+          previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
+        }
+      : null
+
     setContinuePayload(localPayload)
     setIsContinueOpen(true)
-    void loadContinuePayload({ silent: Boolean(localPayload) })
+
+    if (!selectedMaterial) {
+      void loadContinuePayload({ silent: Boolean(localPayload) })
+    }
   }
 
   const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
@@ -2216,7 +2232,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => entries.filter((entry) => entry.session_date === subjectDialogDateKey),
     [entries, subjectDialogDateKey]
   )
-  const currentContinueMaterial = continuePayload?.material ?? null
+  const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
   const theoryDayEntries = useMemo(
     () => activeDayEntries.filter((entry) => entry.subject_day_material_id == null),
     [activeDayEntries]
@@ -2234,9 +2250,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const continueMaterialEntries = useMemo(
     () =>
       currentContinueMaterial
-        ? activeDayEntries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
+        ? entries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
         : [],
-    [activeDayEntries, currentContinueMaterial]
+    [currentContinueMaterial, entries]
   )
   const selectedPracticeMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
@@ -2281,14 +2297,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (!currentSubject) return null
 
     return {
-      material: getNextUncheckedPracticeMaterial(materials, {
-        subjectId: currentSubject.id,
-        sessionDate: subjectDialogDateKey,
-        weekNumber: selectedWeekNumber,
-      }),
+      material:
+        selectedPracticeMaterial ??
+        getNextUncheckedPracticeMaterial(materials, {
+          subjectId: currentSubject.id,
+          sessionDate: subjectDialogDateKey,
+          weekNumber: selectedWeekNumber,
+        }),
       previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentSubject, localContinueFeaturedEntry, materials, selectedWeekNumber, subjectDialogDateKey])
+  }, [continuePayload?.previousFeaturedEntry, currentSubject, localContinueFeaturedEntry, materials, selectedPracticeMaterial, selectedWeekNumber, subjectDialogDateKey])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -3063,7 +3081,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 <Button
                                   type="button"
                                   variant="outline"
-                                  onClick={() => setSelectedPracticeMaterialId(material.id)}
+                                  onClick={() => void openContinueModal(material.id)}
                                   className="h-8 border-black px-3 text-xs text-black"
                                 >
                                   Ver
@@ -3141,125 +3159,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
                   </section>
                 </div>
-                {selectedPracticeMaterial ? (
-                  <section className="mb-6 space-y-5 rounded-xl border border-slate-300 bg-white px-4 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Detalle del PDF</p>
-                        <p className="text-lg font-medium text-black">{selectedPracticeMaterial.file_name}</p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setSelectedPracticeMaterialId(null)}
-                        className="h-9 border-black px-3 text-black"
-                      >
-                        Volver
-                      </Button>
-                    </div>
-
-                    {selectedPracticeMaterialEntries.length > 0 ? (
-                      <div className="space-y-5">
-                        {selectedPracticeMaterialEntries.map((entry) => {
-                          const isExpandedAudio = expandedAudioEntryId === entry.id
-                          const audioSrc = audioSourceUrls[entry.id]
-                          const isEditingTitle = editingTitleId === entry.id
-                          const isRevealed = revealedAnswers[entry.id]
-
-                          return (
-                            <article key={entry.id} className="relative space-y-3 border-t border-slate-200 pt-5 first:border-t-0 first:pt-0">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => void deleteEntry(entry)}
-                                disabled={isDeletingEntryId === entry.id}
-                                className="absolute right-0 top-0 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
-                              >
-                                {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                              </Button>
-                              {isEditingTitle ? (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <Input
-                                    value={titleDrafts[entry.id] ?? ""}
-                                    onChange={(event) =>
-                                      setTitleDrafts((previous) => ({
-                                        ...previous,
-                                        [entry.id]: event.target.value,
-                                      }))
-                                    }
-                                    className="h-10 max-w-sm text-base"
-                                  />
-                                  <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
-                                    {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                                  </Button>
-                                  <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
-                                    <X className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <div className="flex flex-wrap items-center gap-2 pr-8 text-black">
-                                  <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
-                                  <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
-                                    <Pencil className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              )}
-
-                              <p className="text-base leading-7 text-slate-800">{entry.transcript_text}</p>
-
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!entry.answer_text) {
-                                    startAnswerEdit(entry)
-                                    return
-                                  }
-                                  setRevealedAnswers((previous) => ({
-                                    ...previous,
-                                    [entry.id]: !previous[entry.id],
-                                  }))
-                                }}
-                                className="block w-full rounded-lg border border-slate-300 px-4 py-3 text-left text-base text-slate-700"
-                              >
-                                {entry.answer_text
-                                  ? isRevealed
-                                    ? entry.answer_text
-                                    : "Click para revelar la respuesta"
-                                  : "Escribir respuesta"}
-                              </button>
-
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-black px-4 text-base text-black">
-                                  Responder
-                                </Button>
-                                <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
-                                  {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                                  audio
-                                </Button>
-                              </div>
-
-                              {isExpandedAudio && audioSrc ? (
-                                <audio
-                                  ref={(element) => {
-                                    audioElementRefs.current[entry.id] = element
-                                  }}
-                                  controls
-                                  src={audioSrc}
-                                  preload="metadata"
-                                  className="h-12 w-full"
-                                />
-                              ) : null}
-                            </article>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-base text-slate-500">Sin audios.</p>
-                    )}
-                  </section>
-                ) : null}
                 </>
               )}
 
@@ -3443,7 +3342,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isContinueOpen} onOpenChange={setIsContinueOpen}>
+      <Dialog
+        open={isContinueOpen}
+        onOpenChange={(open) => {
+          setIsContinueOpen(open)
+          if (!open) {
+            setSelectedPracticeMaterialId(null)
+          }
+        }}
+      >
         <DialogContent
           showCloseButton={false}
           className="!top-0 !left-0 !h-screen !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-y-auto rounded-none border-0 p-0 shadow-none sm:!max-w-none"
