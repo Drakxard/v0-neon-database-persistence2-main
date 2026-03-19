@@ -359,6 +359,18 @@ async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob
   }
 }
 
+function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
+  const materialMap = new Map<string, SubjectDayMaterial>()
+
+  for (const group of materialGroups) {
+    for (const material of group) {
+      materialMap.set(String(material.id), material)
+    }
+  }
+
+  return sortSubjectDayMaterials(Array.from(materialMap.values()))
+}
+
 function getErrorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
     return payload.error
@@ -891,25 +903,43 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         materialsParams.set("sessionDate", currentDateKey)
       }
 
-      const [entriesResponse, materialsResponse] = await Promise.all([
+      const materialRequests =
+        practiceSectionView === "exercises" && !subjectViewDateOverride && isWeeklyExercisesScope
+          ? [
+              fetch(`/api/subject-day-materials?${materialsParams.toString()}`),
+              fetch(
+                `/api/subject-day-materials?${new URLSearchParams({
+                  subjectId: currentSubject.id,
+                  weekNumber: String(selectedWeekNumber),
+                  sessionDate: subjectDialogDateKey,
+                }).toString()}`
+              ),
+            ]
+          : [fetch(`/api/subject-day-materials?${materialsParams.toString()}`)]
+
+      const [entriesResponse, ...materialsResponses] = await Promise.all([
         fetch(`/api/subject-day-entries?${entriesParams.toString()}`),
-        fetch(`/api/subject-day-materials?${materialsParams.toString()}`),
+        ...materialRequests,
       ])
-      const [entriesPayload, materialsPayload] = await Promise.all([
+      const [entriesPayload, ...materialsPayloads] = await Promise.all([
         parseJsonResponse(entriesResponse),
-        parseJsonResponse(materialsResponse),
+        ...materialsResponses.map((response) => parseJsonResponse(response)),
       ])
 
       if (!entriesResponse.ok) {
         throw new Error(getErrorMessage(entriesPayload, "No se pudieron cargar las dudas del dia."))
       }
 
-      if (!materialsResponse.ok) {
-        throw new Error(getErrorMessage(materialsPayload, "No se pudieron cargar los materiales del dia."))
+      const failedMaterialsResponse = materialsResponses.findIndex((response) => !response.ok)
+      if (failedMaterialsResponse >= 0) {
+        throw new Error(getErrorMessage(materialsPayloads[failedMaterialsResponse], "No se pudieron cargar los materiales del dia."))
       }
 
       setEntries(sortSubjectDayEntries(Array.isArray(entriesPayload) ? entriesPayload : []))
-      setMaterials(sortSubjectDayMaterials(Array.isArray(materialsPayload) ? materialsPayload : []))
+      const normalizedMaterialGroups = materialsPayloads.map((payload) =>
+        Array.isArray(payload) ? (payload as SubjectDayMaterial[]) : []
+      )
+      setMaterials(mergeSubjectDayMaterials(...normalizedMaterialGroups))
     } catch (error) {
       console.error("Failed to load subject day data:", error)
       setEntries([])

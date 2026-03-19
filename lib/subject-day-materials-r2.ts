@@ -107,6 +107,20 @@ function parseMaterialType(value: string | undefined) {
   return null
 }
 
+function inferLegacyMaterialType(fileName: string) {
+  const normalizedName = sanitizePathSegment(fileName)
+  if (
+    normalizedName.includes("guia") ||
+    normalizedName.includes("resp") ||
+    normalizedName.includes("ejer") ||
+    normalizedName.includes("pract")
+  ) {
+    return "practice" as const
+  }
+
+  return "theory" as const
+}
+
 function buildCandidateFromMetadata(params: {
   objectKey: string
   name: string
@@ -149,8 +163,8 @@ function buildCandidateFromLegacyKey(params: {
   const weekMatch = /^semana-(\d+)$/.exec(segments[2] || "")
   const weekNumber = weekMatch ? Number.parseInt(weekMatch[1], 10) : Number.NaN
   const sessionDate = Number.isInteger(weekNumber) ? getLegacySessionDateFromWeekAndDay(weekNumber, segments[3] || "") : null
-  const inferredMaterialType = scope.materialType ?? null
   const originalFileName = normalizeUploadedPdfFileName(params.name)
+  const inferredMaterialType = scope.materialType ?? inferLegacyMaterialType(originalFileName)
 
   if (!subjectId || !Number.isInteger(weekNumber) || !sessionDate || !inferredMaterialType || !originalFileName) {
     return null
