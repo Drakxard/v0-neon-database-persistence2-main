@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
@@ -491,6 +492,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isCopyingEntries, setIsCopyingEntries] = useState(false)
   const [practiceSectionView, setPracticeSectionView] = useState<"theory" | "exercises">("theory")
   const [exerciseWeeklyScopeEnabled, setExerciseWeeklyScopeEnabled] = useState(false)
+  const [subjectViewDateOverride, setSubjectViewDateOverride] = useState<string | null>(null)
+  const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
   const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
@@ -600,6 +603,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const currentCalendarWeekRef = useRef(currentCalendarWeek)
   const previousCalendarWeekRef = useRef(currentCalendarWeek)
   const currentDayIndex = weekDates.findIndex((date) => formatDateKey(date) === currentDateKey)
+  const subjectDialogDateKey = subjectViewDateOverride ?? currentDateKey
+  const subjectDialogDayIndex = weekDates.findIndex((date) => formatDateKey(date) === subjectDialogDateKey)
   const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
@@ -877,7 +882,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         weekNumber: String(selectedWeekNumber),
       })
 
-      if (isWeeklyExercisesScope) {
+      if (practiceSectionView === "exercises") {
+        materialsParams.set("sessionDate", subjectDialogDateKey)
+      } else if (isWeeklyExercisesScope) {
         materialsParams.set("scope", "week")
       } else {
         entriesParams.set("sessionDate", currentDateKey)
@@ -912,7 +919,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setIsEntriesLoading(false)
       setIsMaterialsLoading(false)
     }
-  }, [currentDateKey, currentSubject, isDialogOpen, isWeeklyExercisesScope, selectedWeekNumber])
+  }, [currentDateKey, currentSubject, isDialogOpen, isWeeklyExercisesScope, practiceSectionView, selectedWeekNumber, subjectDialogDateKey])
 
   useEffect(() => {
     void loadSubjectDayData()
@@ -929,7 +936,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       const subjectId = typeof payload.subjectId === "string" ? payload.subjectId : ""
       const sessionDate = typeof payload.sessionDate === "string" ? payload.sessionDate : ""
       const weekNumber = Number(payload.weekNumber)
-      if (subjectId !== currentSubject.id || sessionDate !== currentDateKey || weekNumber !== selectedWeekNumber) return
+      if (subjectId !== currentSubject.id || sessionDate !== subjectDialogDateKey || weekNumber !== selectedWeekNumber) return
 
       void loadSubjectDayData()
     }
@@ -953,7 +960,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       channel?.close()
       window.removeEventListener("storage", handleStorage)
     }
-  }, [currentDateKey, currentSubject, isDialogOpen, loadSubjectDayData, selectedWeekNumber])
+  }, [currentSubject, isDialogOpen, loadSubjectDayData, selectedWeekNumber, subjectDialogDateKey])
+
+  useEffect(() => {
+    if (selectedPracticeMaterialId == null) return
+    if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
+    setSelectedPracticeMaterialId(null)
+  }, [selectedPracticeMaterial, selectedPracticeMaterialEntries.length, selectedPracticeMaterialId])
 
   useEffect(() => {
     return () => {
@@ -1071,6 +1084,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsCopyingEntries(false)
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
+    setSubjectViewDateOverride(null)
+    setSelectedPracticeMaterialId(null)
     setIsUploadingMaterialType(null)
     setIsLinkDialogOpen(false)
     setLinkEntryId(null)
@@ -1175,9 +1190,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const moveDay = async (direction: -1 | 1) => {
     await flushPendingFeaturedUpdate()
-    const nextIndex = currentDayIndex + direction
+    const nextIndex = subjectDialogDayIndex + direction
     if (nextIndex < 0 || nextIndex >= weekDates.length || nextIndex > lastVisibleDayIndex) return
-    setCurrentDateKey(formatDateKey(weekDates[nextIndex]))
+    const nextDateKey = formatDateKey(weekDates[nextIndex])
+    if (subjectViewDateOverride) {
+      setSubjectViewDateOverride(nextDateKey)
+    } else {
+      setCurrentDateKey(nextDateKey)
+    }
+    setSelectedPracticeMaterialId(null)
   }
 
   const moveWeek = async (direction: -1 | 1) => {
@@ -1190,6 +1211,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (nextWeekNumber < 0 || nextWeekNumber > latestWeekNumber) return
 
     setCurrentDateKey(formatDateKey(nextDate))
+  }
+
+  const openWeekAudioDay = async (dateKey: string) => {
+    await flushPendingFeaturedUpdate()
+    setSubjectViewDateOverride(dateKey)
+    setSelectedPracticeMaterialId(null)
+  }
+
+  const returnToCurrentDayView = async () => {
+    await flushPendingFeaturedUpdate()
+    setSubjectViewDateOverride(null)
+    setSelectedPracticeMaterialId(null)
   }
 
   const startNextWeek = async () => {
@@ -1450,7 +1483,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const copyEntries = async (entriesToCopy: SubjectDayEntry[], onError?: (message: string) => void) => {
+  const copyEntries = async (entriesToCopy: SubjectDayEntry[], successMessage: string, onError?: (message: string) => void) => {
     if (entriesToCopy.length === 0 || isCopyingEntries) return
 
     setIsCopyingEntries(true)
@@ -1464,6 +1497,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         })
         .join("\n\n")
       await navigator.clipboard.writeText(payload)
+      toast({ title: "Copiado", description: successMessage })
     } catch (error) {
       console.error("Failed to copy entries:", error)
       if (onError) {
@@ -1471,18 +1505,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       } else {
         setEntriesError("No se pudieron copiar las dudas.")
       }
+      toast({ title: "Error", description: "No se pudieron copiar las dudas.", variant: "destructive" })
     } finally {
       window.setTimeout(() => setIsCopyingEntries(false), 600)
     }
   }
 
   const copyEntriesForDay = async () => {
-    await copyEntries(entries)
+    await copyEntries(activeDayEntries, "Contenido copiado al portapapeles")
   }
 
   const copyContinueEntries = async () => {
     setContinueError("")
-    await copyEntries(continueMaterialEntries, setContinueError)
+    await copyEntries(continueMaterialEntries, "Contenido copiado al portapapeles", setContinueError)
+  }
+
+  const copyEntriesForMaterial = async (materialId: number) => {
+    await copyEntries(practiceEntriesByMaterialId[materialId] ?? [], "Contenido del PDF copiado al portapapeles")
+  }
+
+  const copyEntriesForSession = async (sessionDate: string) => {
+    await copyEntries(entries.filter((entry) => entry.session_date === sessionDate), "Contenido del dia copiado al portapapeles")
   }
 
   const toggleFeaturedEntry = (entry: SubjectDayEntry) => {
@@ -1630,8 +1673,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       id: tempId,
       subject_id: currentSubject.id,
       week_number: selectedWeekNumber,
-      session_date: currentDateKey,
-      weekday_index: currentDayIndex >= 0 ? currentDayIndex : 0,
+      session_date: subjectDialogDateKey,
+      weekday_index: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
       material_type: materialType,
       order_index:
         (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
@@ -1655,7 +1698,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         body: JSON.stringify({
           subjectId: currentSubject.id,
           subjectName: getSubjectDisplayName(currentSubject),
-          sessionDate: currentDateKey,
+          sessionDate: subjectDialogDateKey,
           weekNumber: selectedWeekNumber,
           materialType,
           fileName: file.name,
@@ -1675,7 +1718,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           subjectId: currentSubject.id,
-          sessionDate: currentDateKey,
+          sessionDate: subjectDialogDateKey,
           weekNumber: selectedWeekNumber,
           materialType,
           driveFileId,
@@ -1708,7 +1751,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     try {
       const params = new URLSearchParams({
         subjectId: currentSubject.id,
-        sessionDate: currentDateKey,
+        sessionDate: subjectDialogDateKey,
         weekNumber: String(selectedWeekNumber),
       })
 
@@ -1759,7 +1802,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       currentSubject && isCurrentContinueMaterial
         ? getNextUncheckedPracticeMaterial(nextMaterials, {
             subjectId: currentSubject.id,
-            sessionDate: currentDateKey,
+            sessionDate: subjectDialogDateKey,
             weekNumber: selectedWeekNumber,
           })
         : null
@@ -1863,7 +1906,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 ...previous,
                 material: getNextUncheckedPracticeMaterial(remainingMaterials, {
                   subjectId: currentSubject.id,
-                  sessionDate: currentDateKey,
+                  sessionDate: subjectDialogDateKey,
                   weekNumber: selectedWeekNumber,
                 }),
               }
@@ -1935,7 +1978,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   // Practice modal functions
   const openPracticeModal = () => {
-    setPracticeLaunchView("menu")
+    setPracticeLaunchView("exercises")
     setPracticeSubjectIndex(null)
     setPracticeSubjectId("")
     setPracticeWeekNumber(String(getCurrentWeekNumber()))
@@ -2175,10 +2218,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       ),
     [materials, pendingMaterials]
   )
+  const activeDayEntries = useMemo(
+    () => entries.filter((entry) => entry.session_date === subjectDialogDateKey),
+    [entries, subjectDialogDateKey]
+  )
   const currentContinueMaterial = continuePayload?.material ?? null
   const theoryDayEntries = useMemo(
-    () => entries.filter((entry) => entry.subject_day_material_id == null),
-    [entries]
+    () => activeDayEntries.filter((entry) => entry.subject_day_material_id == null),
+    [activeDayEntries]
   )
   const practiceEntriesByMaterialId = useMemo(() => {
     return entries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -2193,33 +2240,56 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const continueMaterialEntries = useMemo(
     () =>
       currentContinueMaterial
-        ? entries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
+        ? activeDayEntries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
         : [],
-    [currentContinueMaterial, entries]
+    [activeDayEntries, currentContinueMaterial]
+  )
+  const selectedPracticeMaterialEntries = useMemo(
+    () => (selectedPracticeMaterialId ? activeDayEntries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
+    [activeDayEntries, selectedPracticeMaterialId]
+  )
+  const selectedPracticeMaterial = useMemo(
+    () => practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
+    [practiceMaterials, selectedPracticeMaterialId]
   )
   const localContinueFeaturedEntry = useMemo(
     () =>
       entries.find(
         (entry) =>
           entry.subject_id === currentSubject?.id &&
-          entry.session_date === currentDateKey &&
+          entry.session_date === subjectDialogDateKey &&
           entry.is_featured &&
           entry.subject_day_material_id == null
       ) ?? null,
-    [currentDateKey, currentSubject?.id, entries]
+    [currentSubject?.id, entries, subjectDialogDateKey]
   )
+  const weekAudioDays = useMemo(() => {
+    const grouped = entries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
+      const current = accumulator[entry.session_date] ?? []
+      current.push(entry)
+      accumulator[entry.session_date] = current
+      return accumulator
+    }, {})
+
+    return Object.entries(grouped)
+      .map(([sessionDate, dayEntries]) => ({
+        sessionDate,
+        entries: sortSubjectDayEntries(dayEntries),
+      }))
+      .sort((left, right) => left.sessionDate.localeCompare(right.sessionDate))
+  }, [entries])
   const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
     if (!currentSubject) return null
 
     return {
       material: getNextUncheckedPracticeMaterial(materials, {
         subjectId: currentSubject.id,
-        sessionDate: currentDateKey,
+        sessionDate: subjectDialogDateKey,
         weekNumber: selectedWeekNumber,
       }),
       previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentDateKey, currentSubject, localContinueFeaturedEntry, materials, selectedWeekNumber])
+  }, [continuePayload?.previousFeaturedEntry, currentSubject, localContinueFeaturedEntry, materials, selectedWeekNumber, subjectDialogDateKey])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -2393,15 +2463,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         </div>
 
         <div className="flex gap-2 items-center">
-          {authSession.isAdmin ? (
-            <Button
-              onClick={() => setIsAdminModalOpen(true)}
-              variant="outline"
-              className="h-9 border-slate-900 bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(51,65,85,0.92))] px-4 text-white shadow-[0_10px_30px_rgba(15,23,42,0.16)] hover:bg-slate-800 hover:text-white"
-            >
-              Admin
-            </Button>
-          ) : null}
           <Button
             onClick={openManualMobileShortcutPicker}
             variant="outline"
@@ -2739,8 +2800,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void (practiceSectionView === "exercises" ? moveWeek(-1) : moveDay(-1))}
-              disabled={practiceSectionView === "exercises" ? selectedWeekNumber <= 0 : currentDayIndex <= 0}
+              onClick={() => void moveDay(-1)}
+              disabled={subjectDialogDayIndex <= 0}
               className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -2748,12 +2809,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void (practiceSectionView === "exercises" ? moveWeek(1) : moveDay(1))}
-              disabled={
-                practiceSectionView === "exercises"
-                  ? selectedWeekNumber >= latestWeekNumber
-                  : currentDayIndex === -1 || currentDayIndex >= lastVisibleDayIndex
-              }
+              onClick={() => void moveDay(1)}
+              disabled={subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex}
               className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronRight className="h-5 w-5" />
@@ -2765,7 +2822,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
                       {practiceSectionView === "exercises"
-                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
+                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(subjectDialogDateKey)}`
                         : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
                     </DialogTitle>
                     {practiceSectionView === "theory" ? (
@@ -2778,6 +2835,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       >
                         {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                         Copiar
+                      </Button>
+                    ) : null}
+                    {practiceSectionView === "exercises" && subjectViewDateOverride ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void returnToCurrentDayView()}
+                        className="h-9 border-black px-3 text-black"
+                      >
+                        Volver
                       </Button>
                     ) : null}
                   </div>
@@ -2814,7 +2881,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {practiceSectionView === "theory" ? (
                 <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
-              ) : null}
+              ) : (
+                <div className="text-sm text-slate-700 sm:text-base">{subjectDialogDateKey}</div>
+              )}
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
@@ -2840,6 +2909,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               {practiceSectionView === "theory" ? (
                 <div className="mb-2" />
               ) : (
+                <>
                 <div className="mb-6 space-y-4">
                   <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
                     <div className="flex items-center justify-between gap-3">
@@ -2914,9 +2984,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               buildPracticeDraftViewerHref({
                                 subjectId: currentSubject.id,
                                 subjectName: getSubjectDisplayName(currentSubject),
-                                sessionDate: currentDateKey,
+                                sessionDate: subjectDialogDateKey,
                                 weekNumber: selectedWeekNumber,
-                                weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                                weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                               }),
                               "_blank",
                               "noopener,noreferrer"
@@ -2981,11 +3051,23 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 >
                                   {material.file_name}
                                 </a>
-                                {isWeeklyExercisesScope ? (
-                                  <span className="shrink-0 text-xs text-slate-400">
-                                    {getWeekdayLabel(material.session_date)} {material.session_date}
-                                  </span>
-                                ) : null}
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setSelectedPracticeMaterialId(material.id)}
+                                  className="h-8 border-black px-3 text-xs text-black"
+                                >
+                                  Ver
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => void copyEntriesForMaterial(material.id)}
+                                  disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
+                                  className="h-8 border-black px-3 text-xs text-black"
+                                >
+                                  Copiar
+                                </Button>
                                 <Button
                                   type="button"
                                   variant="ghost"
@@ -3003,129 +3085,173 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         ))
                       ) : (
                         <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
-                          {isWeeklyExercisesScope
-                            ? "Todavia no hay PDFs de practica para esta semana."
-                            : "Todavia no hay PDFs de practica para este dia."}
+                          Todavia no hay PDFs de practica para este dia.
                         </p>
                       )}
-                      {practiceMaterials.filter((material) => !("is_pending_upload" in material)).map((material) => {
-                        const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
-                        if (!materialEntries.length) return null
+                    </div>
+                  </section>
 
-                        return (
-                          <div key={`entries-${material.id}`} className="space-y-2 rounded-xl border border-slate-200 bg-white/70 p-3">
-                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
-                              Audios en {material.file_name}
-                              {isWeeklyExercisesScope ? ` (${getWeekdayLabel(material.session_date)} ${material.session_date})` : ""}
-                            </p>
-                            {materialEntries.map((entry) => {
-                              const isExpandedAudio = expandedAudioEntryId === entry.id
-                              const audioSrc = audioSourceUrls[entry.id]
-                              const isRevealed = revealedAnswers[entry.id]
-                              const isEditingTitle = editingTitleId === entry.id
+                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Semana</p>
+                      </div>
+                    </div>
 
-                              return (
-                                <article key={entry.id} className="relative rounded-lg border border-slate-200 bg-white px-3 py-3">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => void deleteEntry(entry)}
-                                    disabled={isDeletingEntryId === entry.id}
-                                    className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                    aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
-                                  >
-                                    {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                                  </Button>
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0 space-y-1">
-                                      {isEditingTitle ? (
-                                        <div className="flex flex-wrap items-center gap-2 pr-8">
-                                          <Input
-                                            value={titleDrafts[entry.id] ?? ""}
-                                            onChange={(event) =>
-                                              setTitleDrafts((previous) => ({
-                                                ...previous,
-                                                [entry.id]: event.target.value,
-                                              }))
-                                            }
-                                            className="h-9 max-w-xs"
-                                          />
-                                          <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
-                                            {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                                            Guardar
-                                          </Button>
-                                          <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
-                                            <X className="h-4 w-4" />
-                                            Cancelar
-                                          </Button>
-                                        </div>
-                                      ) : (
-                                        <div className="flex flex-wrap items-center gap-2 pr-8">
-                                          <p className="text-sm font-medium text-black">{getEntryDisplayTitle(entry)}</p>
-                                          <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
-                                            <Pencil className="h-4 w-4 text-slate-500" />
-                                          </Button>
-                                        </div>
-                                      )}
-                                      <p className="text-sm leading-6 text-slate-800">{entry.transcript_text}</p>
-                                    </div>
-                                    <Button
-                                      variant="outline"
-                                      onClick={() => void togglePlayback(entry.id)}
-                                      className="h-10 shrink-0 border-black px-3 text-black"
-                                    >
-                                      {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                                      Audio
-                                    </Button>
-                                  </div>
-
-                                  <div className="mt-4 border-t border-slate-200 pt-3">
-                                    {entry.answer_text ? (
-                                      <div className="space-y-2.5">
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            setRevealedAnswers((previous) => ({
-                                              ...previous,
-                                              [entry.id]: !previous[entry.id],
-                                            }))
-                                          }
-                                          className="block w-full border border-slate-300 px-3 py-2 text-left text-sm text-slate-800"
-                                        >
-                                          {isRevealed ? entry.answer_text : "Click para revelar la respuesta"}
-                                        </button>
-                                        <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
-                                          Responder
-                                        </Button>
-                                      </div>
-                                    ) : (
-                                      <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-10 px-3">
-                                        Responder
-                                      </Button>
-                                    )}
-                                  </div>
-
-                                  {isExpandedAudio && audioSrc ? (
-                                    <audio
-                                      ref={(element) => {
-                                        audioElementRefs.current[entry.id] = element
-                                      }}
-                                      controls
-                                      src={audioSrc}
-                                      preload="metadata"
-                                      className="mt-3 h-12 w-full"
-                                    />
-                                  ) : null}
-                                </article>
-                              )
-                            })}
+                    <div className="space-y-2">
+                      {weekAudioDays.length > 0 ? (
+                        weekAudioDays.map((day) => (
+                          <div key={day.sessionDate} className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
+                            <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
+                              {getWeekdayLabel(day.sessionDate)}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void openWeekAudioDay(day.sessionDate)}
+                              className="h-8 border-black px-3 text-xs text-black"
+                            >
+                              Ver
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void copyEntriesForSession(day.sessionDate)}
+                              disabled={day.entries.length === 0 || isCopyingEntries}
+                              className="h-8 border-black px-3 text-xs text-black"
+                            >
+                              Copiar
+                            </Button>
                           </div>
-                        )
-                      })}
+                        ))
+                      ) : (
+                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                          Todavia no hay audios cargados en esta semana.
+                        </p>
+                      )}
                     </div>
                   </section>
                 </div>
+                {selectedPracticeMaterial ? (
+                  <section className="mb-6 space-y-5 rounded-xl border border-slate-300 bg-white px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Detalle del PDF</p>
+                        <p className="text-lg font-medium text-black">{selectedPracticeMaterial.file_name}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setSelectedPracticeMaterialId(null)}
+                        className="h-9 border-black px-3 text-black"
+                      >
+                        Volver
+                      </Button>
+                    </div>
+
+                    {selectedPracticeMaterialEntries.length > 0 ? (
+                      <div className="space-y-5">
+                        {selectedPracticeMaterialEntries.map((entry) => {
+                          const isExpandedAudio = expandedAudioEntryId === entry.id
+                          const audioSrc = audioSourceUrls[entry.id]
+                          const isEditingTitle = editingTitleId === entry.id
+                          const isRevealed = revealedAnswers[entry.id]
+
+                          return (
+                            <article key={entry.id} className="relative space-y-3 border-t border-slate-200 pt-5 first:border-t-0 first:pt-0">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => void deleteEntry(entry)}
+                                disabled={isDeletingEntryId === entry.id}
+                                className="absolute right-0 top-0 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
+                              >
+                                {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                              </Button>
+                              {isEditingTitle ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Input
+                                    value={titleDrafts[entry.id] ?? ""}
+                                    onChange={(event) =>
+                                      setTitleDrafts((previous) => ({
+                                        ...previous,
+                                        [entry.id]: event.target.value,
+                                      }))
+                                    }
+                                    className="h-10 max-w-sm text-base"
+                                  />
+                                  <Button size="sm" onClick={() => void saveTitle(entry)} disabled={isSavingTitleId === entry.id}>
+                                    {isSavingTitleId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                  </Button>
+                                  <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-2 pr-8 text-black">
+                                  <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
+                                  <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )}
+
+                              <p className="text-base leading-7 text-slate-800">{entry.transcript_text}</p>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!entry.answer_text) {
+                                    startAnswerEdit(entry)
+                                    return
+                                  }
+                                  setRevealedAnswers((previous) => ({
+                                    ...previous,
+                                    [entry.id]: !previous[entry.id],
+                                  }))
+                                }}
+                                className="block w-full rounded-lg border border-slate-300 px-4 py-3 text-left text-base text-slate-700"
+                              >
+                                {entry.answer_text
+                                  ? isRevealed
+                                    ? entry.answer_text
+                                    : "Click para revelar la respuesta"
+                                  : "Escribir respuesta"}
+                              </button>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-black px-4 text-base text-black">
+                                  Responder
+                                </Button>
+                                <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
+                                  {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                  audio
+                                </Button>
+                              </div>
+
+                              {isExpandedAudio && audioSrc ? (
+                                <audio
+                                  ref={(element) => {
+                                    audioElementRefs.current[entry.id] = element
+                                  }}
+                                  controls
+                                  src={audioSrc}
+                                  preload="metadata"
+                                  className="h-12 w-full"
+                                />
+                              ) : null}
+                            </article>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-base text-slate-500">Sin audios.</p>
+                    )}
+                  </section>
+                ) : null}
+                </>
               )}
 
               {isEntriesLoading || isMaterialsLoading ? (
@@ -3365,14 +3491,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       onClick={() => {
                         if (!currentSubject) return
 
-                        const target: AudioUploadTarget = {
-                          source: "continue-context",
-                          subjectId: currentSubject.id,
-                          subjectName: getSubjectDisplayName(currentSubject),
-                          sessionDate: currentDateKey,
-                          weekNumber: selectedWeekNumber,
-                          weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
-                        }
+                  const target: AudioUploadTarget = {
+                    source: "continue-context",
+                    subjectId: currentSubject.id,
+                    subjectName: getSubjectDisplayName(currentSubject),
+                    sessionDate: subjectDialogDateKey,
+                    weekNumber: selectedWeekNumber,
+                    weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+                  }
 
                         void (isRecording ? stopRecording() : startRecording(target))
                       }}
@@ -3547,9 +3673,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     source: "continue-practice",
                     subjectId: currentSubject.id,
                     subjectName: getSubjectDisplayName(currentSubject),
-                    sessionDate: currentDateKey,
+                    sessionDate: subjectDialogDateKey,
                     weekNumber: selectedWeekNumber,
-                    weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                    weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                     materialId: currentContinueMaterial.id,
                   }
 
@@ -3859,41 +3985,30 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   />
                 </div>
               </div>
-              <DialogClose asChild>
-                <button
-                  type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
-                  aria-label="Cerrar modal"
-                >
-                  <X className="h-7 w-7" />
-                </button>
-              </DialogClose>
+              <div className="flex items-center gap-2">
+                {authSession.isAdmin ? (
+                  <Button
+                    onClick={() => setIsAdminModalOpen(true)}
+                    variant="outline"
+                    className="h-10 border-slate-900 bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(51,65,85,0.92))] px-4 text-white shadow-[0_10px_30px_rgba(15,23,42,0.16)] hover:bg-slate-800 hover:text-white"
+                  >
+                    Administrar
+                  </Button>
+                ) : null}
+                <DialogClose asChild>
+                  <button
+                    type="button"
+                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                    aria-label="Cerrar modal"
+                  >
+                    <X className="h-7 w-7" />
+                  </button>
+                </DialogClose>
+              </div>
             </div>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
-            {practiceLaunchView === "menu" && (
-              <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
-                <div className="grid w-full gap-6 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setPracticeLaunchView("theory")}
-                    className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-2xl font-semibold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
-                  >
-                    Teoria
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setPracticeLaunchView("exercises")}
-                    className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-2xl font-semibold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
-                  >
-                    Ejercitacion
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Subject selection */}
             {practiceLaunchView === "theory" && practiceSubjectIndex === null && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
@@ -4011,7 +4126,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </div>
                 <div className="flex justify-end">
                   <div className="flex gap-2">
-                    <Button variant="outline" onClick={() => setPracticeLaunchView("menu")} className="h-12 px-6">
+                    <Button variant="outline" onClick={() => setIsPracticeOpen(false)} className="h-12 px-6">
                       Volver
                     </Button>
                     <Button
@@ -4046,7 +4161,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </div>
 
                 <div className="flex justify-end">
-                  <Button variant="outline" onClick={() => setPracticeLaunchView("menu")} className="h-12 px-6">
+                  <Button variant="outline" onClick={() => setIsPracticeOpen(false)} className="h-12 px-6">
                     Volver
                   </Button>
                 </div>
