@@ -2624,6 +2624,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <DialogContent
           className="top-0 left-0 z-[60] h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-[#9a9a9a] p-0 shadow-none sm:top-1/2 sm:left-1/2 sm:h-[min(92dvh,760px)] sm:w-[440px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[28px] sm:border-2 sm:border-slate-200 sm:shadow-2xl"
           showCloseButton={false}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
         >
           <DialogHeader className="sr-only">
             <DialogTitle>Atajo de celular</DialogTitle>
@@ -3674,7 +3677,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       </Dialog>
 
       <Dialog open={isReviewDialogOpen} onOpenChange={(open) => (!open ? cancelReview() : undefined)}>
-        <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-lg"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
           <DialogHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
