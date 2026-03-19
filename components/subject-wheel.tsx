@@ -2232,7 +2232,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => entries.filter((entry) => entry.session_date === subjectDialogDateKey),
     [entries, subjectDialogDateKey]
   )
-  const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
   const theoryDayEntries = useMemo(
     () => activeDayEntries.filter((entry) => entry.subject_day_material_id == null),
     [activeDayEntries]
@@ -2262,6 +2261,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
     [practiceMaterials, selectedPracticeMaterialId]
   )
+  const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
   useEffect(() => {
     if (selectedPracticeMaterialId == null) return
     if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
