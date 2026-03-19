@@ -1,30 +1,9 @@
-import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
 
 export const runtime = "nodejs"
-
-const sql = neon(process.env.DATABASE_URL!)
-
-type MaterialType = "theory" | "practice"
-
-type SubjectDayMaterialRow = {
-  id: number
-  subject_id: string
-  week_number: number
-  session_date: string
-  weekday_index: number
-  material_type: MaterialType
-  order_index: number
-  file_name: string
-  drive_file_id: string
-  drive_mime_type: string
-  drive_web_view_link: string
-  is_checkup_done: boolean
-  created_at: string
-  updated_at: string
-}
 
 function isMissingSubjectDayMaterialsTable(error: unknown) {
   return Boolean(
@@ -44,21 +23,6 @@ function parseSessionDate(sessionDate: string) {
   const parsed = parseDateKey(sessionDate)
   if (Number.isNaN(parsed.getTime())) return null
   return parsed
-}
-
-function normalizeSessionDateKey(sessionDate: string | Date) {
-  if (sessionDate instanceof Date) {
-    return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
-  }
-
-  return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
-}
-
-function normalizeRows(rows: SubjectDayMaterialRow[]) {
-  return rows.map((row) => ({
-    ...row,
-    session_date: normalizeSessionDateKey(row.session_date),
-  }))
 }
 
 export async function GET(request: Request) {
@@ -81,18 +45,33 @@ export async function GET(request: Request) {
     const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
     let weekNumber = rawWeekNumber
 
-    let rows: SubjectDayMaterialRow[]
+    const shouldReconcile = Boolean(subjectId) && (!Number.isNaN(rawWeekNumber) || Boolean(sessionDate))
+
     if (scope === "week") {
       if (Number.isNaN(rawWeekNumber)) {
         return badRequest("Missing weekNumber")
       }
 
-      rows = await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-        FROM subject_day_materials
-        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND material_type = 'practice'
-        ORDER BY session_date ASC, order_index ASC, id ASC
-      ` as SubjectDayMaterialRow[]
+      if (shouldReconcile) {
+        try {
+          const result = await reconcileSubjectDayMaterialsFromR2({
+            subjectId,
+            weekNumber,
+            materialType: "practice",
+          })
+          if (result.inserted > 0) {
+            console.info("GET /api/subject-day-materials reconciled weekly materials from R2", {
+              subjectId,
+              weekNumber,
+              inserted: result.inserted,
+              scanned: result.scanned,
+              skipped: result.skipped,
+            })
+          }
+        } catch (error) {
+          console.error("GET /api/subject-day-materials weekly reconciliation failed:", error)
+        }
+      }
     } else {
       if (!sessionDate) {
         return badRequest("Missing sessionDate")
@@ -104,16 +83,38 @@ export async function GET(request: Request) {
       }
 
       weekNumber = Number.isNaN(rawWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : rawWeekNumber
-
-      rows = await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-        FROM subject_day_materials
-        WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
-        ORDER BY material_type ASC, order_index ASC, id ASC
-      ` as SubjectDayMaterialRow[]
+      if (shouldReconcile) {
+        try {
+          const result = await reconcileSubjectDayMaterialsFromR2({
+            subjectId,
+            weekNumber,
+            sessionDate,
+            materialType: null,
+          })
+          if (result.inserted > 0) {
+            console.info("GET /api/subject-day-materials reconciled daily materials from R2", {
+              subjectId,
+              weekNumber,
+              sessionDate,
+              inserted: result.inserted,
+              scanned: result.scanned,
+              skipped: result.skipped,
+            })
+          }
+        } catch (error) {
+          console.error("GET /api/subject-day-materials daily reconciliation failed:", error)
+        }
+      }
     }
 
-    return NextResponse.json(normalizeRows(rows))
+    const rows = await listSubjectDayMaterials({
+      subjectId,
+      weekNumber,
+      sessionDate: scope === "week" ? undefined : sessionDate!,
+      materialType: scope === "week" ? "practice" : null,
+    })
+
+    return NextResponse.json(rows)
   } catch (error) {
     console.error("GET /api/subject-day-materials error:", error)
     if (isMissingSubjectDayMaterialsTable(error)) {

@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
@@ -43,6 +43,17 @@ function getFileNameFromKey(objectKey: string) {
   return segments[segments.length - 1] || objectKey
 }
 
+function normalizeMetadataValue(value: string | undefined) {
+  const normalized = String(value || "").trim()
+  return normalized.length > 0 ? normalized : undefined
+}
+
+function buildUploadMetadataHeaders(metadata: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(metadata).map(([key, value]) => [`x-amz-meta-${key}`, value])
+  )
+}
+
 export function isR2ObjectKey(value: string) {
   return value.startsWith(R2_KEY_PREFIX)
 }
@@ -63,15 +74,23 @@ export function buildR2ObjectKey(params: {
 export async function createR2UploadSession(params: {
   objectKey: string
   mimeType: string
+  metadata?: Record<string, string>
   expiresInSeconds?: number
 }) {
   const client = createR2Client()
+  const metadata = Object.fromEntries(
+    Object.entries(params.metadata ?? {}).flatMap(([key, value]) => {
+      const normalizedValue = normalizeMetadataValue(value)
+      return normalizedValue ? [[key, normalizedValue]] : []
+    })
+  )
   const uploadUrl = await getSignedUrl(
     client,
     new PutObjectCommand({
       Bucket: getBucketName(),
       Key: params.objectKey,
       ContentType: params.mimeType,
+      Metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     }),
     { expiresIn: params.expiresInSeconds ?? 900 }
   )
@@ -80,6 +99,10 @@ export async function createR2UploadSession(params: {
     uploadUrl,
     fileName: getFileNameFromKey(params.objectKey),
     driveFileId: params.objectKey,
+    headers: {
+      "Content-Type": params.mimeType,
+      ...buildUploadMetadataHeaders(metadata),
+    },
   }
 }
 
@@ -94,10 +117,49 @@ export async function getR2ObjectMetadata(objectKey: string) {
 
   return {
     id: objectKey,
-    name: getFileNameFromKey(objectKey),
+    name: response.Metadata?.["original-file-name"] || getFileNameFromKey(objectKey),
     mimeType: response.ContentType || "application/octet-stream",
     size: typeof response.ContentLength === "number" ? String(response.ContentLength) : undefined,
+    metadata: response.Metadata ?? {},
+    lastModified: response.LastModified?.toISOString() ?? null,
   }
+}
+
+export async function getR2ObjectMetadatas(objectKeys: string[]) {
+  return Promise.all(objectKeys.map((objectKey) => getR2ObjectMetadata(objectKey)))
+}
+
+export async function listR2ObjectsByPrefix(prefix = R2_KEY_PREFIX) {
+  const client = createR2Client()
+  const objects: Array<{
+    key: string
+    size: number
+    lastModified: string | null
+  }> = []
+
+  let continuationToken: string | undefined
+  do {
+    const response = await client.send(
+      new ListObjectsV2Command({
+        Bucket: getBucketName(),
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    )
+
+    for (const object of response.Contents ?? []) {
+      if (!object.Key) continue
+      objects.push({
+        key: object.Key,
+        size: typeof object.Size === "number" ? object.Size : 0,
+        lastModified: object.LastModified?.toISOString() ?? null,
+      })
+    }
+
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined
+  } while (continuationToken)
+
+  return objects
 }
 
 export async function downloadR2Object(objectKey: string) {

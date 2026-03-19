@@ -70,6 +70,10 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
   }))
 }
 
+function readR2MetadataValue(metadata: Record<string, string> | undefined, key: string) {
+  return String(metadata?.[key] || "").trim()
+}
+
 export async function POST(request: Request) {
   try {
     const auth = await requireAuthSession()
@@ -102,8 +106,34 @@ export async function POST(request: Request) {
       return badRequest("Only PDF files are allowed")
     }
 
+    if (isR2ObjectKey(driveFileId) && "metadata" in driveFile) {
+      const metadataSubjectId = readR2MetadataValue(driveFile.metadata, "subject-id")
+      const metadataSessionDate = readR2MetadataValue(driveFile.metadata, "session-date")
+      const metadataWeekNumber = Number.parseInt(readR2MetadataValue(driveFile.metadata, "week-number"), 10)
+      const metadataMaterialType = readR2MetadataValue(driveFile.metadata, "material-type")
+
+      if (
+        (metadataSubjectId && metadataSubjectId !== subjectId) ||
+        (metadataSessionDate && metadataSessionDate !== sessionDate) ||
+        (Number.isInteger(metadataWeekNumber) && metadataWeekNumber !== requestedWeekNumber && metadataWeekNumber !== getWeekNumberForDate(parsedSessionDate)) ||
+        (metadataMaterialType && metadataMaterialType !== materialType)
+      ) {
+        return badRequest("La metadata del archivo en R2 no coincide con la materia o fecha solicitada")
+      }
+    }
+
+    const existingRows = await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      FROM subject_day_materials
+      WHERE drive_file_id = ${driveFile.id}
+      LIMIT 1
+    ` as SubjectDayMaterialRow[]
+    if (existingRows[0]) {
+      return NextResponse.json(normalizeRows(existingRows)[0])
+    }
+
     const persistedFileName = isR2ObjectKey(driveFileId)
-      ? normalizeUploadedPdfFileName(uploadedFileName)
+      ? normalizeUploadedPdfFileName(readR2MetadataValue("metadata" in driveFile ? driveFile.metadata : undefined, "original-file-name") || uploadedFileName || driveFile.name)
       : normalizeUploadedPdfFileName(uploadedFileName) || driveFile.name
 
     if (!persistedFileName) {
