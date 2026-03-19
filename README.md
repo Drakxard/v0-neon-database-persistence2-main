@@ -24,6 +24,26 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Storage
+
+New uploads use a server-side proxy flow: browser -> Next.js API -> Cloudflare R2. This avoids depending on bucket CORS for core functionality while keeping persisted `drive_file_id` values as `r2/...` keys.
+
+Required environment variables for R2:
+
+```bash
+R2_BUCKET_NAME=
+R2_ENDPOINT=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+```
+
+Recommended Cloudflare R2 CORS configuration for operational hardening:
+
+- Origins: production Vercel domain and `http://localhost:3000`
+- Methods: `PUT`, `GET`, `HEAD`, `OPTIONS`, `DELETE`
+- Allowed headers: `Content-Type`, `x-amz-meta-*`
+- Expose headers: `ETag`
+
 ## Learn More
 
 To learn more, take a look at the following resources:

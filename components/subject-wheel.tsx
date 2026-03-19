@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
+import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
@@ -322,41 +323,6 @@ async function requireOkJson(response: Response, fallback: string) {
   }
 
   return payload
-}
-
-type DriveUploadSessionResponse = {
-  uploadUrl: string
-  method?: string
-  headers?: Record<string, string>
-  fileName: string
-  driveFileId?: string
-}
-
-async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob) {
-  const response = await fetch(session.uploadUrl, {
-    method: session.method || "PUT",
-    headers: session.headers,
-    body: blob,
-  })
-
-  const payload = await parseJsonResponse(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo al storage."))
-  }
-
-  const driveFileId =
-    (payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : "") ||
-    session.driveFileId ||
-    ""
-
-  if (!driveFileId) {
-    throw new Error("El storage no devolvio el identificador del archivo subido.")
-  }
-
-  return {
-    driveFileId,
-    payload,
-  }
 }
 
 function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
@@ -1367,7 +1333,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         "No se pudo preparar la subida del audio."
       )) as DriveUploadSessionResponse
 
-      const { driveFileId } = await uploadBlobToDrive(sessionPayload, audioFile)
+      const { driveFileId } = await uploadBlobToStorage(sessionPayload, audioFile)
 
       const response = await fetch("/api/subject-day-entries/complete", {
         method: "POST",
@@ -1734,7 +1700,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         "No se pudo preparar la subida del PDF."
       )) as DriveUploadSessionResponse
 
-      const { driveFileId } = await uploadBlobToDrive(sessionPayload, file)
+      const { driveFileId } = await uploadBlobToStorage(sessionPayload, file)
       const persistedFileName = file.name.trim()
 
       const response = await fetch("/api/subject-day-materials/complete", {

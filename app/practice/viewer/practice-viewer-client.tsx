@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
 
 type MaterialContext = {
   id: number
@@ -95,41 +96,6 @@ async function requireOkJson(response: Response, fallback: string) {
     throw new Error(getErrorMessage(payload, fallback))
   }
   return payload
-}
-
-type DriveUploadSessionResponse = {
-  uploadUrl: string
-  method?: string
-  headers?: Record<string, string>
-  fileName: string
-  driveFileId?: string
-}
-
-async function uploadBlobToDrive(session: DriveUploadSessionResponse, blob: Blob) {
-  const response = await fetch(session.uploadUrl, {
-    method: session.method || "PUT",
-    headers: session.headers,
-    body: blob,
-  })
-
-  const payload = await readResponsePayload(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, "No se pudo subir el archivo al storage."))
-  }
-
-  const driveFileId =
-    (payload && typeof payload === "object" && "id" in payload && typeof payload.id === "string" ? payload.id : "") ||
-    session.driveFileId ||
-    ""
-
-  if (!driveFileId) {
-    throw new Error("El storage no devolvio el identificador del archivo subido.")
-  }
-
-  return {
-    driveFileId,
-    payload,
-  }
 }
 
 function buildViewerSrc({
@@ -382,7 +348,7 @@ export function PracticeViewerClient({
         "No se pudo preparar la subida del audio."
       )) as DriveUploadSessionResponse
 
-      const { driveFileId } = await uploadBlobToDrive(sessionPayload, audioFile)
+      const { driveFileId } = await uploadBlobToStorage(sessionPayload, audioFile)
 
       const entryResponse = await fetch("/api/subject-day-entries/complete", {
         method: "POST",
@@ -458,7 +424,7 @@ export function PracticeViewerClient({
           "No se pudo preparar la subida del PDF fragmentado."
         )) as DriveUploadSessionResponse
 
-        const { driveFileId } = await uploadBlobToDrive(sessionPayload, payload.blob)
+        const { driveFileId } = await uploadBlobToStorage(sessionPayload, payload.blob)
         const persistedFileName = fileName.trim()
 
         await requireOkJson(

@@ -1,5 +1,4 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
@@ -71,38 +70,54 @@ export function buildR2ObjectKey(params: {
   return `${R2_KEY_PREFIX}${subjectSegment}/${weekSegment}/${daySegment}/${Date.now()}-${fileSegment}`
 }
 
-export async function createR2UploadSession(params: {
-  objectKey: string
-  mimeType: string
-  metadata?: Record<string, string>
-  expiresInSeconds?: number
-}) {
-  const client = createR2Client()
+function normalizeUploadMetadata(input: Record<string, string> | undefined) {
   const metadata = Object.fromEntries(
-    Object.entries(params.metadata ?? {}).flatMap(([key, value]) => {
+    Object.entries(input ?? {}).flatMap(([key, value]) => {
       const normalizedValue = normalizeMetadataValue(value)
       return normalizedValue ? [[key, normalizedValue]] : []
     })
   )
-  const uploadUrl = await getSignedUrl(
-    client,
+  return Object.keys(metadata).length > 0 ? metadata : undefined
+}
+
+export async function uploadR2Object(params: {
+  objectKey: string
+  mimeType: string
+  body: Buffer | Uint8Array | string
+  metadata?: Record<string, string>
+}) {
+  const client = createR2Client()
+  const metadata = normalizeUploadMetadata(params.metadata)
+
+  await client.send(
     new PutObjectCommand({
       Bucket: getBucketName(),
       Key: params.objectKey,
+      Body: params.body,
       ContentType: params.mimeType,
-      Metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-    }),
-    { expiresIn: params.expiresInSeconds ?? 900 }
+      Metadata: metadata,
+    })
   )
+}
+
+export async function createR2UploadSession(params: {
+  objectKey: string
+  mimeType: string
+  metadata?: Record<string, string>
+}) {
+  const metadata = normalizeUploadMetadata(params.metadata)
 
   return {
-    uploadUrl,
+    uploadMode: "server" as const,
+    objectKey: params.objectKey,
     fileName: getFileNameFromKey(params.objectKey),
     driveFileId: params.objectKey,
+    mimeType: params.mimeType,
     headers: {
       "Content-Type": params.mimeType,
-      ...buildUploadMetadataHeaders(metadata),
+      ...buildUploadMetadataHeaders(metadata ?? {}),
     },
+    metadata,
   }
 }
 

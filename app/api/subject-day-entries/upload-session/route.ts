@@ -91,14 +91,23 @@ export async function POST(request: Request) {
     const session = await createR2UploadSession({
       objectKey,
       mimeType,
+      metadata: {
+        "subject-id": subjectId,
+        "subject-name": subjectName.replace(/\n/g, " ").trim(),
+        "session-date": sessionDate,
+        "week-number": String(weekNumber),
+        "weekday-index": String(weekdayIndex),
+        ...(materialId !== null ? { "material-id": String(materialId) } : {}),
+        "original-file-name": fileName,
+      },
     })
 
     return NextResponse.json({
-      uploadUrl: session.uploadUrl,
-      method: "PUT",
-      headers: {
-        "Content-Type": mimeType,
-      },
+      uploadMode: session.uploadMode,
+      objectKey: session.objectKey,
+      headers: session.headers,
+      metadata: session.metadata,
+      mimeType: session.mimeType,
       fileName: session.fileName,
       driveFileId: session.driveFileId,
     })
