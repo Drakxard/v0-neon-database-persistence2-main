@@ -2246,13 +2246,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       return accumulator
     }, {})
   }, [entries])
-  const continueMaterialEntries = useMemo(
-    () =>
-      currentContinueMaterial
-        ? entries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
-        : [],
-    [currentContinueMaterial, entries]
-  )
   const selectedPracticeMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -2262,6 +2255,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     [practiceMaterials, selectedPracticeMaterialId]
   )
   const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
+  const continueMaterialEntries = useMemo(
+    () =>
+      currentContinueMaterial
+        ? entries.filter((entry) => entry.subject_day_material_id === currentContinueMaterial.id)
+        : [],
+    [currentContinueMaterial, entries]
+  )
   useEffect(() => {
     if (selectedPracticeMaterialId == null) return
     if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
