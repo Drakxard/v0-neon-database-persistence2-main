@@ -882,7 +882,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         weekNumber: String(selectedWeekNumber),
       })
 
-      if (practiceSectionView === "exercises") {
+      if (practiceSectionView === "exercises" && subjectViewDateOverride) {
         materialsParams.set("sessionDate", subjectDialogDateKey)
       } else if (isWeeklyExercisesScope) {
         materialsParams.set("scope", "week")
@@ -1994,7 +1994,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsPracticeOpen(false)
     setCurrentSubject(subject)
     resetSubjectUiState()
-    setExerciseWeeklyScopeEnabled(showAllSubjectsForDay)
+    setExerciseWeeklyScopeEnabled(true)
     setPracticeSectionView("exercises")
     setIsDialogOpen(true)
   }
@@ -2239,8 +2239,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     [activeDayEntries, currentContinueMaterial]
   )
   const selectedPracticeMaterialEntries = useMemo(
-    () => (selectedPracticeMaterialId ? activeDayEntries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
-    [activeDayEntries, selectedPracticeMaterialId]
+    () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
+    [entries, selectedPracticeMaterialId]
   )
   const selectedPracticeMaterial = useMemo(
     () => practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
@@ -2799,8 +2799,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void moveDay(-1)}
-              disabled={subjectDialogDayIndex <= 0}
+              onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(-1) : moveDay(-1))}
+              disabled={
+                practiceSectionView === "exercises" && !subjectViewDateOverride
+                  ? selectedWeekNumber <= 0
+                  : subjectDialogDayIndex <= 0
+              }
               className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -2808,8 +2812,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => void moveDay(1)}
-              disabled={subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex}
+              onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
+              disabled={
+                practiceSectionView === "exercises" && !subjectViewDateOverride
+                  ? selectedWeekNumber >= latestWeekNumber
+                  : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
+              }
               className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
             >
               <ChevronRight className="h-5 w-5" />
@@ -2821,7 +2829,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
                       {practiceSectionView === "exercises"
-                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(subjectDialogDateKey)}`
+                        ? subjectViewDateOverride
+                          ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(subjectDialogDateKey)}`
+                          : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
                         : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
                     </DialogTitle>
                     {practiceSectionView === "theory" ? (
@@ -2880,9 +2890,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {practiceSectionView === "theory" ? (
                 <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
-              ) : (
+              ) : subjectViewDateOverride ? (
                 <div className="text-sm text-slate-700 sm:text-base">{subjectDialogDateKey}</div>
-              )}
+              ) : null}
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
