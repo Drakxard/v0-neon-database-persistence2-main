@@ -3612,7 +3612,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       </Dialog>
 
       <Dialog open={Boolean(editingEntry)} onOpenChange={(open) => (!open ? setEditingAnswerId(null) : undefined)}>
-        <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <DialogContent showCloseButton={false} className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-lg">
           <DialogHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
@@ -3632,7 +3632,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </DialogHeader>
 
           {editingEntry ? (
-            <div className="space-y-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div className="space-y-2">
                 <p className="text-sm font-medium text-slate-700">Pregunta</p>
                 <Textarea
@@ -3644,27 +3644,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     }))
                   }
                   placeholder="Escribe la duda"
-                  className="min-h-24"
+                  className="min-h-[220px] resize-y sm:min-h-24"
                 />
               </div>
               <div className="space-y-2">
                 <p className="text-sm font-medium text-slate-700">Respuesta</p>
-              <Textarea
-                value={answerDrafts[editingEntry.id] ?? ""}
-                onChange={(event) =>
-                  setAnswerDrafts((previous) => ({
-                    ...previous,
-                    [editingEntry.id]: event.target.value,
-                  }))
-                }
-                placeholder="Escribe la respuesta"
-                className="min-h-32"
-              />
+                <Textarea
+                  value={answerDrafts[editingEntry.id] ?? ""}
+                  onChange={(event) =>
+                    setAnswerDrafts((previous) => ({
+                      ...previous,
+                      [editingEntry.id]: event.target.value,
+                    }))
+                  }
+                  placeholder="Escribe la respuesta"
+                  className="min-h-[180px] resize-y sm:min-h-32"
+                />
               </div>
             </div>
           ) : null}
 
-          <DialogFooter>
+          <DialogFooter className="mt-4 border-t border-slate-200 pt-4">
             <Button variant="outline" onClick={() => setEditingAnswerId(null)}>
               Cancelar
             </Button>
