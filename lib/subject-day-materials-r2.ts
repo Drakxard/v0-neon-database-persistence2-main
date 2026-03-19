@@ -164,7 +164,7 @@ function buildCandidateFromLegacyKey(params: {
   const weekNumber = weekMatch ? Number.parseInt(weekMatch[1], 10) : Number.NaN
   const sessionDate = Number.isInteger(weekNumber) ? getLegacySessionDateFromWeekAndDay(weekNumber, segments[3] || "") : null
   const originalFileName = normalizeUploadedPdfFileName(params.name)
-  const inferredMaterialType = scope.materialType ?? inferLegacyMaterialType(originalFileName)
+  const inferredMaterialType = params.scope.materialType ?? inferLegacyMaterialType(originalFileName)
 
   if (!subjectId || !Number.isInteger(weekNumber) || !sessionDate || !inferredMaterialType || !originalFileName) {
     return null
