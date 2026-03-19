@@ -43,7 +43,14 @@ function getFileNameFromKey(objectKey: string) {
 }
 
 function normalizeMetadataValue(value: string | undefined) {
-  const normalized = String(value || "").trim()
+  const normalized = String(value || "")
+    .trim()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+
   return normalized.length > 0 ? normalized : undefined
 }
 
