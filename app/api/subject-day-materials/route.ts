@@ -34,9 +34,15 @@ export async function GET(request: Request) {
     const subjectId = searchParams.get("subjectId")
     const sessionDate = searchParams.get("sessionDate")
     const scope = searchParams.get("scope")
+    const materialTypeParam = searchParams.get("materialType")
+    const materialType = materialTypeParam === "theory" || materialTypeParam === "practice" ? materialTypeParam : null
 
     if (!subjectId) {
       return badRequest("Missing subjectId")
+    }
+
+    if (materialTypeParam && !materialType) {
+      return badRequest("Invalid materialType")
     }
 
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
@@ -57,12 +63,13 @@ export async function GET(request: Request) {
           const result = await reconcileSubjectDayMaterialsFromR2({
             subjectId,
             weekNumber,
-            materialType: "practice",
+            materialType,
           })
           if (result.inserted > 0) {
             console.info("GET /api/subject-day-materials reconciled weekly materials from R2", {
               subjectId,
               weekNumber,
+              materialType: materialType ?? "all",
               inserted: result.inserted,
               scanned: result.scanned,
               skipped: result.skipped,
@@ -71,6 +78,7 @@ export async function GET(request: Request) {
             console.info("GET /api/subject-day-materials weekly reconciliation scanned R2 without inserts", {
               subjectId,
               weekNumber,
+              materialType: materialType ?? "all",
               scanned: result.scanned,
               skipped: result.skipped,
               diagnostics: result.diagnostics,
@@ -128,7 +136,7 @@ export async function GET(request: Request) {
       subjectId,
       weekNumber,
       sessionDate: scope === "week" ? undefined : sessionDate!,
-      materialType: scope === "week" ? "practice" : null,
+      materialType: scope === "week" ? materialType : materialType,
     })
 
     return NextResponse.json(rows)

@@ -882,31 +882,32 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         subjectId: currentSubject.id,
         weekNumber: String(selectedWeekNumber),
       })
-      const materialsParams = new URLSearchParams({
-        subjectId: currentSubject.id,
-        weekNumber: String(selectedWeekNumber),
-      })
 
-      if (practiceSectionView === "exercises" && subjectViewDateOverride) {
-        materialsParams.set("sessionDate", subjectDialogDateKey)
-      } else if (isWeeklyExercisesScope) {
-        materialsParams.set("scope", "week")
-      } else {
+      if (!isWeeklyExercisesScope) {
         entriesParams.set("sessionDate", currentDateKey)
-        materialsParams.set("sessionDate", currentDateKey)
       }
 
       const materialRequestUrls =
-        practiceSectionView === "exercises" && !subjectViewDateOverride && isWeeklyExercisesScope
+        isWeeklyExercisesScope
           ? [
-              `/api/subject-day-materials?${materialsParams.toString()}`,
               `/api/subject-day-materials?${new URLSearchParams({
                 subjectId: currentSubject.id,
                 weekNumber: String(selectedWeekNumber),
-                sessionDate: subjectDialogDateKey,
+                scope: "week",
+                materialType: "theory",
+              }).toString()}`,
+              `/api/subject-day-materials?${new URLSearchParams({
+                subjectId: currentSubject.id,
+                weekNumber: String(selectedWeekNumber),
+                scope: "week",
+                materialType: "practice",
               }).toString()}`,
             ]
-          : [`/api/subject-day-materials?${materialsParams.toString()}`]
+          : [`/api/subject-day-materials?${new URLSearchParams({
+              subjectId: currentSubject.id,
+              weekNumber: String(selectedWeekNumber),
+              sessionDate: currentDateKey,
+            }).toString()}`]
 
       const [entriesResult, ...materialResults] = await Promise.all([
         fetch(`/api/subject-day-entries?${entriesParams.toString()}`)
@@ -995,7 +996,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       const subjectId = typeof payload.subjectId === "string" ? payload.subjectId : ""
       const sessionDate = typeof payload.sessionDate === "string" ? payload.sessionDate : ""
       const weekNumber = Number(payload.weekNumber)
-      if (subjectId !== currentSubject.id || sessionDate !== subjectDialogDateKey || weekNumber !== selectedWeekNumber) return
+      if (subjectId !== currentSubject.id || weekNumber !== selectedWeekNumber) return
+      if (!isWeeklyExercisesScope && sessionDate !== subjectDialogDateKey) return
 
       void loadSubjectDayData()
     }
@@ -1019,7 +1021,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       channel?.close()
       window.removeEventListener("storage", handleStorage)
     }
-  }, [currentSubject, isDialogOpen, loadSubjectDayData, selectedWeekNumber, subjectDialogDateKey])
+  }, [currentSubject, isDialogOpen, isWeeklyExercisesScope, loadSubjectDayData, selectedWeekNumber, subjectDialogDateKey])
 
   useEffect(() => {
     return () => {
@@ -2369,24 +2371,36 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
-        [...materials, ...pendingMaterials].filter((material) => material.material_type === "theory")
+        [...materials, ...pendingMaterials].filter((material) =>
+          material.material_type === "theory" && (!isWeeklyExercisesScope || material.week_number === selectedWeekNumber)
+        )
       ),
-    [materials, pendingMaterials]
+    [isWeeklyExercisesScope, materials, pendingMaterials, selectedWeekNumber]
   )
   const practiceMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
-        [...materials, ...pendingMaterials].filter((material) => material.material_type === "practice")
+        [...materials, ...pendingMaterials].filter((material) =>
+          material.material_type === "practice" && (!isWeeklyExercisesScope || material.week_number === selectedWeekNumber)
+        )
       ),
-    [materials, pendingMaterials]
+    [isWeeklyExercisesScope, materials, pendingMaterials, selectedWeekNumber]
   )
   const activeDayEntries = useMemo(
-    () => entries.filter((entry) => entry.session_date === subjectDialogDateKey),
-    [entries, subjectDialogDateKey]
+    () =>
+      isWeeklyExercisesScope
+        ? entries.filter((entry) => entry.week_number === selectedWeekNumber)
+        : entries.filter((entry) => entry.session_date === subjectDialogDateKey),
+    [entries, isWeeklyExercisesScope, selectedWeekNumber, subjectDialogDateKey]
   )
   const theoryDayEntries = useMemo(
-    () => activeDayEntries.filter((entry) => entry.subject_day_material_id == null),
-    [activeDayEntries]
+    () =>
+      activeDayEntries.filter(
+        (entry) =>
+          entry.subject_day_material_id == null &&
+          (!isWeeklyExercisesScope || entry.week_number === selectedWeekNumber)
+      ),
+    [activeDayEntries, isWeeklyExercisesScope, selectedWeekNumber]
   )
   const practiceEntriesByMaterialId = useMemo(() => {
     return entries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -2431,7 +2445,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     [currentSubject?.id, entries, subjectDialogDateKey]
   )
   const weekAudioDays = useMemo(() => {
-    const grouped = entries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
+    const grouped = activeDayEntries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.session_date] ?? []
       current.push(entry)
       accumulator[entry.session_date] = current
@@ -2444,7 +2458,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         entries: sortSubjectDayEntries(dayEntries),
       }))
       .sort((left, right) => left.sessionDate.localeCompare(right.sessionDate))
-  }, [entries])
+  }, [activeDayEntries])
   const isSubjectDayRefreshing = (isEntriesLoading || isMaterialsLoading) && hasResolvedSubjectDayData
   const shouldShowInitialSubjectDayLoading = (isEntriesLoading || isMaterialsLoading) && !hasResolvedSubjectDayData
   const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
@@ -2998,9 +3012,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <div className="flex flex-wrap items-center gap-2">
                     <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
                       {practiceSectionView === "exercises"
-                        ? subjectViewDateOverride
-                          ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(subjectDialogDateKey)}`
-                          : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
+                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
                         : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
                     </DialogTitle>
                     {practiceSectionView === "theory" ? (
@@ -3028,9 +3040,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
                     {practiceSectionView === "exercises"
-                      ? isWeeklyExercisesScope
-                        ? "Practica de toda la semana por archivo"
-                        : "Teoria y practica por archivo"
+                      ? "Teoria, practica y dudas de toda la semana"
                       : "Flujo anterior de dudas"}
                   </DialogDescription>
                 </div>
@@ -3058,6 +3068,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {practiceSectionView === "theory" ? (
                 <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
+              ) : isWeeklyExercisesScope ? (
+                <div className="text-sm text-slate-700 sm:text-base">Contenido completo de la semana seleccionada</div>
               ) : subjectViewDateOverride ? (
                 <div className="text-sm text-slate-700 sm:text-base">{subjectDialogDateKey}</div>
               ) : null}
@@ -3149,7 +3161,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             </div>
                           )
                         ))
-                      ) : null}
+                      ) : (
+                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                          {isWeeklyExercisesScope
+                            ? "Todavia no hay PDFs de teoria para esta semana."
+                            : "Todavia no hay PDFs de teoria para este dia."}
+                        </p>
+                      )}
                     </div>
                   </section>
 
@@ -3269,7 +3287,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         ))
                       ) : (
                         <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
-                          Todavia no hay PDFs de practica para este dia.
+                          {isWeeklyExercisesScope
+                            ? "Todavia no hay PDFs de practica para esta semana."
+                            : "Todavia no hay PDFs de practica para este dia."}
                         </p>
                       )}
                     </div>

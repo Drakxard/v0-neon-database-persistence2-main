@@ -347,20 +347,38 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
 export async function listSubjectDayMaterials(scope: ReconcileScope) {
   let rows: SubjectDayMaterialRow[]
 
-  if (scope.materialType === "practice" && Number.isInteger(scope.weekNumber) && !scope.sessionDate) {
-    rows = await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-      FROM subject_day_materials
-      WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND material_type = 'practice'
-      ORDER BY session_date ASC, order_index ASC, id ASC
-    ` as SubjectDayMaterialRow[]
+  if (Number.isInteger(scope.weekNumber) && !scope.sessionDate) {
+    if (scope.materialType) {
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND material_type = ${scope.materialType}
+        ORDER BY session_date ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    } else {
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!}
+        ORDER BY session_date ASC, material_type ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    }
   } else {
-    rows = await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-      FROM subject_day_materials
-      WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!}
-      ORDER BY material_type ASC, order_index ASC, id ASC
-    ` as SubjectDayMaterialRow[]
+    if (scope.materialType) {
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!} AND material_type = ${scope.materialType}
+        ORDER BY material_type ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    } else {
+      rows = await sql`
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        FROM subject_day_materials
+        WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!}
+        ORDER BY material_type ASC, order_index ASC, id ASC
+      ` as SubjectDayMaterialRow[]
+    }
   }
 
   return normalizeRows(rows)
