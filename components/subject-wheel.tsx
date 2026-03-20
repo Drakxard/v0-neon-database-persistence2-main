@@ -1230,6 +1230,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setSelectedPracticeMaterialId(null)
   }
 
+  const closeSubjectDialogOrReturn = async () => {
+    if (practiceSectionView === "exercises" && subjectViewDateOverride) {
+      await returnToCurrentDayView()
+      return
+    }
+
+    await closeSubjectDialog()
+  }
+
   const startNextWeek = async () => {
     await flushPendingFeaturedUpdate()
 
@@ -2885,7 +2894,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialog() : undefined)}>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialogOrReturn() : undefined)}>
         <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-white p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border-2 sm:border-black" showCloseButton={false}>
           <div className="relative flex h-full flex-col overflow-hidden px-4 py-4 sm:p-8">
             <Button
@@ -2968,15 +2977,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       Terminar
                     </Button>
                   ) : null}
-                  <DialogClose asChild>
-                    <button
-                      type="button"
-                      className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black bg-white text-black transition-colors hover:bg-black hover:text-white"
-                      aria-label="Cerrar modal"
-                    >
-                      <X className="h-7 w-7" />
-                    </button>
-                  </DialogClose>
+                  <button
+                    type="button"
+                    onClick={() => void closeSubjectDialogOrReturn()}
+                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black bg-white text-black transition-colors hover:bg-black hover:text-white"
+                    aria-label="Cerrar modal"
+                  >
+                    <X className="h-7 w-7" />
+                  </button>
                 </div>
               </div>
 
