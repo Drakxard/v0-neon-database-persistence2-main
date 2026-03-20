@@ -67,6 +67,14 @@ export async function GET(request: Request) {
               scanned: result.scanned,
               skipped: result.skipped,
             })
+          } else if (result.scanned > 0) {
+            console.info("GET /api/subject-day-materials weekly reconciliation scanned R2 without inserts", {
+              subjectId,
+              weekNumber,
+              scanned: result.scanned,
+              skipped: result.skipped,
+              diagnostics: result.diagnostics,
+            })
           }
         } catch (error) {
           console.error("GET /api/subject-day-materials weekly reconciliation failed:", error)
@@ -99,6 +107,15 @@ export async function GET(request: Request) {
               inserted: result.inserted,
               scanned: result.scanned,
               skipped: result.skipped,
+            })
+          } else if (result.scanned > 0) {
+            console.info("GET /api/subject-day-materials daily reconciliation scanned R2 without inserts", {
+              subjectId,
+              weekNumber,
+              sessionDate,
+              scanned: result.scanned,
+              skipped: result.skipped,
+              diagnostics: result.diagnostics,
             })
           }
         } catch (error) {

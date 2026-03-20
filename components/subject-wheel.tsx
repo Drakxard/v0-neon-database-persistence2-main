@@ -456,6 +456,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [pendingMaterials, setPendingMaterials] = useState<PendingSubjectDayMaterial[]>([])
   const [isEntriesLoading, setIsEntriesLoading] = useState(false)
   const [isMaterialsLoading, setIsMaterialsLoading] = useState(false)
+  const [hasResolvedSubjectDayData, setHasResolvedSubjectDayData] = useState(false)
   const [entriesError, setEntriesError] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [recordingError, setRecordingError] = useState("")
@@ -558,6 +559,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
   const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
+  const subjectDayDataRequestIdRef = useRef(0)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
   const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now, visibleSubjectIds), [now, visibleSubjectIds])
@@ -868,6 +870,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const loadSubjectDayData = useCallback(async () => {
     if (!isDialogOpen || !currentSubject) return
 
+    const requestId = subjectDayDataRequestIdRef.current + 1
+    subjectDayDataRequestIdRef.current = requestId
+
     setIsEntriesLoading(true)
     setIsMaterialsLoading(true)
     setEntriesError("")
@@ -891,49 +896,85 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         materialsParams.set("sessionDate", currentDateKey)
       }
 
-      const materialRequests =
+      const materialRequestUrls =
         practiceSectionView === "exercises" && !subjectViewDateOverride && isWeeklyExercisesScope
           ? [
-              fetch(`/api/subject-day-materials?${materialsParams.toString()}`),
-              fetch(
-                `/api/subject-day-materials?${new URLSearchParams({
-                  subjectId: currentSubject.id,
-                  weekNumber: String(selectedWeekNumber),
-                  sessionDate: subjectDialogDateKey,
-                }).toString()}`
-              ),
+              `/api/subject-day-materials?${materialsParams.toString()}`,
+              `/api/subject-day-materials?${new URLSearchParams({
+                subjectId: currentSubject.id,
+                weekNumber: String(selectedWeekNumber),
+                sessionDate: subjectDialogDateKey,
+              }).toString()}`,
             ]
-          : [fetch(`/api/subject-day-materials?${materialsParams.toString()}`)]
+          : [`/api/subject-day-materials?${materialsParams.toString()}`]
 
-      const [entriesResponse, ...materialsResponses] = await Promise.all([
-        fetch(`/api/subject-day-entries?${entriesParams.toString()}`),
-        ...materialRequests,
-      ])
-      const [entriesPayload, ...materialsPayloads] = await Promise.all([
-        parseJsonResponse(entriesResponse),
-        ...materialsResponses.map((response) => parseJsonResponse(response)),
+      const [entriesResult, ...materialResults] = await Promise.all([
+        fetch(`/api/subject-day-entries?${entriesParams.toString()}`)
+          .then(async (response) => {
+            const payload = await parseJsonResponse(response)
+            return {
+              ok: response.ok,
+              payload,
+              error: response.ok ? "" : getErrorMessage(payload, "No se pudieron cargar las dudas del dia."),
+            }
+          })
+          .catch((error) => ({
+            ok: false,
+            payload: null,
+            error: error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.",
+          })),
+        ...materialRequestUrls.map((url) =>
+          fetch(url)
+            .then(async (response) => {
+              const payload = await parseJsonResponse(response)
+              return {
+                ok: response.ok,
+                payload,
+                error: response.ok ? "" : getErrorMessage(payload, "No se pudieron cargar los materiales del dia."),
+              }
+            })
+            .catch((error) => ({
+              ok: false,
+              payload: null,
+              error: error instanceof Error ? error.message : "No se pudieron cargar los materiales del dia.",
+            }))
+        ),
       ])
 
-      if (!entriesResponse.ok) {
-        throw new Error(getErrorMessage(entriesPayload, "No se pudieron cargar las dudas del dia."))
+      if (requestId !== subjectDayDataRequestIdRef.current) return
+
+      const nextErrors: string[] = []
+
+      if (entriesResult.ok) {
+        setEntries(sortSubjectDayEntries(Array.isArray(entriesResult.payload) ? entriesResult.payload : []))
+      } else if (entriesResult.error) {
+        nextErrors.push(entriesResult.error)
       }
 
-      const failedMaterialsResponse = materialsResponses.findIndex((response) => !response.ok)
-      if (failedMaterialsResponse >= 0) {
-        throw new Error(getErrorMessage(materialsPayloads[failedMaterialsResponse], "No se pudieron cargar los materiales del dia."))
+      const successfulMaterialGroups = materialResults
+        .filter((result) => result.ok)
+        .map((result) => (Array.isArray(result.payload) ? (result.payload as SubjectDayMaterial[]) : []))
+
+      if (successfulMaterialGroups.length > 0 || materialResults.every((result) => result.ok)) {
+        setMaterials(mergeSubjectDayMaterials(...successfulMaterialGroups))
+      } else {
+        const materialError = materialResults.find((result) => !result.ok)?.error
+        if (materialError) {
+          nextErrors.push(materialError)
+        }
       }
 
-      setEntries(sortSubjectDayEntries(Array.isArray(entriesPayload) ? entriesPayload : []))
-      const normalizedMaterialGroups = materialsPayloads.map((payload) =>
-        Array.isArray(payload) ? (payload as SubjectDayMaterial[]) : []
-      )
-      setMaterials(mergeSubjectDayMaterials(...normalizedMaterialGroups))
+      setEntriesError(nextErrors[0] ?? "")
+      setHasResolvedSubjectDayData(true)
     } catch (error) {
+      if (requestId !== subjectDayDataRequestIdRef.current) return
+
       console.error("Failed to load subject day data:", error)
-      setEntries([])
-      setMaterials([])
       setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.")
+      setHasResolvedSubjectDayData(true)
     } finally {
+      if (requestId !== subjectDayDataRequestIdRef.current) return
+
       setIsEntriesLoading(false)
       setIsMaterialsLoading(false)
     }
@@ -1073,6 +1114,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const resetSubjectUiState = () => {
+    subjectDayDataRequestIdRef.current += 1
     clearPendingFeaturedSave()
     pendingFeaturedUpdateRef.current = null
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
@@ -1081,6 +1123,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setEntries([])
     setMaterials([])
     setPendingMaterials([])
+    setHasResolvedSubjectDayData(false)
     setEntriesError("")
     setRecordingError("")
     setEditingAnswerId(null)
@@ -2402,6 +2445,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }))
       .sort((left, right) => left.sessionDate.localeCompare(right.sessionDate))
   }, [entries])
+  const isSubjectDayRefreshing = (isEntriesLoading || isMaterialsLoading) && hasResolvedSubjectDayData
+  const shouldShowInitialSubjectDayLoading = (isEntriesLoading || isMaterialsLoading) && !hasResolvedSubjectDayData
   const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
     if (!currentSubject) return null
 
@@ -2570,13 +2615,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <div />
 
         {/* Save status indicator */}
-        <div className="flex items-center gap-1.5 text-xs">
-          {saveStatus === "saving" && (
-            <>
-              <Loader2 className="w-3.5 h-3.5 text-slate-400 animate-spin" />
-              <span className="text-slate-400">Guardando...</span>
-            </>
-          )}
+        <div className="flex min-w-[110px] items-center justify-center gap-1.5 text-xs">
           {saveStatus === "saved" && (
             <>
               <Check className="w-3.5 h-3.5 text-green-500" />
@@ -3044,6 +3083,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
               ) : null}
 
+              {isSubjectDayRefreshing ? (
+                <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Actualizando...
+                </div>
+              ) : null}
+
               {practiceSectionView === "theory" ? (
                 <div className="mb-2" />
               ) : (
@@ -3273,7 +3319,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </>
               )}
 
-              {isEntriesLoading || isMaterialsLoading ? (
+              {shouldShowInitialSubjectDayLoading ? (
                 <div className="flex min-h-56 items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
                 </div>

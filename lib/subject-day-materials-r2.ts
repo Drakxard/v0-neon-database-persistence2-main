@@ -43,6 +43,25 @@ type R2CandidateMaterial = {
   materialType: MaterialType
 }
 
+type CandidateBuildFailureReason =
+  | "metadata-incomplete"
+  | "legacy-shape-invalid"
+
+type ScopeMismatchReason =
+  | "subject-id-mismatch"
+  | "week-number-mismatch"
+  | "session-date-mismatch"
+  | "material-type-mismatch"
+
+type ReconcileDiagnostics = {
+  listedObjects: number
+  pdfObjects: number
+  candidates: number
+  discardedNonPdf: number
+  discardedByBuildReason: Partial<Record<CandidateBuildFailureReason, number>>
+  discardedByScopeReason: Partial<Record<ScopeMismatchReason, number>>
+}
+
 function normalizeUploadedPdfFileName(fileName: string) {
   const trimmed = fileName.trim()
   if (!trimmed) return ""
@@ -183,11 +202,11 @@ function buildCandidateFromLegacyKey(params: {
 }
 
 function matchesScope(candidate: R2CandidateMaterial, scope: ReconcileScope) {
-  if (scope.subjectId && candidate.subjectId !== scope.subjectId) return false
-  if (Number.isInteger(scope.weekNumber) && candidate.weekNumber !== scope.weekNumber) return false
-  if (scope.sessionDate && candidate.sessionDate !== scope.sessionDate) return false
-  if (scope.materialType && candidate.materialType !== scope.materialType) return false
-  return true
+  if (scope.subjectId && candidate.subjectId !== scope.subjectId) return "subject-id-mismatch" as const
+  if (Number.isInteger(scope.weekNumber) && candidate.weekNumber !== scope.weekNumber) return "week-number-mismatch" as const
+  if (scope.sessionDate && candidate.sessionDate !== scope.sessionDate) return "session-date-mismatch" as const
+  if (scope.materialType && candidate.materialType !== scope.materialType) return "material-type-mismatch" as const
+  return null
 }
 
 function normalizeRows(rows: SubjectDayMaterialRow[]) {
@@ -201,37 +220,65 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
   const prefix = buildScopedR2Prefix(scope)
   const listedObjects = await listR2ObjectsByPrefix(prefix)
   const objectKeys = listedObjects.map((object) => object.key).filter((key) => isR2ObjectKey(key))
+  const diagnostics: ReconcileDiagnostics = {
+    listedObjects: objectKeys.length,
+    pdfObjects: 0,
+    candidates: 0,
+    discardedNonPdf: 0,
+    discardedByBuildReason: {},
+    discardedByScopeReason: {},
+  }
 
   if (objectKeys.length === 0) {
-    return { inserted: 0, scanned: 0, skipped: 0 }
+    return { inserted: 0, scanned: 0, skipped: 0, diagnostics }
   }
 
   const objectMetadatas = await getR2ObjectMetadatas(objectKeys)
-  const candidates = objectMetadatas
-    .map((objectMetadata) => {
-      if (objectMetadata.mimeType !== "application/pdf") {
-        return null
-      }
+  const candidates: R2CandidateMaterial[] = []
 
-      const fromMetadata = buildCandidateFromMetadata({
-        objectKey: objectMetadata.id,
-        name: objectMetadata.name,
-        mimeType: objectMetadata.mimeType,
-        metadata: objectMetadata.metadata ?? {},
-      })
+  for (const objectMetadata of objectMetadatas) {
+    if (objectMetadata.mimeType !== "application/pdf") {
+      diagnostics.discardedNonPdf += 1
+      continue
+    }
 
-      return fromMetadata ?? buildCandidateFromLegacyKey({
+    diagnostics.pdfObjects += 1
+
+    const fromMetadata = buildCandidateFromMetadata({
+      objectKey: objectMetadata.id,
+      name: objectMetadata.name,
+      mimeType: objectMetadata.mimeType,
+      metadata: objectMetadata.metadata ?? {},
+    })
+    const hasMetadataHints = Object.keys(objectMetadata.metadata ?? {}).length > 0
+
+    const legacyCandidate = buildCandidateFromLegacyKey({
         objectKey: objectMetadata.id,
         name: objectMetadata.name,
         mimeType: objectMetadata.mimeType,
         scope,
       })
-    })
-    .filter((candidate): candidate is R2CandidateMaterial => Boolean(candidate))
-    .filter((candidate) => matchesScope(candidate, scope))
+    const candidate = fromMetadata ?? legacyCandidate
+
+    if (!candidate) {
+      const buildReason: CandidateBuildFailureReason = hasMetadataHints ? "metadata-incomplete" : "legacy-shape-invalid"
+      diagnostics.discardedByBuildReason[buildReason] = (diagnostics.discardedByBuildReason[buildReason] ?? 0) + 1
+      continue
+    }
+
+    const scopeMismatch = matchesScope(candidate, scope)
+    if (scopeMismatch) {
+      diagnostics.discardedByScopeReason[scopeMismatch] = (diagnostics.discardedByScopeReason[scopeMismatch] ?? 0) + 1
+      continue
+    }
+
+    candidates.push(candidate)
+  }
+
+  diagnostics.candidates = candidates.length
 
   if (candidates.length === 0) {
-    return { inserted: 0, scanned: objectKeys.length, skipped: objectKeys.length }
+    return { inserted: 0, scanned: objectKeys.length, skipped: objectKeys.length, diagnostics }
   }
 
   const existingRows = await sql`
@@ -293,6 +340,7 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
     inserted,
     scanned: objectKeys.length,
     skipped: Math.max(0, objectKeys.length - candidates.length),
+    diagnostics,
   }
 }
 
