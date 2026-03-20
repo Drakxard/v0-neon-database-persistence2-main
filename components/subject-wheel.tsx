@@ -2822,7 +2822,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? selectedWeekNumber <= 0
                   : subjectDialogDayIndex <= 0
               }
-              className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
+              className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -2835,7 +2835,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? selectedWeekNumber >= latestWeekNumber
                   : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
               }
-              className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 md:flex"
+              className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
