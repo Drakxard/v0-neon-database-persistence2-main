@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -138,6 +138,14 @@ type AudioUploadTarget = {
   weekdayIndex: number
   materialId?: number | null
   shortcutIndex?: number
+}
+
+type ManualEntryTarget = {
+  subjectId: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+  materialId?: number | null
 }
 
 type MobileShortcutWindow = {
@@ -357,6 +365,10 @@ function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "cu
   return `Duda ${entry.order_index + 1}`
 }
 
+function entryHasAudio(entry: Pick<SubjectDayEntry, "drive_file_id" | "drive_mime_type">) {
+  return entry.drive_file_id.trim().length > 0 && entry.drive_mime_type.startsWith("audio/")
+}
+
 function applyPracticeFilters(entries: SubjectDayEntry[], filters: PracticeFilters, options?: { shuffle?: boolean }) {
   const filteredEntries = entries.filter((entry) => {
     if (filters.unanswered && entry.answer_text?.trim()) return false
@@ -456,6 +468,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isMobileShortcutOpen, setIsMobileShortcutOpen] = useState(false)
   const [manualMobileSubjectId, setManualMobileSubjectId] = useState("")
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
+  const [manualEntryTarget, setManualEntryTarget] = useState<ManualEntryTarget | null>(null)
+  const [manualQuestionDraft, setManualQuestionDraft] = useState("")
+  const [manualAnswerDraft, setManualAnswerDraft] = useState("")
   const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
   const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({})
   const [editingTitleId, setEditingTitleId] = useState<number | null>(null)
@@ -1400,6 +1415,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const startAnswerEdit = (entry: SubjectDayEntry) => {
+    setManualEntryTarget(null)
+    setManualQuestionDraft("")
+    setManualAnswerDraft("")
     setEditingAnswerId(entry.id)
     setAnswerDrafts((previous) => ({
       ...previous,
@@ -1409,6 +1427,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       ...previous,
       [entry.id]: previous[entry.id] ?? entry.transcript_text,
     }))
+  }
+
+  const closeAnswerDialog = () => {
+    setEditingAnswerId(null)
+    setManualEntryTarget(null)
+    setManualQuestionDraft("")
+    setManualAnswerDraft("")
+  }
+
+  const startManualEntry = (target: ManualEntryTarget) => {
+    setEditingAnswerId(null)
+    setManualEntryTarget(target)
+    setManualQuestionDraft("")
+    setManualAnswerDraft("")
   }
 
   const saveAnswer = async (entry: SubjectDayEntry) => {
@@ -1429,11 +1461,54 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
-      setEditingAnswerId(null)
+      closeAnswerDialog()
       setRevealedAnswers((previous) => ({ ...previous, [entry.id]: false }))
     } catch (error) {
       console.error("Failed to save answer:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo guardar la respuesta.")
+    } finally {
+      setIsSavingAnswerId(null)
+    }
+  }
+
+  const saveManualEntry = async () => {
+    if (!manualEntryTarget) return
+
+    const transcriptText = manualQuestionDraft.trim()
+    const answerText = manualAnswerDraft.trim()
+    if (!transcriptText) {
+      setEntriesError("Escribe la duda antes de guardar.")
+      return
+    }
+
+    setIsSavingAnswerId(-1)
+    setEntriesError("")
+
+    try {
+      const response = await fetch("/api/subject-day-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: manualEntryTarget.subjectId,
+          sessionDate: manualEntryTarget.sessionDate,
+          weekNumber: manualEntryTarget.weekNumber,
+          weekdayIndex: manualEntryTarget.weekdayIndex,
+          materialId: manualEntryTarget.materialId ?? null,
+          transcriptText,
+          answerText,
+        }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo crear la duda."))
+      }
+
+      setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, payload as SubjectDayEntry]))
+      closeAnswerDialog()
+    } catch (error) {
+      console.error("Failed to create manual entry:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo crear la duda.")
     } finally {
       setIsSavingAnswerId(null)
     }
@@ -3244,13 +3319,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             <p className="text-sm leading-6 text-slate-800 sm:text-base sm:leading-7">{entry.transcript_text}</p>
                           </div>
 
-                          <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-10 shrink-0 border-black px-3 text-black sm:px-4">
-                            {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : isExpandedAudio ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                            {loadingAudioEntryId === entry.id ? "Cargando..." : isExpandedAudio ? "Reproducir/Pausar" : "Audio"}
-                          </Button>
+                          {entryHasAudio(entry) ? (
+                            <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-10 shrink-0 border-black px-3 text-black sm:px-4">
+                              {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : isExpandedAudio ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                              {loadingAudioEntryId === entry.id ? "Cargando..." : isExpandedAudio ? "Reproducir/Pausar" : "Audio"}
+                            </Button>
+                          ) : null}
                         </div>
 
-                        {isExpandedAudio && audioSrc ? (
+                        {entryHasAudio(entry) && isExpandedAudio && audioSrc ? (
                           <div className="mt-3 space-y-2">
                             <audio
                               ref={(element) => {
@@ -3311,31 +3388,57 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
 
             <div className="relative h-0">
-              <button
-                type="button"
-                onClick={() => {
-                  if (practiceSectionView !== "theory") return
-                  if (!currentSubject) return
-
-                  const target: AudioUploadTarget = {
-                    source: "subject-dialog",
-                    subjectId: currentSubject.id,
-                    subjectName: getSubjectDisplayName(currentSubject),
-                    sessionDate: currentDateKey,
-                    weekNumber: selectedWeekNumber,
-                    weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
-                  }
-
-                  void (isRecording ? stopRecording() : startRecording(target))
-                }}
-                className={`absolute bottom-4 right-2 flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:right-4 sm:h-20 sm:w-20 ${
-                  isRecording ? "bg-red-500 text-white" : "bg-white text-black"
-                } ${practiceSectionView !== "theory" ? "pointer-events-none opacity-0" : ""}`}
-                aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
-                disabled={practiceSectionView !== "theory"}
+              <div
+                className={`absolute bottom-4 right-2 flex flex-col items-center gap-3 sm:right-4 ${
+                  practiceSectionView !== "theory" ? "pointer-events-none opacity-0" : ""
+                }`}
               >
-                {isRecording ? <Square className="h-8 w-8 sm:h-10 sm:w-10" /> : <Mic className="h-8 w-8 sm:h-10 sm:w-10" />}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (practiceSectionView !== "theory") return
+                    if (!currentSubject) return
+
+                    const target: AudioUploadTarget = {
+                      source: "subject-dialog",
+                      subjectId: currentSubject.id,
+                      subjectName: getSubjectDisplayName(currentSubject),
+                      sessionDate: currentDateKey,
+                      weekNumber: selectedWeekNumber,
+                      weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                    }
+
+                    void (isRecording ? stopRecording() : startRecording(target))
+                  }}
+                  className={`flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:h-20 sm:w-20 ${
+                    isRecording ? "bg-red-500 text-white" : "bg-white text-black"
+                  }`}
+                  aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
+                  disabled={practiceSectionView !== "theory"}
+                >
+                  {isRecording ? <Square className="h-8 w-8 sm:h-10 sm:w-10" /> : <Mic className="h-8 w-8 sm:h-10 sm:w-10" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (practiceSectionView !== "theory") return
+                    if (!currentSubject) return
+
+                    startManualEntry({
+                      subjectId: currentSubject.id,
+                      sessionDate: currentDateKey,
+                      weekNumber: selectedWeekNumber,
+                      weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                    })
+                  }}
+                  className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm sm:h-14 sm:w-14"
+                  aria-label="Escribir duda"
+                  disabled={practiceSectionView !== "theory"}
+                >
+                  <FilePenLine className="h-5 w-5 sm:h-6 sm:w-6" />
+                </button>
+              </div>
             </div>
           </div>
         </DialogContent>
@@ -3550,13 +3653,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-black px-4 text-base text-black">
                                 Responder
                               </Button>
-                              <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
-                                {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                                audio
-                              </Button>
+                              {entryHasAudio(entry) ? (
+                                <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
+                                  {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                  audio
+                                </Button>
+                              ) : null}
                             </div>
 
-                            {isExpandedAudio && audioSrc ? (
+                            {entryHasAudio(entry) && isExpandedAudio && audioSrc ? (
                               <audio
                                 ref={(element) => {
                                   audioElementRefs.current[entry.id] = element
@@ -3579,45 +3684,71 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             )}
 
             <div className="pointer-events-none absolute bottom-4 right-4">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!currentSubject || !currentContinueMaterial) return
+              <div className="pointer-events-auto flex flex-col items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentSubject || !currentContinueMaterial) return
 
-                  const target: AudioUploadTarget = {
-                    source: "continue-practice",
-                    subjectId: currentSubject.id,
-                    subjectName: getSubjectDisplayName(currentSubject),
-                    sessionDate: subjectDialogDateKey,
-                    weekNumber: selectedWeekNumber,
-                    weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
-                    materialId: currentContinueMaterial.id,
-                  }
+                    const target: AudioUploadTarget = {
+                      source: "continue-practice",
+                      subjectId: currentSubject.id,
+                      subjectName: getSubjectDisplayName(currentSubject),
+                      sessionDate: subjectDialogDateKey,
+                      weekNumber: selectedWeekNumber,
+                      weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+                      materialId: currentContinueMaterial.id,
+                    }
 
-                  void (isRecording ? stopRecording() : startRecording(target))
-                }}
-                className="pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
-                aria-label={isRecording && recordingTarget?.source === "continue-practice" ? "Detener grabacion" : "Grabar audio"}
-                disabled={!currentContinueMaterial}
-              >
-                {isRecording && recordingTarget?.source === "continue-practice" ? (
-                  <Square className="h-8 w-8" />
-                ) : (
-                  <Mic className="h-8 w-8" />
-                )}
-              </button>
+                    void (isRecording ? stopRecording() : startRecording(target))
+                  }}
+                  className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
+                  aria-label={isRecording && recordingTarget?.source === "continue-practice" ? "Detener grabacion" : "Grabar audio"}
+                  disabled={!currentContinueMaterial}
+                >
+                  {isRecording && recordingTarget?.source === "continue-practice" ? (
+                    <Square className="h-8 w-8" />
+                  ) : (
+                    <Mic className="h-8 w-8" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentSubject || !currentContinueMaterial) return
+
+                    startManualEntry({
+                      subjectId: currentSubject.id,
+                      sessionDate: subjectDialogDateKey,
+                      weekNumber: selectedWeekNumber,
+                      weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+                      materialId: currentContinueMaterial.id,
+                    })
+                  }}
+                  className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
+                  aria-label="Escribir duda"
+                  disabled={!currentContinueMaterial}
+                >
+                  <FilePenLine className="h-5 w-5" />
+                </button>
+              </div>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(editingEntry)} onOpenChange={(open) => (!open ? setEditingAnswerId(null) : undefined)}>
+      <Dialog open={Boolean(editingEntry || manualEntryTarget)} onOpenChange={(open) => (!open ? closeAnswerDialog() : undefined)}>
         <DialogContent showCloseButton={false} className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-lg">
           <DialogHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <DialogTitle>Responder</DialogTitle>
-                <DialogDescription>Escribe la respuesta para esta duda. Luego quedara oculta hasta hacer click.</DialogDescription>
+                <DialogDescription>
+                  {manualEntryTarget
+                    ? "Escribe la duda y, si quieres, su respuesta. Al guardar se crea una nueva duda."
+                    : "Escribe la respuesta para esta duda. Luego quedara oculta hasta hacer click."}
+                </DialogDescription>
               </div>
               <DialogClose asChild>
                 <button
@@ -3631,18 +3762,23 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
           </DialogHeader>
 
-          {editingEntry ? (
+          {editingEntry || manualEntryTarget ? (
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div className="space-y-2">
                 <p className="text-sm font-medium text-slate-700">Pregunta</p>
                 <Textarea
-                  value={questionDrafts[editingEntry.id] ?? editingEntry.transcript_text}
-                  onChange={(event) =>
-                    setQuestionDrafts((previous) => ({
-                      ...previous,
-                      [editingEntry.id]: event.target.value,
-                    }))
-                  }
+                  value={editingEntry ? (questionDrafts[editingEntry.id] ?? editingEntry.transcript_text) : manualQuestionDraft}
+                  onChange={(event) => {
+                    if (editingEntry) {
+                      setQuestionDrafts((previous) => ({
+                        ...previous,
+                        [editingEntry.id]: event.target.value,
+                      }))
+                      return
+                    }
+
+                    setManualQuestionDraft(event.target.value)
+                  }}
                   placeholder="Escribe la duda"
                   className="min-h-[220px] resize-y sm:min-h-24"
                 />
@@ -3650,13 +3786,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <div className="space-y-2">
                 <p className="text-sm font-medium text-slate-700">Respuesta</p>
                 <Textarea
-                  value={answerDrafts[editingEntry.id] ?? ""}
-                  onChange={(event) =>
-                    setAnswerDrafts((previous) => ({
-                      ...previous,
-                      [editingEntry.id]: event.target.value,
-                    }))
-                  }
+                  value={editingEntry ? (answerDrafts[editingEntry.id] ?? "") : manualAnswerDraft}
+                  onChange={(event) => {
+                    if (editingEntry) {
+                      setAnswerDrafts((previous) => ({
+                        ...previous,
+                        [editingEntry.id]: event.target.value,
+                      }))
+                      return
+                    }
+
+                    setManualAnswerDraft(event.target.value)
+                  }}
                   placeholder="Escribe la respuesta"
                   className="min-h-[180px] resize-y sm:min-h-32"
                 />
@@ -3665,11 +3806,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           ) : null}
 
           <DialogFooter className="mt-4 border-t border-slate-200 pt-4">
-            <Button variant="outline" onClick={() => setEditingAnswerId(null)}>
+            <Button variant="outline" onClick={closeAnswerDialog}>
               Cancelar
             </Button>
-            <Button onClick={() => editingEntry && void saveAnswer(editingEntry)} disabled={!editingEntry || isSavingAnswerId === editingEntry.id}>
-              {editingEntry && isSavingAnswerId === editingEntry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            <Button
+              onClick={() => (editingEntry ? void saveAnswer(editingEntry) : void saveManualEntry())}
+              disabled={isSavingAnswerId === (editingEntry?.id ?? -1)}
+            >
+              {isSavingAnswerId === (editingEntry?.id ?? -1) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               Guardar
             </Button>
           </DialogFooter>
