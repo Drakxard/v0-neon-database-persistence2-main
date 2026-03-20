@@ -84,6 +84,43 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
 }
 
+async function getNextOrderIndex(params: {
+  subjectId: string
+  weekNumber: number
+  sessionDate: string
+  materialId: number | null
+}) {
+  const { subjectId, weekNumber, sessionDate, materialId } = params
+
+  try {
+    const [countRow] = await sql`
+      SELECT COALESCE(MAX(order_index), -1) AS max_order
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+        AND week_number = ${weekNumber}
+        AND session_date = ${sessionDate}
+        AND (
+          (${materialId}::INTEGER IS NULL AND subject_day_material_id IS NULL)
+          OR subject_day_material_id = ${materialId}
+        )
+    `
+
+    return Number(countRow?.max_order ?? -1) + 1
+  } catch (error) {
+    if (!isMissingColumn(error)) throw error
+
+    const [countRow] = await sql`
+      SELECT COALESCE(MAX(order_index), -1) AS max_order
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+        AND week_number = ${weekNumber}
+        AND session_date = ${sessionDate}
+    `
+
+    return Number(countRow?.max_order ?? -1) + 1
+  }
+}
+
 async function getEntryLinks(entryIds: number[]) {
   if (entryIds.length === 0) return new Map<number, EntryLinkRow[]>()
 
@@ -273,18 +310,12 @@ export async function POST(request: Request) {
     const weekdayIndex =
       Number.isNaN(requestedWeekdayIndex) ? getWeekdayIndexFromDateKey(sessionDate) : requestedWeekdayIndex
 
-    const [countRow] = await sql`
-      SELECT COALESCE(MAX(order_index), -1) AS max_order
-      FROM subject_day_entries
-      WHERE subject_id = ${subjectId}
-        AND week_number = ${weekNumber}
-        AND session_date = ${sessionDate}
-        AND (
-          (${materialId}::INTEGER IS NULL AND subject_day_material_id IS NULL)
-          OR subject_day_material_id = ${materialId}
-        )
-    `
-    const nextOrderIndex = Number(countRow?.max_order ?? -1) + 1
+    const nextOrderIndex = await getNextOrderIndex({
+      subjectId,
+      weekNumber,
+      sessionDate,
+      materialId,
+    })
 
     let rows: EntryRow[]
     try {
@@ -366,7 +397,7 @@ export async function POST(request: Request) {
     }
     if (isMissingColumn(error)) {
       return NextResponse.json(
-        { error: "Falta ejecutar scripts/006-add-subject-day-entry-metadata.sql en Neon para usar esta funcion." },
+        { error: "Falta ejecutar las migraciones de subject_day_entries en Neon (scripts/006, 007 y/o 009) para usar esta funcion." },
         { status: 409 }
       )
     }

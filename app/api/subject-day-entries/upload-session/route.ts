@@ -29,6 +29,43 @@ function parseSessionDate(sessionDate: string) {
   return parsed
 }
 
+async function getNextOrderIndex(params: {
+  subjectId: string
+  weekNumber: number
+  sessionDate: string
+  materialId: number | null
+}) {
+  const { subjectId, weekNumber, sessionDate, materialId } = params
+
+  try {
+    const [countRow] = await sql`
+      SELECT COALESCE(MAX(order_index), -1) AS max_order
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+        AND week_number = ${weekNumber}
+        AND session_date = ${sessionDate}
+        AND (
+          (${materialId}::INTEGER IS NULL AND subject_day_material_id IS NULL)
+          OR subject_day_material_id = ${materialId}
+        )
+    `
+
+    return Number(countRow?.max_order ?? -1) + 1
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "42703")) throw error
+
+    const [countRow] = await sql`
+      SELECT COALESCE(MAX(order_index), -1) AS max_order
+      FROM subject_day_entries
+      WHERE subject_id = ${subjectId}
+        AND week_number = ${weekNumber}
+        AND session_date = ${sessionDate}
+    `
+
+    return Number(countRow?.max_order ?? -1) + 1
+  }
+}
+
 function getFileExtension(mimeType: string) {
   if (mimeType.includes("ogg")) return "ogg"
   if (mimeType.includes("mpeg")) return "mp3"
@@ -67,18 +104,12 @@ export async function POST(request: Request) {
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
 
-    const [countRow] = await sql`
-      SELECT COALESCE(MAX(order_index), -1) AS max_order
-      FROM subject_day_entries
-      WHERE subject_id = ${subjectId}
-        AND week_number = ${weekNumber}
-        AND session_date = ${sessionDate}
-        AND (
-          (${materialId}::INTEGER IS NULL AND subject_day_material_id IS NULL)
-          OR subject_day_material_id = ${materialId}
-        )
-    `
-    const nextOrderIndex = Number(countRow?.max_order ?? -1) + 1
+    const nextOrderIndex = await getNextOrderIndex({
+      subjectId,
+      weekNumber,
+      sessionDate,
+      materialId,
+    })
     const safeSubjectName = subjectName.replace(/\s+/g, "-").toLowerCase()
     const fileName = `${safeSubjectName}-${sessionDate}-${nextOrderIndex + 1}.${getFileExtension(mimeType)}`
 
