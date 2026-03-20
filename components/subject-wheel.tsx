@@ -3040,7 +3040,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
                     {practiceSectionView === "exercises"
-                      ? "Teoria, practica y dudas de toda la semana"
+                      ? ""
                       : "Flujo anterior de dudas"}
                   </DialogDescription>
                 </div>
@@ -3068,8 +3068,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {practiceSectionView === "theory" ? (
                 <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
-              ) : isWeeklyExercisesScope ? (
-                <div className="text-sm text-slate-700 sm:text-base">Contenido completo de la semana seleccionada</div>
               ) : subjectViewDateOverride ? (
                 <div className="text-sm text-slate-700 sm:text-base">{subjectDialogDateKey}</div>
               ) : null}
