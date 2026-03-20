@@ -170,7 +170,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: "Entry not found" }, { status: 404 })
     }
 
-    return NextResponse.json(await withLinks(rows[0] as EntryRow))
+    const [entryWithLinks] = await withLinks(rows)
+    return NextResponse.json(entryWithLinks)
   } catch (error) {
     console.error("PATCH /api/subject-day-entries/[id] error:", error)
     if (isMissingSubjectDayEntriesTable(error)) {

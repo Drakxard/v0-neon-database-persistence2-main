@@ -386,7 +386,8 @@ export async function POST(request: Request) {
       ` as EntryRow[]
     }
 
-    return NextResponse.json(await withLinks(rows[0] as EntryRow))
+    const [entryWithLinks] = await withLinks(rows)
+    return NextResponse.json(entryWithLinks)
   } catch (error) {
     console.error("POST /api/subject-day-entries error:", error)
     if (isMissingSubjectDayEntriesTable(error)) {
