@@ -526,6 +526,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
   const [exampleError, setExampleError] = useState("")
+  const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
+    currentDateKey: string
+    practiceSectionView: "theory" | "exercises"
+    exerciseWeeklyScopeEnabled: boolean
+    subjectViewDateOverride: string | null
+    selectedPracticeMaterialId: number | null
+  } | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
   const [reviewSubjectId, setReviewSubjectId] = useState("")
   const [reviewEntries, setReviewEntries] = useState<SubjectDayEntry[]>([])
@@ -1100,6 +1107,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsContinueLoading(false)
     setContinueError("")
     setContinuePayload(null)
+    setStackedDayViewReturnState(null)
   }
 
   const cancelReview = () => {
@@ -1220,7 +1228,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const openWeekAudioDay = async (dateKey: string) => {
     await flushPendingFeaturedUpdate()
-    setSubjectViewDateOverride(dateKey)
+    setStackedDayViewReturnState({
+      currentDateKey,
+      practiceSectionView,
+      exerciseWeeklyScopeEnabled,
+      subjectViewDateOverride,
+      selectedPracticeMaterialId,
+    })
+    setCurrentDateKey(dateKey)
+    setPracticeSectionView("theory")
+    setExerciseWeeklyScopeEnabled(false)
+    setSubjectViewDateOverride(null)
     setSelectedPracticeMaterialId(null)
   }
 
@@ -1231,6 +1249,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const closeSubjectDialogOrReturn = async () => {
+    if (stackedDayViewReturnState) {
+      await flushPendingFeaturedUpdate()
+      setCurrentDateKey(stackedDayViewReturnState.currentDateKey)
+      setPracticeSectionView(stackedDayViewReturnState.practiceSectionView)
+      setExerciseWeeklyScopeEnabled(stackedDayViewReturnState.exerciseWeeklyScopeEnabled)
+      setSubjectViewDateOverride(stackedDayViewReturnState.subjectViewDateOverride)
+      setSelectedPracticeMaterialId(stackedDayViewReturnState.selectedPracticeMaterialId)
+      setStackedDayViewReturnState(null)
+      return
+    }
+
     if (practiceSectionView === "exercises" && subjectViewDateOverride) {
       await returnToCurrentDayView()
       return
