@@ -1,4 +1,5 @@
 import { getGoogleAccessToken } from "@/lib/google-oauth"
+import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
@@ -14,7 +15,7 @@ function escapeDriveQueryValue(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
 }
 
-async function driveRequest(path: string, init?: RequestInit) {
+async function driveRequest(path: string, init?: RequestInit, options?: { fileId?: string }) {
   const accessToken = await getGoogleAccessToken()
   const response = await fetch(path, {
     ...init,
@@ -23,6 +24,10 @@ async function driveRequest(path: string, init?: RequestInit) {
       ...(init?.headers || {}),
     },
   })
+
+  if (response.status === 404 && options?.fileId) {
+    throw new RemoteFileNotFoundError("drive", options.fileId, "The Google Drive file does not exist.")
+  }
 
   if (!response.ok) {
     const payload = await response.text()
@@ -113,7 +118,9 @@ export async function createDriveResumableUploadSession(params: {
 
 export async function getDriveFileMetadata(fileId: string) {
   const response = await driveRequest(
-    `${DRIVE_API_BASE}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,size`
+    `${DRIVE_API_BASE}/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,size`,
+    undefined,
+    { fileId }
   )
 
   return (await response.json()) as {
@@ -126,7 +133,7 @@ export async function getDriveFileMetadata(fileId: string) {
 }
 
 export async function downloadDriveFile(fileId: string) {
-  const response = await driveRequest(`${DRIVE_API_BASE}/${fileId}?alt=media`)
+  const response = await driveRequest(`${DRIVE_API_BASE}/${fileId}?alt=media`, undefined, { fileId })
   const arrayBuffer = await response.arrayBuffer()
   return {
     buffer: Buffer.from(arrayBuffer),

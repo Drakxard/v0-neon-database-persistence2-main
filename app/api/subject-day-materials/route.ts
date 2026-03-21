@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
+import { getSubjectDayMaterialMetadataOrAutocleanup } from "@/lib/subject-day-materials-storage"
 
 export const runtime = "nodejs"
 
@@ -138,8 +139,31 @@ export async function GET(request: Request) {
       sessionDate: scope === "week" ? undefined : sessionDate!,
       materialType: scope === "week" ? materialType : materialType,
     })
+    const availabilityChecks = await Promise.all(
+      rows.map(async (row) => ({
+        row,
+        remote: await getSubjectDayMaterialMetadataOrAutocleanup({
+          id: row.id,
+          drive_file_id: row.drive_file_id,
+        }),
+      }))
+    )
+    const visibleRows = availabilityChecks
+      .filter((entry) => entry.remote.status === "ok")
+      .map((entry) => entry.row)
+    const removedCount = availabilityChecks.length - visibleRows.length
 
-    return NextResponse.json(rows)
+    if (removedCount > 0) {
+      console.warn("GET /api/subject-day-materials removed orphan materials during listing", {
+        subjectId,
+        weekNumber,
+        sessionDate: scope === "week" ? undefined : sessionDate!,
+        materialType: materialType ?? "all",
+        removedCount,
+      })
+    }
+
+    return NextResponse.json(visibleRows)
   } catch (error) {
     console.error("GET /api/subject-day-materials error:", error)
     if (isMissingSubjectDayMaterialsTable(error)) {

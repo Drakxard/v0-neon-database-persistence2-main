@@ -1,5 +1,6 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
 
+import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
 const R2_KEY_PREFIX = "r2/"
@@ -57,6 +58,27 @@ function normalizeMetadataValue(value: string | undefined) {
 function buildUploadMetadataHeaders(metadata: Record<string, string>) {
   return Object.fromEntries(
     Object.entries(metadata).map(([key, value]) => [`x-amz-meta-${key}`, value])
+  )
+}
+
+function isR2ObjectNotFoundError(error: unknown) {
+  if (!error || typeof error !== "object") return false
+
+  const maybeError = error as {
+    name?: string
+    code?: string
+    Code?: string
+    $metadata?: { httpStatusCode?: number }
+  }
+
+  return (
+    maybeError.$metadata?.httpStatusCode === 404 ||
+    maybeError.name === "NoSuchKey" ||
+    maybeError.name === "NotFound" ||
+    maybeError.code === "NoSuchKey" ||
+    maybeError.code === "NotFound" ||
+    maybeError.Code === "NoSuchKey" ||
+    maybeError.Code === "NotFound"
   )
 }
 
@@ -130,12 +152,22 @@ export async function createR2UploadSession(params: {
 
 export async function getR2ObjectMetadata(objectKey: string) {
   const client = createR2Client()
-  const response = await client.send(
-    new HeadObjectCommand({
-      Bucket: getBucketName(),
-      Key: objectKey,
-    })
-  )
+  let response
+
+  try {
+    response = await client.send(
+      new HeadObjectCommand({
+        Bucket: getBucketName(),
+        Key: objectKey,
+      })
+    )
+  } catch (error) {
+    if (isR2ObjectNotFoundError(error)) {
+      throw new RemoteFileNotFoundError("r2", objectKey, "The R2 object does not exist.")
+    }
+
+    throw error
+  }
 
   return {
     id: objectKey,
@@ -186,12 +218,22 @@ export async function listR2ObjectsByPrefix(prefix = R2_KEY_PREFIX) {
 
 export async function downloadR2Object(objectKey: string) {
   const client = createR2Client()
-  const response = await client.send(
-    new GetObjectCommand({
-      Bucket: getBucketName(),
-      Key: objectKey,
-    })
-  )
+  let response
+
+  try {
+    response = await client.send(
+      new GetObjectCommand({
+        Bucket: getBucketName(),
+        Key: objectKey,
+      })
+    )
+  } catch (error) {
+    if (isR2ObjectNotFoundError(error)) {
+      throw new RemoteFileNotFoundError("r2", objectKey, "The R2 object does not exist.")
+    }
+
+    throw error
+  }
 
   if (!response.Body) {
     throw new Error("R2 object download returned an empty body.")

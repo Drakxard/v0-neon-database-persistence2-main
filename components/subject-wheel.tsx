@@ -2625,54 +2625,59 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between p-4 bg-white shadow-sm">
-        <div />
+      <header className="bg-white shadow-sm">
+        <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+          <div className="order-2 flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs sm:order-1 sm:min-w-[140px] sm:justify-start">
+            {saveStatus === "saving" && (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
+                <span className="text-slate-500">Guardando...</span>
+              </>
+            )}
+            {saveStatus === "saved" && (
+              <>
+                <Check className="h-3.5 w-3.5 text-green-500" />
+                <span className="text-green-500">Guardado</span>
+              </>
+            )}
+            {saveStatus === "error" && (
+              <span className="text-center text-red-500">Error al guardar</span>
+            )}
+          </div>
 
-        {/* Save status indicator */}
-        <div className="flex min-w-[110px] items-center justify-center gap-1.5 text-xs">
-          {saveStatus === "saved" && (
-            <>
-              <Check className="w-3.5 h-3.5 text-green-500" />
-              <span className="text-green-500">Guardado</span>
-            </>
-          )}
-          {saveStatus === "error" && (
-            <span className="text-red-500">Error al guardar</span>
-          )}
-        </div>
-
-        <div className="flex gap-2 items-center">
-          <Button
-            onClick={openManualMobileShortcutPicker}
-            variant="outline"
-            className="h-9 px-3"
-          >
-            <Smartphone className="w-4 h-4 mr-1.5" />
-            Celular
-          </Button>
-          <Button
-            onClick={openPracticeModal}
-            variant="outline"
-            className="h-9 px-3"
-          >
-            <GraduationCap className="w-4 h-4 mr-1.5" />
-            Practicar
-          </Button>
-          <Button
-            onClick={openReviewModal}
-            variant="outline"
-            className="h-9 px-3"
-          >
-            Destacado
-          </Button>
-          <button
-            onClick={handleReset}
-            className="p-2 rounded-full hover:bg-slate-100 transition-colors"
-            aria-label="Reiniciar"
-            title="Reiniciar todas las materias"
-          >
-            <RotateCcw className="w-5 h-5 text-slate-700" />
-          </button>
+          <div className="order-1 flex items-center gap-2 overflow-x-auto pb-1 sm:order-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <Button
+              onClick={openManualMobileShortcutPicker}
+              variant="outline"
+              className="h-9 shrink-0 px-3"
+            >
+              <Smartphone className="w-4 h-4 mr-1.5" />
+              Celular
+            </Button>
+            <Button
+              onClick={openPracticeModal}
+              variant="outline"
+              className="h-9 shrink-0 px-3"
+            >
+              <GraduationCap className="w-4 h-4 mr-1.5" />
+              Practicar
+            </Button>
+            <Button
+              onClick={openReviewModal}
+              variant="outline"
+              className="h-9 shrink-0 px-3"
+            >
+              Destacado
+            </Button>
+            <button
+              onClick={handleReset}
+              className="shrink-0 rounded-full p-2 transition-colors hover:bg-slate-100"
+              aria-label="Reiniciar"
+              title="Reiniciar todas las materias"
+            >
+              <RotateCcw className="w-5 h-5 text-slate-700" />
+            </button>
+          </div>
         </div>
       </header>
 

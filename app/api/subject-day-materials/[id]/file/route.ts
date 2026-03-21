@@ -1,8 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 
-import { downloadDriveFile } from "@/lib/google-drive"
-import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { downloadSubjectDayMaterialFileOrAutocleanup } from "@/lib/subject-day-materials-storage"
 
 export const runtime = "nodejs"
 
@@ -42,13 +41,18 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const forbidden = ensureSubjectAccess(auth.session!, String(material.subject_id || ""))
     if (forbidden) return forbidden
 
-    const file = isR2ObjectKey(material.drive_file_id)
-      ? await downloadR2Object(material.drive_file_id)
-      : await downloadDriveFile(material.drive_file_id)
+    const fileResult = await downloadSubjectDayMaterialFileOrAutocleanup({
+      id: materialId,
+      drive_file_id: material.drive_file_id,
+    })
 
-    return new Response(file.buffer, {
+    if (fileResult.status === "missing") {
+      return Response.json({ error: "El archivo remoto ya no existe." }, { status: 404 })
+    }
+
+    return new Response(fileResult.value.buffer, {
       headers: {
-        "Content-Type": file.mimeType || material.drive_mime_type || "application/pdf",
+        "Content-Type": fileResult.value.mimeType || material.drive_mime_type || "application/pdf",
         "Content-Disposition": `inline; filename="${material.file_name}"`,
         "Cache-Control": "private, max-age=0, must-revalidate",
       },
