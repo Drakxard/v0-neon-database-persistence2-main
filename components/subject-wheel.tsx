@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { useRouter } from "next/navigation"
 import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
@@ -428,7 +427,6 @@ function getNextUncheckedPracticeMaterial(
 }
 
 export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
-  const router = useRouter()
   const visibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => authSession.isAdmin || authSession.allowedSubjectIds.includes(subject.id)),
     [authSession.allowedSubjectIds, authSession.isAdmin]
@@ -498,13 +496,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
-  const prefetchPracticeViewer = useCallback(
-    (material: SubjectDayMaterial) => {
-      const href = buildPracticeDefaultViewerHref(material.id)
-      router.prefetch(href)
-    },
-    [router]
-  )
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
   const practiceFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -3145,14 +3136,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             </div>
                           ) : (
                             <div key={material.id} className="relative flex items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
-                              <a
-                                href={buildPracticeDefaultViewerHref(material.id)}
-                                className="min-w-0 flex-1 truncate pr-7"
-                                onPointerDown={() => prefetchPracticeViewer(material)}
-                                onTouchStart={() => prefetchPracticeViewer(material)}
-                              >
-                                <span className="truncate">{material.file_name}</span>
-                              </a>
+                                <a
+                                  href={buildPracticeDefaultViewerHref(material.id)}
+                                  className="min-w-0 flex-1 truncate pr-7"
+                                >
+                                  <span className="truncate">{material.file_name}</span>
+                                </a>
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -3251,14 +3240,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   checked={material.is_checkup_done}
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
-                                <a
-                                  href={buildPracticeDefaultViewerHref(material.id)}
-                                  className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
-                                  onPointerDown={() => prefetchPracticeViewer(material)}
-                                  onTouchStart={() => prefetchPracticeViewer(material)}
-                                >
-                                  {material.file_name}
-                                </a>
+                                  <a
+                                    href={buildPracticeDefaultViewerHref(material.id)}
+                                    className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
+                                  >
+                                    {material.file_name}
+                                  </a>
                                 <Button
                                   type="button"
                                   variant="outline"
@@ -3666,14 +3653,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           checked={currentContinueMaterial.is_checkup_done}
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
-                        <a
-                          href={buildPracticeDefaultViewerHref(currentContinueMaterial.id)}
-                          className="font-medium underline-offset-2 hover:underline"
-                          onPointerDown={() => prefetchPracticeViewer(currentContinueMaterial)}
-                          onTouchStart={() => prefetchPracticeViewer(currentContinueMaterial)}
-                        >
-                          {currentContinueMaterial.file_name}
-                        </a>
+                          <a
+                            href={buildPracticeDefaultViewerHref(currentContinueMaterial.id)}
+                            className="font-medium underline-offset-2 hover:underline"
+                          >
+                            {currentContinueMaterial.file_name}
+                          </a>
                         <Button
                           type="button"
                           variant="ghost"

@@ -258,10 +258,18 @@ export async function downloadR2Object(objectKey: string) {
 
 export async function deleteR2Object(objectKey: string) {
   const client = createR2Client()
-  await client.send(
-    new DeleteObjectCommand({
-      Bucket: getBucketName(),
-      Key: objectKey,
-    })
-  )
+  try {
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: getBucketName(),
+        Key: objectKey,
+      })
+    )
+  } catch (error) {
+    if (isR2ObjectNotFoundError(error)) {
+      return
+    }
+
+    throw error
+  }
 }
