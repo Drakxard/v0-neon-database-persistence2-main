@@ -1,5 +1,4 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
@@ -54,12 +53,6 @@ function normalizeMetadataValue(value: string | undefined) {
     .trim()
 
   return normalized.length > 0 ? normalized : undefined
-}
-
-function buildUploadMetadataHeaders(metadata: Record<string, string>) {
-  return Object.fromEntries(
-    Object.entries(metadata).map(([key, value]) => [`x-amz-meta-${key}`, value])
-  )
 }
 
 function isR2ObjectNotFoundError(error: unknown) {
@@ -135,27 +128,14 @@ export async function createR2UploadSession(params: {
   mimeType: string
   metadata?: Record<string, string>
 }) {
-  const client = createR2Client()
   const metadata = normalizeUploadMetadata(params.metadata)
-  const command = new PutObjectCommand({
-    Bucket: getBucketName(),
-    Key: params.objectKey,
-    ContentType: params.mimeType,
-    Metadata: metadata,
-  })
-  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 })
 
   return {
-    uploadMode: "direct" as const,
+    uploadMode: "server" as const,
     objectKey: params.objectKey,
-    uploadUrl,
     fileName: getFileNameFromKey(params.objectKey),
     driveFileId: params.objectKey,
     mimeType: params.mimeType,
-    headers: {
-      "Content-Type": params.mimeType,
-      ...buildUploadMetadataHeaders(metadata ?? {}),
-    },
     metadata,
   }
 }
