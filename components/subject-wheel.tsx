@@ -356,6 +356,10 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
+function isPdfFile(file: File) {
+  return file.type === "application/pdf" || file.name.trim().toLowerCase().endsWith(".pdf")
+}
+
 function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "custom_title" | "order_index">) {
   const customTitle = entry.custom_title?.trim()
   if (customTitle) return customTitle
@@ -1797,84 +1801,132 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const handleMaterialUpload = async (materialType: SubjectDayMaterialType, file: File | null) => {
-    if (!currentSubject || !file) return
+  const handleMaterialUpload = async (materialType: SubjectDayMaterialType, files: File[]) => {
+    if (!currentSubject || files.length === 0) return
 
-    if (file.type !== "application/pdf") {
+    const validFiles = files.filter((file) => isPdfFile(file))
+    const skippedFiles = files.filter((file) => !isPdfFile(file))
+
+    if (validFiles.length === 0) {
       setEntriesError("Solo se permiten archivos PDF.")
       return
     }
 
+    const subjectSnapshot = currentSubject
+    const subjectId = subjectSnapshot.id
+    const subjectName = getSubjectDisplayName(subjectSnapshot)
+    const weekNumber = selectedWeekNumber
+    const sessionDate = subjectDialogDateKey
+    const weekdayIndex = subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0
+    const baseOrderIndex =
+      (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
+      pendingMaterials.filter((material) => material.material_type === materialType).length
+
+    const pendingUploadBatch = validFiles.map((file, index) => {
+      const tempId = -(Date.now() + index + 1)
+
+      return {
+        tempId,
+        file,
+        pendingMaterial: {
+          id: tempId,
+          subject_id: subjectId,
+          week_number: weekNumber,
+          session_date: sessionDate,
+          weekday_index: weekdayIndex,
+          material_type: materialType,
+          order_index: baseOrderIndex + index + 1,
+          file_name: file.name,
+          drive_file_id: "",
+          drive_mime_type: "application/pdf",
+          drive_web_view_link: "",
+          is_checkup_done: false,
+          created_at: "",
+          updated_at: "",
+          is_pending_upload: true as const,
+        } satisfies PendingSubjectDayMaterial,
+      }
+    })
+
     setEntriesError("")
     setIsUploadingMaterialType(materialType)
-    const tempId = -Date.now()
-    const pendingMaterial: PendingSubjectDayMaterial = {
-      id: tempId,
-      subject_id: currentSubject.id,
-      week_number: selectedWeekNumber,
-      session_date: subjectDialogDateKey,
-      weekday_index: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
-      material_type: materialType,
-      order_index:
-        (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
-        pendingMaterials.filter((material) => material.material_type === materialType).length +
-        1,
-      file_name: file.name,
-      drive_file_id: "",
-      drive_mime_type: "application/pdf",
-      drive_web_view_link: "",
-      is_checkup_done: false,
-      created_at: "",
-      updated_at: "",
-      is_pending_upload: true,
-    }
-    setPendingMaterials((previousMaterials) => [...previousMaterials, pendingMaterial])
+    setPendingMaterials((previousMaterials) => [
+      ...previousMaterials,
+      ...pendingUploadBatch.map((item) => item.pendingMaterial),
+    ])
+
+    const failedUploads: string[] = []
 
     try {
-      const sessionResponse = await fetch("/api/subject-day-materials/upload-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: currentSubject.id,
-          subjectName: getSubjectDisplayName(currentSubject),
-          sessionDate: subjectDialogDateKey,
-          weekNumber: selectedWeekNumber,
-          materialType,
-          fileName: file.name,
-          mimeType: file.type || "application/pdf",
-        }),
-      })
-      const sessionPayload = (await requireOkJson(
-        sessionResponse,
-        "No se pudo preparar la subida del PDF."
-      )) as DriveUploadSessionResponse
+      for (const item of pendingUploadBatch) {
+        try {
+          const sessionResponse = await fetch("/api/subject-day-materials/upload-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subjectId,
+              subjectName,
+              sessionDate,
+              weekNumber,
+              materialType,
+              fileName: item.file.name,
+              mimeType: item.file.type || "application/pdf",
+            }),
+          })
+          const sessionPayload = (await requireOkJson(
+            sessionResponse,
+            `No se pudo preparar la subida de ${item.file.name}.`
+          )) as DriveUploadSessionResponse
 
-      const { driveFileId } = await uploadBlobToStorage(sessionPayload, file)
-      const persistedFileName = file.name.trim()
+          const { driveFileId } = await uploadBlobToStorage(sessionPayload, item.file)
+          const persistedFileName = item.file.name.trim()
 
-      const response = await fetch("/api/subject-day-materials/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: currentSubject.id,
-          sessionDate: subjectDialogDateKey,
-          weekNumber: selectedWeekNumber,
-          materialType,
-          driveFileId,
-          fileName: persistedFileName,
-        }),
-      })
-      const payload = await requireOkJson(response, "No se pudo confirmar el PDF.")
+          const response = await fetch("/api/subject-day-materials/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              subjectId,
+              sessionDate,
+              weekNumber,
+              materialType,
+              driveFileId,
+              fileName: persistedFileName,
+            }),
+          })
+          const payload = await requireOkJson(response, `No se pudo confirmar ${item.file.name}.`)
 
-      setMaterials((previousMaterials) => sortSubjectDayMaterials([...previousMaterials, payload as SubjectDayMaterial]))
-    } catch (error) {
-      console.error("Failed to upload subject day material:", error)
-      setEntriesError(error instanceof Error ? error.message : "No se pudo subir el PDF.")
+          setMaterials((previousMaterials) =>
+            mergeSubjectDayMaterials(previousMaterials, [payload as SubjectDayMaterial])
+          )
+        } catch (error) {
+          console.error("Failed to upload subject day material:", error)
+          const message = error instanceof Error ? error.message : "No se pudo subir el PDF."
+          failedUploads.push(`${item.file.name}: ${message}`)
+        } finally {
+          setPendingMaterials((previousMaterials) =>
+            previousMaterials.filter((material) => material.id !== item.tempId)
+          )
+        }
+      }
     } finally {
-      setPendingMaterials((previousMaterials) => previousMaterials.filter((material) => material.id !== tempId))
       setIsUploadingMaterialType(null)
-      if (theoryFileInputRef.current) theoryFileInputRef.current.value = ""
-      if (practiceFileInputRef.current) practiceFileInputRef.current.value = ""
+    }
+
+    if (failedUploads.length > 0) {
+      setEntriesError(failedUploads.join(" | "))
+    } else if (skippedFiles.length > 0) {
+      setEntriesError("")
+    }
+
+    if (skippedFiles.length > 0) {
+      toast({
+        title: "Archivos ignorados",
+        description:
+          skippedFiles.length === 1
+            ? `${skippedFiles[0].name} no es un PDF valido.`
+            : `Se ignoraron ${skippedFiles.length} archivos que no eran PDF.`,
+        variant: "destructive",
+      })
     }
   }
 
@@ -3077,15 +3129,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 ref={theoryFileInputRef}
                 type="file"
                 accept="application/pdf"
+                multiple
                 className="hidden"
-                onChange={(event) => void handleMaterialUpload("theory", event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  event.target.value = ""
+                  void handleMaterialUpload("theory", files)
+                }}
               />
               <input
                 ref={practiceFileInputRef}
                 type="file"
                 accept="application/pdf"
+                multiple
                 className="hidden"
-                onChange={(event) => void handleMaterialUpload("practice", event.target.files?.[0] ?? null)}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? [])
+                  event.target.value = ""
+                  void handleMaterialUpload("practice", files)
+                }}
               />
 
               {entriesError ? (
