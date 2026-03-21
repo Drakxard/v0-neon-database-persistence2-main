@@ -151,11 +151,13 @@ export async function deleteDriveFile(fileId: string) {
   })
 
   if (response.status === 404) {
-    return
+    return { status: "missing" as const }
   }
 
   if (!response.ok) {
     const payload = await response.text()
     throw new Error(payload || "Google Drive delete failed")
   }
+
+  return { status: "deleted" as const }
 }

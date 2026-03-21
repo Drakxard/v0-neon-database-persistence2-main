@@ -265,9 +265,10 @@ export async function deleteR2Object(objectKey: string) {
         Key: objectKey,
       })
     )
+    return { status: "deleted" as const }
   } catch (error) {
     if (isR2ObjectNotFoundError(error)) {
-      return
+      return { status: "missing" as const }
     }
 
     throw error

@@ -216,6 +216,18 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
   }))
 }
 
+async function findMaterialByDriveFileId(driveFileId: string) {
+  const rows = await sql`
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+    FROM subject_day_materials
+    WHERE drive_file_id = ${driveFileId}
+    ORDER BY id ASC
+    LIMIT 1
+  ` as SubjectDayMaterialRow[]
+
+  return rows[0] ?? null
+}
+
 export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) {
   const prefix = buildScopedR2Prefix(scope)
   const listedObjects = await listR2ObjectsByPrefix(prefix)
@@ -303,37 +315,54 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
     `
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
-    await sql`
-      INSERT INTO subject_day_materials (
-        subject_id,
-        week_number,
-        session_date,
-        weekday_index,
-        material_type,
-        order_index,
-        file_name,
-        drive_file_id,
-        drive_mime_type,
-        drive_web_view_link,
-        is_checkup_done
-      )
-      VALUES (
-        ${candidate.subjectId},
-        ${candidate.weekNumber},
-        ${candidate.sessionDate},
-        ${candidate.weekdayIndex},
-        ${candidate.materialType},
-        ${nextOrderIndex},
-        ${candidate.fileName},
-        ${candidate.driveFileId},
-        ${candidate.mimeType},
-        ${""},
-        ${false}
-      )
-    `
+    try {
+      await sql`
+        INSERT INTO subject_day_materials (
+          subject_id,
+          week_number,
+          session_date,
+          weekday_index,
+          material_type,
+          order_index,
+          file_name,
+          drive_file_id,
+          drive_mime_type,
+          drive_web_view_link,
+          is_checkup_done
+        )
+        VALUES (
+          ${candidate.subjectId},
+          ${candidate.weekNumber},
+          ${candidate.sessionDate},
+          ${candidate.weekdayIndex},
+          ${candidate.materialType},
+          ${nextOrderIndex},
+          ${candidate.fileName},
+          ${candidate.driveFileId},
+          ${candidate.mimeType},
+          ${""},
+          ${false}
+        )
+      `
 
-    existingDriveFileIds.add(candidate.driveFileId)
-    inserted += 1
+      existingDriveFileIds.add(candidate.driveFileId)
+      inserted += 1
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "23505"
+      ) {
+        const concurrentRow = await findMaterialByDriveFileId(candidate.driveFileId)
+        if (concurrentRow) {
+          existingDriveFileIds.add(candidate.driveFileId)
+          continue
+        }
+      }
+
+      throw error
+    }
   }
 
   return {

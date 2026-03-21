@@ -70,6 +70,18 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
   }))
 }
 
+async function findMaterialByDriveFileId(driveFileId: string) {
+  const rows = await sql`
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+    FROM subject_day_materials
+    WHERE drive_file_id = ${driveFileId}
+    ORDER BY id ASC
+    LIMIT 1
+  ` as SubjectDayMaterialRow[]
+
+  return rows[0] ?? null
+}
+
 function readR2MetadataValue(metadata: Record<string, string> | undefined, key: string) {
   return String(metadata?.[key] || "").trim()
 }
@@ -122,14 +134,9 @@ export async function POST(request: Request) {
       }
     }
 
-    const existingRows = await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-      FROM subject_day_materials
-      WHERE drive_file_id = ${driveFile.id}
-      LIMIT 1
-    ` as SubjectDayMaterialRow[]
-    if (existingRows[0]) {
-      return NextResponse.json(normalizeRows(existingRows)[0])
+    const existingRow = await findMaterialByDriveFileId(driveFile.id)
+    if (existingRow) {
+      return NextResponse.json(normalizeRows([existingRow])[0])
     }
 
     const persistedFileName = isR2ObjectKey(driveFileId)
@@ -152,35 +159,51 @@ export async function POST(request: Request) {
     `
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
-    const rows = await sql`
-      INSERT INTO subject_day_materials (
-        subject_id,
-        week_number,
-        session_date,
-        weekday_index,
-        material_type,
-        order_index,
-        file_name,
-        drive_file_id,
-        drive_mime_type,
-        drive_web_view_link
-      )
-      VALUES (
-        ${subjectId},
-        ${weekNumber},
-        ${sessionDate},
-        ${weekdayIndex},
-        ${materialType},
-        ${nextOrderIndex},
-        ${persistedFileName},
-        ${driveFile.id},
-        ${driveFile.mimeType},
-        ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
-      )
-      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
-    ` as SubjectDayMaterialRow[]
+    try {
+      const rows = await sql`
+        INSERT INTO subject_day_materials (
+          subject_id,
+          week_number,
+          session_date,
+          weekday_index,
+          material_type,
+          order_index,
+          file_name,
+          drive_file_id,
+          drive_mime_type,
+          drive_web_view_link
+        )
+        VALUES (
+          ${subjectId},
+          ${weekNumber},
+          ${sessionDate},
+          ${weekdayIndex},
+          ${materialType},
+          ${nextOrderIndex},
+          ${persistedFileName},
+          ${driveFile.id},
+          ${driveFile.mimeType},
+          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
+        )
+        RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      ` as SubjectDayMaterialRow[]
 
-    return NextResponse.json(normalizeRows(rows)[0])
+      return NextResponse.json(normalizeRows(rows)[0])
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "23505"
+      ) {
+        const concurrentRow = await findMaterialByDriveFileId(driveFile.id)
+        if (concurrentRow) {
+          return NextResponse.json(normalizeRows([concurrentRow])[0])
+        }
+      }
+
+      throw error
+    }
   } catch (error) {
     console.error("POST /api/subject-day-materials/complete error:", error)
     if (isMissingSubjectDayMaterialsTable(error)) {
