@@ -50,6 +50,12 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return Response.json({ error: "El archivo remoto ya no existe." }, { status: 404 })
     }
 
+    if (fileResult.status === "unavailable") {
+      const message =
+        fileResult.error instanceof Error ? fileResult.error.message : "No se pudo acceder al archivo remoto."
+      return Response.json({ error: message }, { status: 500 })
+    }
+
     return new Response(fileResult.value.buffer, {
       headers: {
         "Content-Type": fileResult.value.mimeType || material.drive_mime_type || "application/pdf",

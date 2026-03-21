@@ -98,6 +98,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       uploadMode: session.uploadMode,
       objectKey: session.objectKey,
+      uploadUrl: session.uploadUrl,
       headers: session.headers,
       metadata: session.metadata,
       mimeType: session.mimeType,

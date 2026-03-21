@@ -2892,6 +2892,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <Sparkles className="w-4 h-4 text-slate-600" />
               Consultar IA
             </DialogTitle>
+            <DialogDescription>
+              Escribe una consulta y usa como contexto el estado actual de las materias visibles.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
@@ -3045,8 +3048,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                   <DialogDescription className="text-left text-sm text-black sm:text-base">
                     {practiceSectionView === "exercises"
-                      ? ""
-                      : "Flujo anterior de dudas"}
+                      ? "Gestiona los materiales y audios de practica de la semana o del dia seleccionado."
+                      : "Revisa teoria, materiales y dudas del dia actual."}
                   </DialogDescription>
                 </div>
 
@@ -3566,9 +3569,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           <div className="relative min-h-full bg-white px-5 py-5 sm:px-8 sm:py-6">
             <DialogHeader className="mb-6 border-b border-black pb-4">
               <div className="flex items-start justify-between gap-4">
-                <DialogTitle className="text-left text-[2rem] font-normal leading-none text-black sm:text-[2.5rem]">
-                  Continuar
-                </DialogTitle>
+                <div className="space-y-2">
+                  <DialogTitle className="text-left text-[2rem] font-normal leading-none text-black sm:text-[2.5rem]">
+                    Continuar
+                  </DialogTitle>
+                  <DialogDescription className="text-left text-sm text-slate-600 sm:text-base">
+                    Retoma el archivo de practica pendiente, escucha el audio previo y agrega nuevas dudas.
+                  </DialogDescription>
+                </div>
                 <DialogClose asChild>
                   <button
                     type="button"
@@ -4142,12 +4150,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
           <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-6 py-5 sm:px-8">
             <div className="flex items-start justify-between gap-4">
-              <div className="flex min-w-0 items-center gap-4">
-                <DialogTitle className="flex items-center gap-2">
-                  <GraduationCap className="h-5 w-5 text-slate-600" />
-                  Practicar
-                </DialogTitle>
-                <div className="flex items-center gap-2 text-sm text-slate-500">
+              <div className="flex min-w-0 flex-1 items-start gap-4">
+                <div className="min-w-0 space-y-2">
+                  <DialogTitle className="flex items-center gap-2">
+                    <GraduationCap className="h-5 w-5 text-slate-600" />
+                    Practicar
+                  </DialogTitle>
+                  <DialogDescription className="text-left text-sm text-slate-500">
+                    Abre teoria o ejercicios, aplica filtros y recorre las dudas de la materia elegida.
+                  </DialogDescription>
+                </div>
+                <div className="flex items-center gap-2 pt-0.5 text-sm text-slate-500">
                   <Switch
                     checked={showAllSubjectsForDay}
                     onCheckedChange={handleShowAllSubjectsChange}

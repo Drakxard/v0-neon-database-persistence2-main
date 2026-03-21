@@ -149,9 +149,10 @@ export async function GET(request: Request) {
       }))
     )
     const visibleRows = availabilityChecks
-      .filter((entry) => entry.remote.status === "ok")
+      .filter((entry) => entry.remote.status !== "missing")
       .map((entry) => entry.row)
-    const removedCount = availabilityChecks.length - visibleRows.length
+    const removedCount = availabilityChecks.filter((entry) => entry.remote.status === "missing").length
+    const unavailableRows = availabilityChecks.filter((entry) => entry.remote.status === "unavailable")
 
     if (removedCount > 0) {
       console.warn("GET /api/subject-day-materials removed orphan materials during listing", {
@@ -160,6 +161,17 @@ export async function GET(request: Request) {
         sessionDate: scope === "week" ? undefined : sessionDate!,
         materialType: materialType ?? "all",
         removedCount,
+      })
+    }
+
+    if (unavailableRows.length > 0) {
+      console.warn("GET /api/subject-day-materials found materials with unavailable remote metadata", {
+        subjectId,
+        weekNumber,
+        sessionDate: scope === "week" ? undefined : sessionDate!,
+        materialType: materialType ?? "all",
+        materialIds: unavailableRows.map((entry) => entry.row.id),
+        driveFileIds: unavailableRows.map((entry) => entry.row.drive_file_id),
       })
     }
 

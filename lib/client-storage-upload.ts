@@ -1,10 +1,12 @@
 export type DriveUploadSessionResponse = {
-  uploadMode: "server"
+  uploadMode: "server" | "direct"
   objectKey: string
   fileName: string
   driveFileId?: string
   mimeType?: string
   metadata?: Record<string, string>
+  headers?: Record<string, string>
+  uploadUrl?: string
 }
 
 function getErrorMessage(payload: unknown, fallback: string) {
@@ -31,6 +33,37 @@ async function parseJsonResponse(response: Response) {
 }
 
 export async function uploadBlobToStorage(session: DriveUploadSessionResponse, blob: Blob) {
+  if (session.uploadMode === "direct") {
+    if (!session.uploadUrl) {
+      throw new Error("Falta la URL firmada para subir el archivo al storage.")
+    }
+
+    const response = await fetch(session.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": session.mimeType || blob.type || "application/octet-stream",
+        ...(session.headers || {}),
+      },
+      body: blob,
+    })
+
+    if (!response.ok) {
+      const payload = await parseJsonResponse(response)
+      const fallback = `No se pudo subir el archivo al storage. (${response.status})`
+      throw new Error(getErrorMessage(payload, fallback))
+    }
+
+    const driveFileId = session.driveFileId || session.objectKey || ""
+    if (!driveFileId) {
+      throw new Error("El storage no devolvio el identificador del archivo subido.")
+    }
+
+    return {
+      driveFileId,
+      payload: null,
+    }
+  }
+
   if (session.uploadMode !== "server") {
     throw new Error("Unsupported upload mode.")
   }

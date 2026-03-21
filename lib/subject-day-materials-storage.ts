@@ -24,7 +24,7 @@ async function cleanupMissingSubjectDayMaterial(materialId: number) {
 async function withSubjectDayMaterialAutocleanup<T>(
   material: SubjectDayMaterialStorageRecord,
   operation: () => Promise<T>
-): Promise<{ status: "ok"; value: T } | { status: "missing" }> {
+): Promise<{ status: "ok"; value: T } | { status: "missing" } | { status: "unavailable"; error: unknown }> {
   try {
     const value = await operation()
     return { status: "ok", value }
@@ -34,7 +34,7 @@ async function withSubjectDayMaterialAutocleanup<T>(
       return { status: "missing" }
     }
 
-    throw error
+    return { status: "unavailable", error }
   }
 }
 

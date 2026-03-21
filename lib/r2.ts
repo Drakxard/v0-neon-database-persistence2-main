@@ -1,4 +1,5 @@
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
@@ -134,11 +135,20 @@ export async function createR2UploadSession(params: {
   mimeType: string
   metadata?: Record<string, string>
 }) {
+  const client = createR2Client()
   const metadata = normalizeUploadMetadata(params.metadata)
+  const command = new PutObjectCommand({
+    Bucket: getBucketName(),
+    Key: params.objectKey,
+    ContentType: params.mimeType,
+    Metadata: metadata,
+  })
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 })
 
   return {
-    uploadMode: "server" as const,
+    uploadMode: "direct" as const,
     objectKey: params.objectKey,
+    uploadUrl,
     fileName: getFileNameFromKey(params.objectKey),
     driveFileId: params.objectKey,
     mimeType: params.mimeType,
