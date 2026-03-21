@@ -42,7 +42,6 @@ export async function uploadBlobToStorage(session: DriveUploadSessionResponse, b
       method: "PUT",
       headers: {
         "Content-Type": session.mimeType || blob.type || "application/octet-stream",
-        ...(session.headers || {}),
       },
       body: blob,
     })
