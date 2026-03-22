@@ -244,6 +244,13 @@
     leaveSelectionMode(message);
   }
 
+  function getPageRotation(pageNumber) {
+    const rotation = state.app?.pdfViewer?.getPageView(pageNumber - 1)?.rotation;
+    if (typeof rotation !== "number") return 0;
+    const normalized = rotation % 360;
+    return normalized < 0 ? normalized + 360 : normalized;
+  }
+
   function makeSelectionFromDrag(pageNumber) {
     if (!state.drag) return null;
     const { startXp, startYp, currentXp, currentYp } = state.drag;
@@ -257,6 +264,7 @@
     return {
       id: `${pageNumber}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       pageNum: pageNumber,
+      pageRotation: getPageRotation(pageNumber),
       xp1: minXp,
       yp1: minYp,
       xp2: maxXp,
@@ -432,10 +440,11 @@
       const cropWidth = cropBox.width || sourcePage.getWidth();
       const cropHeight = cropBox.height || sourcePage.getHeight();
 
-      const minXp = Math.min(selection.xp1, selection.xp2);
-      const maxXp = Math.max(selection.xp1, selection.xp2);
-      const minYp = Math.min(selection.yp1, selection.yp2);
-      const maxYp = Math.max(selection.yp1, selection.yp2);
+      const normalizedBounds = getNormalizedBoundsForSelection(selection);
+      const minXp = normalizedBounds.left;
+      const maxXp = normalizedBounds.right;
+      const minYp = normalizedBounds.top;
+      const maxYp = normalizedBounds.bottom;
 
       const left = cropLeft + minXp * cropWidth;
       const right = cropLeft + maxXp * cropWidth;
@@ -463,6 +472,39 @@
     return {
       blob: new Blob([pdfBytes], { type: "application/pdf" }),
       fileName: normalizePdfFileName(fileName),
+    };
+  }
+
+  function mapDisplayedPointToOriginal(xp, yp, rotation) {
+    switch (rotation) {
+      case 90:
+        return { xp: yp, yp: 1 - xp };
+      case 180:
+        return { xp: 1 - xp, yp: 1 - yp };
+      case 270:
+        return { xp: 1 - yp, yp: xp };
+      default:
+        return { xp, yp };
+    }
+  }
+
+  function getNormalizedBoundsForSelection(selection) {
+    const rotation = typeof selection.pageRotation === "number" ? selection.pageRotation : 0;
+    const corners = [
+      mapDisplayedPointToOriginal(selection.xp1, selection.yp1, rotation),
+      mapDisplayedPointToOriginal(selection.xp1, selection.yp2, rotation),
+      mapDisplayedPointToOriginal(selection.xp2, selection.yp1, rotation),
+      mapDisplayedPointToOriginal(selection.xp2, selection.yp2, rotation),
+    ];
+
+    const xs = corners.map((point) => point.xp);
+    const ys = corners.map((point) => point.yp);
+
+    return {
+      left: Math.max(0, Math.min(...xs)),
+      right: Math.min(1, Math.max(...xs)),
+      top: Math.max(0, Math.min(...ys)),
+      bottom: Math.min(1, Math.max(...ys)),
     };
   }
 

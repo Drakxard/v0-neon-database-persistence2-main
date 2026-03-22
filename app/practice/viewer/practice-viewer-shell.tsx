@@ -43,6 +43,7 @@ function buildPracticePdfJsViewerHref({
   }
 
   if (draftContext) {
+    params.set("file", "")
     params.set("subjectId", draftContext.subjectId)
     params.set("subjectName", draftContext.subjectName)
     params.set("sessionDate", draftContext.sessionDate)
