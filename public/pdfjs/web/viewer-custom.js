@@ -465,11 +465,11 @@
 
       if (pageRotation === 90) {
         page.drawPage(embeddedPage, {
-          x: height,
-          y: 0,
+          x: 0,
+          y: width,
           width,
           height,
-          rotate: window.PDFLib.degrees(90),
+          rotate: window.PDFLib.degrees(270),
         });
       } else if (pageRotation === 180) {
         page.drawPage(embeddedPage, {
@@ -481,11 +481,11 @@
         });
       } else if (pageRotation === 270) {
         page.drawPage(embeddedPage, {
-          x: 0,
-          y: width,
+          x: height,
+          y: 0,
           width,
           height,
-          rotate: window.PDFLib.degrees(270),
+          rotate: window.PDFLib.degrees(90),
         });
       } else {
         page.drawPage(embeddedPage, {

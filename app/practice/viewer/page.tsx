@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { neon } from "@neondatabase/serverless"
+import { redirect } from "next/navigation"
 
-import { PracticeViewerShell } from "./practice-viewer-shell"
 import { getRequestAuthSession, canAccessSubject } from "@/lib/authz"
 import { parseDateKey } from "@/lib/subject-utils"
 import { getSubjectById } from "@/lib/subjects"
@@ -40,12 +40,57 @@ type DraftViewerContext = {
   materialType: "practice"
 }
 
+type MaterialContext = {
+  id: number
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+  fileName: string
+}
+
 function normalizeSessionDateKey(sessionDate: string | Date) {
   if (sessionDate instanceof Date) {
     return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
   }
 
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
+function buildPracticePdfJsViewerHref({
+  material,
+  draftContext,
+}: {
+  material?: MaterialContext
+  draftContext?: DraftViewerContext
+}) {
+  const params = new URLSearchParams()
+
+  if (material) {
+    params.set("file", `/api/subject-day-materials/${material.id}/file`)
+    params.set("materialId", String(material.id))
+    params.set("fileName", material.fileName)
+    params.set("key", `subject-day-material-${material.id}`)
+    params.set("subjectId", material.subjectId)
+    params.set("subjectName", material.subjectName)
+    params.set("sessionDate", material.sessionDate)
+    params.set("weekNumber", String(material.weekNumber))
+    params.set("weekdayIndex", String(material.weekdayIndex))
+  }
+
+  if (draftContext) {
+    params.set("file", "")
+    params.set("subjectId", draftContext.subjectId)
+    params.set("subjectName", draftContext.subjectName)
+    params.set("sessionDate", draftContext.sessionDate)
+    params.set("weekNumber", String(draftContext.weekNumber))
+    params.set("weekdayIndex", String(draftContext.weekdayIndex))
+    params.set("materialType", draftContext.materialType)
+    params.set("key", `practice-draft:${draftContext.subjectId}:${draftContext.sessionDate}`)
+  }
+
+  return `/pdfjs/web/viewer.html?${params.toString()}#locale=es-AR`
 }
 
 async function getMaterial(materialId: number) {
@@ -120,7 +165,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       materialType,
     }
 
-    return <PracticeViewerShell draftContext={draftContext} />
+    redirect(buildPracticePdfJsViewerHref({ draftContext }))
   }
 
   if (!Number.isInteger(materialId)) {
@@ -194,9 +239,9 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       )
     }
 
-    return (
-      <PracticeViewerShell
-        material={{
+    redirect(
+      buildPracticePdfJsViewerHref({
+        material: {
           id: material.id,
           subjectId: material.subject_id,
           subjectName: getSubjectById(material.subject_id)?.name.replace("\n", " ") || SUBJECT_NAMES[material.subject_id] || material.subject_id,
@@ -204,8 +249,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
           weekNumber: material.week_number,
           weekdayIndex: material.weekday_index,
           fileName: material.file_name,
-        }}
-      />
+        },
+      })
     )
   } catch (error) {
     console.error("GET /practice/viewer page error:", error)

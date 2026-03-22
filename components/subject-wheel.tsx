@@ -1,11 +1,13 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { useTheme } from "next-themes"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
@@ -13,6 +15,7 @@ import { Switch } from "@/components/ui/switch"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
@@ -437,10 +440,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [isLoading, setIsLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
+  const { theme, setTheme } = useTheme()
+  const [themeMenuMounted, setThemeMenuMounted] = useState(false)
 
   // This ref is only flipped to true AFTER the initial load sets state,
   // so the sync useEffect never fires on the first render with stale default state.
   const readyToSync = useRef(false)
+
+  useEffect(() => {
+    setThemeMenuMounted(true)
+  }, [])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -516,6 +525,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false)
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
+  const currentAppTheme = themeMenuMounted && isAppTheme(theme) ? theme : "daylight"
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
     currentDateKey: string
@@ -2643,17 +2653,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-100 flex flex-col">
-        <header className="flex items-center p-4 bg-white shadow-sm">
+      <div className="flex min-h-screen flex-col bg-background text-foreground transition-colors duration-300">
+        <header className="flex items-center border-b border-border bg-card/95 p-5 shadow-sm backdrop-blur">
           <div className="flex gap-2">
-            <div className="h-10 w-10 rounded-full border border-slate-300 bg-slate-50" />
-            <div className="h-10 w-10 rounded-full border border-slate-300 bg-slate-50" />
+            <div className="h-10 w-10 rounded-full border border-border bg-muted" />
+            <div className="h-10 w-10 rounded-full border border-border bg-muted" />
           </div>
         </header>
-        <main className="flex-1 flex items-center justify-center p-6">
-          <div className="w-full max-w-sm aspect-square rounded-full bg-slate-200 animate-pulse" />
+        <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12">
+          <div className="aspect-square w-full max-w-md animate-pulse rounded-full bg-muted" />
         </main>
-        <footer className="p-3 text-center text-xs text-slate-400 bg-white border-t">
+        <footer className="border-t border-border bg-card px-4 py-4 text-center text-xs text-muted-foreground">
           Cargando...
         </footer>
       </div>
@@ -2661,15 +2671,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col">
+    <div className="flex min-h-screen flex-col bg-background text-foreground transition-colors duration-300">
       {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
-          <div className="order-2 flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs sm:order-1 sm:min-w-[140px] sm:justify-start">
+      <header className="border-b border-border bg-card/95 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-5">
+          <div className="order-2 flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs text-muted-foreground sm:order-1 sm:min-w-[160px] sm:justify-start">
             {saveStatus === "saving" && (
               <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-500" />
-                <span className="text-slate-500">Guardando...</span>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                <span>Guardando...</span>
               </>
             )}
             {saveStatus === "saved" && (
@@ -2683,46 +2693,88 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             )}
           </div>
 
-          <div className="order-1 flex items-center gap-2 overflow-x-auto pb-1 sm:order-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="order-1 flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:order-2 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <Button
               onClick={openManualMobileShortcutPicker}
               variant="outline"
-              className="h-9 shrink-0 px-3"
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+              aria-label="Celular"
+              title="Celular"
             >
-              <Smartphone className="w-4 h-4 mr-1.5" />
-              Celular
+              <Smartphone className="h-4 w-4" />
             </Button>
             <Button
               onClick={openPracticeModal}
               variant="outline"
-              className="h-9 shrink-0 px-3"
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+              aria-label="Practica"
+              title="Practica"
             >
-              <GraduationCap className="w-4 h-4 mr-1.5" />
-              Practicar
+              <GraduationCap className="h-4 w-4" />
             </Button>
             <Button
               onClick={openReviewModal}
               variant="outline"
-              className="h-9 shrink-0 px-3"
+              size="icon"
+              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+              aria-label="Destacado"
+              title="Destacado"
             >
-              Destacado
+              <Sparkles className="h-4 w-4" />
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                  aria-label="Cambiar tema"
+                  title="Cambiar tema"
+                >
+                  <Palette className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl border-border bg-popover">
+                <DropdownMenuLabel>Tema</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {APP_THEMES.map((themeOption) => {
+                  const isActive = themeOption.id === currentAppTheme
+
+                  return (
+                    <DropdownMenuItem
+                      key={themeOption.id}
+                      onClick={() => setTheme(themeOption.id)}
+                      className="flex items-center gap-3 rounded-xl px-3 py-3"
+                    >
+                      <span className={`h-8 w-8 shrink-0 rounded-full border border-white/40 bg-gradient-to-br ${themeOption.swatchClassName}`} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{themeOption.label}</span>
+                        <span className="block text-xs text-muted-foreground">{themeOption.description}</span>
+                      </span>
+                      <span className={`h-2.5 w-2.5 rounded-full transition ${isActive ? "bg-primary" : "bg-transparent"}`} />
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <button
               onClick={handleReset}
-              className="shrink-0 rounded-full p-2 transition-colors hover:bg-slate-100"
+              className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               aria-label="Reiniciar"
               title="Reiniciar todas las materias"
             >
-              <RotateCcw className="w-5 h-5 text-slate-700" />
+              <RotateCcw className="h-5 w-5" />
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center p-6">
+      <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12 sm:py-14">
         {activeSubjects.length > 0 ? (
-          <svg viewBox="0 0 320 320" className="w-full max-w-sm" style={{ maxWidth: "500px" }}>
+          <svg viewBox="0 0 320 320" className="w-full max-w-[560px]">
             <g>
               {segments.map(({ subject, path, labelX, labelY, fontSize }) => (
               <g
@@ -2764,14 +2816,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </svg>
         ) : (
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-slate-700 mb-2">¡Todo completado!</h2>
-            <p className="text-slate-500">Todas las materias fueron vistas hoy</p>
+            <h2 className="mb-2 text-2xl font-bold text-foreground">¡Todo completado!</h2>
+            <p className="text-muted-foreground">Todas las materias fueron vistas hoy</p>
           </div>
         )}
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer className="p-4 text-center text-xs text-slate-600 bg-white border-t">
+      <footer className="border-t border-border bg-card px-4 py-4 text-center text-xs text-muted-foreground">
         {completedSubjects.length > 0 && (
           <div className="flex flex-wrap gap-2 justify-center mb-2">
             {completedSubjects.map((subject) => (
@@ -2805,7 +2857,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label="Cerrar modal"
                 >
                   <X className="h-7 w-7" />
@@ -2820,7 +2872,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 key={subject.id}
                 type="button"
                 onClick={() => handleManualMobileSubjectSelect(subject.id)}
-                className="rounded-xl border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-900 transition hover:border-slate-500 hover:bg-slate-50"
+                className="rounded-xl border border-border bg-card px-4 py-3 text-left text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-accent"
               >
                 {subject.name.replace("\n", " ")}
               </button>
@@ -2831,7 +2883,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
       <Dialog open={isMobileShortcutOpen} onOpenChange={(open) => (!open ? closeMobileShortcutModal(true) : undefined)}>
         <DialogContent
-          className="top-0 left-0 z-[60] h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-[#9a9a9a] p-0 shadow-none sm:top-1/2 sm:left-1/2 sm:h-[min(92dvh,760px)] sm:w-[440px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[28px] sm:border-2 sm:border-slate-200 sm:shadow-2xl"
+          className="top-0 left-0 z-[60] h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-muted p-0 shadow-none sm:top-1/2 sm:left-1/2 sm:h-[min(92dvh,760px)] sm:w-[440px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[28px] sm:border sm:border-border sm:shadow-2xl"
           showCloseButton={false}
           onPointerDownOutside={(event) => event.preventDefault()}
           onInteractOutside={(event) => event.preventDefault()}
@@ -2842,14 +2894,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <DialogDescription>Modal para grabar y confirmar un audio rápido.</DialogDescription>
           </DialogHeader>
 
-          <div className="flex h-full min-h-0 flex-col justify-between bg-[#9a9a9a] px-6 py-6 text-slate-950 sm:rounded-[26px]">
+          <div className="flex h-full min-h-0 flex-col justify-between bg-muted px-6 py-6 text-foreground sm:rounded-[26px]">
             <div className="space-y-8 pt-2">
-              <div className="mx-auto flex h-28 w-full max-w-[320px] items-center justify-center rounded-[18px] border-[8px] border-slate-700 bg-[#afafaf] text-6xl font-medium text-white">
+              <div className="mx-auto flex h-28 w-full max-w-[320px] items-center justify-center rounded-[18px] border-[8px] border-border bg-card text-6xl font-medium text-foreground">
                 {mobileClockLabel}
               </div>
 
               <div className="space-y-5 text-center">
-                <p className="text-3xl font-semibold text-slate-950">
+                <p className="text-3xl font-semibold text-foreground">
                   {activeMobileModalTarget ? activeMobileModalTarget.subjectName : "Esperando horario"}
                 </p>
                 <button
@@ -2864,12 +2916,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     )
                   }}
                   disabled={!activeMobileModalTarget || isUploadingAudio}
-                  className={`mx-auto flex h-52 w-52 items-center justify-center rounded-full border-[8px] border-slate-700 transition ${
+                  className={`mx-auto flex h-52 w-52 items-center justify-center rounded-full border-[8px] border-border transition ${
                     !activeMobileModalTarget || isUploadingAudio
                       ? "cursor-not-allowed opacity-50"
                       : isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")
                         ? "bg-red-500 text-white"
-                        : "bg-[#9a9a9a] text-slate-950 hover:bg-[#a3a3a3]"
+                        : "bg-card text-foreground hover:bg-accent"
                   }`}
                   aria-label={isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? "Detener grabacion" : "Iniciar grabacion"}
                 >
@@ -2886,7 +2938,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               {reviewAudio && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
                 <audio controls src={reviewAudio.url} className="w-full" />
               ) : (
-                <div className="h-12 rounded-full border-4 border-slate-700/70 bg-[#9a9a9a]" />
+                <div className="h-12 rounded-full border-4 border-border bg-card" />
               )}
 
               {recordingError ? <div className="text-sm text-red-900">{recordingError}</div> : null}
@@ -2894,12 +2946,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <div className="text-sm text-red-900">{entriesError}</div>
               ) : null}
               {!activeMobileModalTarget ? (
-                <p className="text-sm text-slate-900">
+                <p className="text-sm text-muted-foreground">
                   Este modal se abre solo en los bloques definidos. El boton queda disponible para la fase 1.
                 </p>
               ) : null}
 
-              <div className="flex items-center justify-between gap-4 pt-2 text-[2rem] font-medium leading-none text-slate-700">
+              <div className="flex items-center justify-between gap-4 pt-2 text-[2rem] font-medium leading-none text-foreground">
                 <button
                   type="button"
                   onClick={handleMobileShortcutReset}
@@ -2927,7 +2979,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-slate-600" />
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
               Consultar IA
             </DialogTitle>
             <DialogDescription>
@@ -2947,7 +2999,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   autoFocus
                 />
                 {completedSubjects.length > 0 && (
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-muted-foreground">
                     Se enviará el panorama de las materias completadas como contexto.
                   </p>
                 )}
@@ -2958,17 +3010,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             {aiSent && (
               <div
                 ref={aiResponseRef}
-                className="min-h-32 max-h-80 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed"
+                className="min-h-32 max-h-80 overflow-y-auto rounded-md border border-border bg-muted/40 p-3 text-sm text-foreground whitespace-pre-wrap leading-relaxed"
               >
                 {isAiLoading && !aiResponse && (
-                  <span className="flex items-center gap-2 text-slate-400">
+                  <span className="flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     Generando respuesta...
                   </span>
                 )}
                 {aiResponse}
                 {isAiLoading && aiResponse && (
-                  <span className="inline-block w-1.5 h-4 bg-slate-400 animate-pulse ml-0.5 align-middle" />
+                  <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-muted-foreground align-middle" />
                 )}
               </div>
             )}
@@ -2983,7 +3035,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <Button
                   onClick={handleAiSubmit}
                   disabled={!aiPrompt.trim() || isAiLoading}
-                  className="bg-slate-800 hover:bg-slate-700 text-white"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   Enviar
                 </Button>
@@ -3002,10 +3054,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       </Dialog>
 
       <Dialog open={isNextWeekDialogOpen} onOpenChange={setIsNextWeekDialogOpen}>
-        <DialogContent className="max-w-md border-2 border-black bg-white text-black">
+        <DialogContent className="max-w-md border border-border bg-card text-foreground">
           <DialogHeader className="space-y-2 text-left">
             <DialogTitle>Comenzar siguiente semana</DialogTitle>
-            <DialogDescription className="text-sm text-slate-700">
+            <DialogDescription className="text-sm text-muted-foreground">
               Adelanta la vista a la proxima semana para cargar material antes del lunes cuando ya este habilitado.
             </DialogDescription>
           </DialogHeader>
@@ -3014,7 +3066,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               type="button"
               onClick={() => void startNextWeek()}
               disabled={selectedWeekNumber >= currentCalendarWeek + 1}
-              className="border-2 border-black bg-black text-white hover:bg-slate-900"
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
               Comenzar semana {currentCalendarWeek + 1}
             </Button>
@@ -3023,7 +3075,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       </Dialog>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialogOrReturn() : undefined)}>
-        <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-white p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border-2 sm:border-black" showCloseButton={false}>
+        <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-card p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border sm:border-border" showCloseButton={false}>
           <div className="relative flex h-full flex-col overflow-hidden px-4 py-4 sm:p-8">
             <Button
               variant="outline"
@@ -3034,7 +3086,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? selectedWeekNumber <= 0
                   : subjectDialogDayIndex <= 0
               }
-              className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
+              className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -3047,16 +3099,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? selectedWeekNumber >= latestWeekNumber
                   : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
               }
-              className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border-2 border-black bg-white text-black opacity-70 hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
+              className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
 
-            <DialogHeader className="space-y-3 border-b border-black pb-3 sm:border-b-2 sm:pb-4 sm:pr-28">
+            <DialogHeader className="space-y-3 border-b border-border pb-3 sm:pb-4 sm:pr-28">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-black">
+                    <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-foreground">
                       {practiceSectionView === "exercises"
                         ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
                         : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
@@ -3067,7 +3119,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         variant="outline"
                         onClick={() => void copyEntriesForDay()}
                         disabled={entries.length === 0 || isCopyingEntries}
-                        className="h-9 border-black px-3 text-black"
+                        className="h-9 border-border px-3 text-foreground"
                       >
                         {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                         Copiar
@@ -3078,13 +3130,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         type="button"
                         variant="outline"
                         onClick={() => void returnToCurrentDayView()}
-                        className="h-9 border-black px-3 text-black"
+                        className="h-9 border-border px-3 text-foreground"
                       >
                         Volver
                       </Button>
                     ) : null}
                   </div>
-                  <DialogDescription className="text-left text-sm text-black sm:text-base">
+                  <DialogDescription className="text-left text-sm text-muted-foreground sm:text-base">
                     {practiceSectionView === "exercises"
                       ? "Gestiona los materiales y audios de practica de la semana o del dia seleccionado."
                       : "Revisa teoria, materiales y dudas del dia actual."}
@@ -3096,7 +3148,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     <Button
                       type="button"
                       onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
-                      className="h-10 rounded-2xl border-2 border-black bg-white px-4 text-sm text-black hover:bg-slate-100 sm:h-11 sm:px-6"
+                      className="h-10 rounded-2xl border border-border bg-card px-4 text-sm text-foreground hover:bg-accent sm:h-11 sm:px-6"
                     >
                       Terminar
                     </Button>
@@ -3104,7 +3156,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
-                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black bg-white text-black transition-colors hover:bg-black hover:text-white"
+                    className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     aria-label="Cerrar modal"
                   >
                     <X className="h-7 w-7" />
@@ -3113,9 +3165,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </div>
 
               {practiceSectionView === "theory" ? (
-                <div className="text-sm text-slate-700 sm:text-base">{currentDateKey}</div>
+                <div className="text-sm text-muted-foreground sm:text-base">{currentDateKey}</div>
               ) : subjectViewDateOverride ? (
-                <div className="text-sm text-slate-700 sm:text-base">{subjectDialogDateKey}</div>
+                <div className="text-sm text-muted-foreground sm:text-base">{subjectDialogDateKey}</div>
               ) : null}
             </DialogHeader>
 
@@ -3150,7 +3202,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               ) : null}
 
               {isSubjectDayRefreshing ? (
-                <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
+                <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Actualizando...
                 </div>
@@ -3161,17 +3213,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               ) : (
                 <>
                 <div className="mb-6 space-y-4">
-                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Teoria</p>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Teoria</p>
                       </div>
                       <Button
                         type="button"
                         variant="outline"
                         onClick={() => theoryFileInputRef.current?.click()}
                         disabled={isUploadingMaterialType !== null}
-                        className="border-black text-black"
+                        className="border-border text-foreground"
                       >
                         {isUploadingMaterialType === "theory" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                       </Button>
@@ -3183,7 +3235,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           "is_pending_upload" in material ? (
                             <div
                               key={material.id}
-                              className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-500"
+                              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground"
                             >
                               <span className="truncate">{material.file_name}</span>
                               <span className="inline-flex items-center gap-2 text-xs">
@@ -3192,7 +3244,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               </span>
                             </div>
                           ) : (
-                            <div key={material.id} className="relative flex items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
+                            <div key={material.id} className="relative flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground hover:bg-accent">
                                 <a
                                   href={buildPracticeMaterialViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7"
@@ -3205,7 +3257,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 size="icon"
                                 onClick={() => void deleteMaterial(material)}
                                 disabled={isDeletingMaterialId === material.id}
-                                className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                                 aria-label={`Borrar ${material.file_name}`}
                               >
                                 {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
@@ -3214,7 +3266,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           )
                         ))
                       ) : (
-                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
                           {isWeeklyExercisesScope
                             ? "Todavia no hay PDFs de teoria para esta semana."
                             : "Todavia no hay PDFs de teoria para este dia."}
@@ -3223,10 +3275,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
                   </section>
 
-                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Practica</p>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Practica</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -3247,7 +3299,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             )
                           }}
                           disabled={isUploadingMaterialType !== null || !currentSubject}
-                          className="border-black text-black"
+                          className="border-border text-foreground"
                           aria-label="Abrir visor para fragmentar un libro"
                         >
                           <ExternalLink className="h-4 w-4" />
@@ -3257,14 +3309,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           variant="outline"
                           onClick={() => practiceFileInputRef.current?.click()}
                           disabled={isUploadingMaterialType !== null}
-                          className="border-black text-black"
+                          className="border-border text-foreground"
                         >
                           {isUploadingMaterialType === "practice" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                         </Button>
                         <Button
                           type="button"
                           onClick={() => void openContinueModal()}
-                          className="border-black bg-black text-white"
+                          className="bg-primary text-primary-foreground"
                         >
                           Continuar
                         </Button>
@@ -3274,19 +3326,19 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     <div className="space-y-2">
                       {practiceMaterials.length > 0 ? (
                         practiceMaterials.map((material) => (
-                          <div key={material.id} className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
+                          <div key={material.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
                             {"is_pending_upload" in material ? (
                               <>
-                                <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-slate-500">
+                                <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-muted-foreground">
                                   <Checkbox checked={false} disabled />
                                   <span className="truncate">{material.file_name}</span>
                                 </span>
                                 {isWeeklyExercisesScope ? (
-                                  <span className="shrink-0 text-xs text-slate-400">
+                                  <span className="shrink-0 text-xs text-muted-foreground">
                                     {getWeekdayLabel(material.session_date)} {material.session_date}
                                   </span>
                                 ) : null}
-                                <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+                                <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                   Subiendo...
                                 </span>
@@ -3299,7 +3351,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 />
                                   <a
                                     href={buildPracticeMaterialViewerHref(material.id)}
-                                    className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
+                                    className="min-w-0 flex-1 truncate pr-7 text-sm text-foreground hover:underline"
                                   >
                                     {material.file_name}
                                   </a>
@@ -3307,7 +3359,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   type="button"
                                   variant="outline"
                                   onClick={() => void openContinueModal(material.id)}
-                                  className="h-8 border-black px-3 text-xs text-black"
+                                  className="h-8 border-border px-3 text-xs text-foreground"
                                 >
                                   Ver
                                 </Button>
@@ -3316,7 +3368,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   variant="outline"
                                   onClick={() => void copyEntriesForMaterial(material.id)}
                                   disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
-                                  className="h-8 border-black px-3 text-xs text-black"
+                                  className="h-8 border-border px-3 text-xs text-foreground"
                                 >
                                   Copiar
                                 </Button>
@@ -3326,7 +3378,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   size="icon"
                                   onClick={() => void deleteMaterial(material)}
                                   disabled={isDeletingMaterialId === material.id}
-                                  className="h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                  className="h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                                   aria-label={`Borrar ${material.file_name}`}
                                 >
                                   {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
@@ -3336,7 +3388,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           </div>
                         ))
                       ) : (
-                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
                           {isWeeklyExercisesScope
                             ? "Todavia no hay PDFs de practica para esta semana."
                             : "Todavia no hay PDFs de practica para este dia."}
@@ -3345,25 +3397,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
                   </section>
 
-                  <section className="space-y-3 border border-slate-300 bg-slate-50 p-4">
+                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Semana</p>
+                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Semana</p>
                       </div>
                     </div>
 
                     <div className="space-y-2">
                       {weekAudioDays.length > 0 ? (
                         weekAudioDays.map((day) => (
-                          <div key={day.sessionDate} className="flex items-center justify-between gap-3 border border-slate-200 bg-white px-3 py-2">
-                            <span className="min-w-0 flex-1 truncate text-sm text-slate-800">
+                          <div key={day.sessionDate} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
+                            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                               {getWeekdayLabel(day.sessionDate)}
                             </span>
                             <Button
                               type="button"
                               variant="outline"
                               onClick={() => void openWeekAudioDay(day.sessionDate)}
-                              className="h-8 border-black px-3 text-xs text-black"
+                              className="h-8 border-border px-3 text-xs text-foreground"
                             >
                               Ver
                             </Button>
@@ -3372,14 +3424,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               variant="outline"
                               onClick={() => void copyEntriesForSession(day.sessionDate)}
                               disabled={day.entries.length === 0 || isCopyingEntries}
-                              className="h-8 border-black px-3 text-xs text-black"
+                              className="h-8 border-border px-3 text-xs text-foreground"
                             >
                               Copiar
                             </Button>
                           </div>
                         ))
                       ) : (
-                        <p className="border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
                           Todavia no hay audios cargados en esta semana.
                         </p>
                       )}
@@ -3391,7 +3443,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {shouldShowInitialSubjectDayLoading ? (
                 <div className="flex min-h-56 items-center justify-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : practiceSectionView === "theory" && theoryDayEntries.length > 0 ? (
                 <div className="space-y-3 pb-24 sm:space-y-4 sm:pb-28">
@@ -3402,14 +3454,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     const isEditingTitle = editingTitleId === entry.id
 
                     return (
-                      <article key={entry.id} className="relative border border-slate-300 px-3 py-3 sm:px-4">
+                      <article key={entry.id} className="relative rounded-2xl border border-border bg-card px-3 py-3 sm:px-4">
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
                           onClick={() => void deleteEntry(entry)}
                           disabled={isDeletingEntryId === entry.id}
-                          className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                           aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
                         >
                           {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
@@ -3444,15 +3496,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   onCheckedChange={() => void toggleFeaturedEntry(entry)}
                                   className="h-4 w-4"
                                 />
-                                <p className="text-xs font-medium text-black sm:text-sm">{getEntryDisplayTitle(entry)}</p>
+                                <p className="text-xs font-medium text-foreground sm:text-sm">{getEntryDisplayTitle(entry)}</p>
                               <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
-                                <Pencil className="h-4 w-4 text-slate-500" />
+                                <Pencil className="h-4 w-4 text-muted-foreground" />
                               </Button>
                             </div>
                             )}
                             <div className="flex flex-wrap items-center gap-2">
                               {entry.external_links.map((link) => (
-                                <Button key={link.id} type="button" variant="outline" className="h-8 border-black px-3 text-xs text-black" asChild>
+                                <Button key={link.id} type="button" variant="outline" className="h-8 border-border px-3 text-xs text-foreground" asChild>
                                   <a href={link.url} target="_blank" rel="noreferrer">
                                     <Link2 className="h-3.5 w-3.5" />
                                     {link.label}
@@ -3464,16 +3516,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 variant="outline"
                                 size="icon"
                                 onClick={() => openLinkDialog(entry.id)}
-                                className="h-8 w-8 border-black text-black"
+                                className="h-8 w-8 border-border text-foreground"
                               >
                                 <Plus className="h-4 w-4" />
                               </Button>
                             </div>
-                            <p className="text-sm leading-6 text-slate-800 sm:text-base sm:leading-7">{entry.transcript_text}</p>
+                            <p className="text-sm leading-6 text-foreground sm:text-base sm:leading-7">{entry.transcript_text}</p>
                           </div>
 
                           {entryHasAudio(entry) ? (
-                            <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-10 shrink-0 border-black px-3 text-black sm:px-4">
+                            <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-10 shrink-0 border-border px-3 text-foreground sm:px-4">
                               {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : isExpandedAudio ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                               {loadingAudioEntryId === entry.id ? "Cargando..." : isExpandedAudio ? "Reproducir/Pausar" : "Audio"}
                             </Button>
@@ -3491,13 +3543,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               preload="metadata"
                               className="h-10 w-full sm:h-11"
                             />
-                            <p className="text-xs text-slate-400">
+                            <p className="text-xs text-muted-foreground">
                               El audio se descarga una sola vez y luego queda en memoria mientras el modal siga abierto.
                             </p>
                           </div>
                         ) : null}
 
-                        <div className="mt-4 border-t border-slate-200 pt-3">
+                        <div className="mt-4 border-t border-border pt-3">
                           {entry.answer_text ? (
                             <div className="space-y-2.5">
                               <button
@@ -3508,7 +3560,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                     [entry.id]: !previous[entry.id],
                                   }))
                                 }
-                                className="block w-full border border-slate-300 px-3 py-2 text-left text-sm text-slate-800"
+                                className="block w-full rounded-xl border border-border bg-background px-3 py-2 text-left text-sm text-foreground"
                               >
                                 {isRevealed ? entry.answer_text : "Click para revelar la respuesta"}
                               </button>
@@ -3527,7 +3579,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   })}
                 </div>
               ) : practiceSectionView === "theory" ? (
-                <div className="pb-24 text-sm text-slate-700 sm:pb-28"></div>
+                <div className="pb-24 text-sm text-muted-foreground sm:pb-28"></div>
               ) : (
                 <div className="pb-24 sm:pb-28"></div>
               )}
@@ -3536,7 +3588,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <div className="mt-3 pr-24 text-sm text-red-700">{recordingError}</div>
               ) : null}
               {isRecording ? (
-                <div className="mt-3 pr-24 text-sm text-slate-700">Grabando...</div>
+                <div className="mt-3 pr-24 text-sm text-muted-foreground">Grabando...</div>
               ) : null}
             </div>
 
@@ -3563,8 +3615,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
                     void (isRecording ? stopRecording() : startRecording(target))
                   }}
-                  className={`flex h-16 w-16 items-center justify-center rounded-full border-2 border-black shadow-sm sm:h-20 sm:w-20 ${
-                    isRecording ? "bg-red-500 text-white" : "bg-white text-black"
+                  className={`flex h-16 w-16 items-center justify-center rounded-full border border-border shadow-sm sm:h-20 sm:w-20 ${
+                    isRecording ? "bg-red-500 text-white" : "bg-card text-foreground"
                   }`}
                   aria-label={isRecording ? "Detener grabacion" : "Iniciar grabacion"}
                   disabled={practiceSectionView !== "theory"}
@@ -3585,7 +3637,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
                     })
                   }}
-                  className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm sm:h-14 sm:w-14"
+                  className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-sm sm:h-14 sm:w-14"
                   aria-label="Escribir duda"
                   disabled={practiceSectionView !== "theory"}
                 >
@@ -3610,21 +3662,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           showCloseButton={false}
           className="!top-0 !left-0 !h-screen !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-y-auto rounded-none border-0 p-0 shadow-none sm:!max-w-none"
         >
-          <div className="relative min-h-full bg-white px-5 py-5 sm:px-8 sm:py-6">
-            <DialogHeader className="mb-6 border-b border-black pb-4">
+          <div className="relative min-h-full bg-background px-5 py-5 text-foreground sm:px-8 sm:py-6">
+            <DialogHeader className="mb-6 border-b border-border pb-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2">
-                  <DialogTitle className="text-left text-[2rem] font-normal leading-none text-black sm:text-[2.5rem]">
+                  <DialogTitle className="text-left text-[2rem] font-normal leading-none text-foreground sm:text-[2.5rem]">
                     Continuar
                   </DialogTitle>
-                  <DialogDescription className="text-left text-sm text-slate-600 sm:text-base">
+                  <DialogDescription className="text-left text-sm text-muted-foreground sm:text-base">
                     Retoma el archivo de practica pendiente, escucha el audio previo y agrega nuevas dudas.
                   </DialogDescription>
                 </div>
                 <DialogClose asChild>
                   <button
                     type="button"
-                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                    className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     aria-label="Cerrar modal"
                   >
                     <X className="h-7 w-7" />
@@ -3634,19 +3686,19 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </DialogHeader>
 
             {continueError ? (
-              <div className="mb-4 border border-red-300 bg-red-50 px-4 py-3 text-base text-red-700">{continueError}</div>
+              <div className="mb-4 rounded-2xl border border-red-300/60 bg-red-500/10 px-4 py-3 text-base text-red-600">{continueError}</div>
             ) : null}
 
             {isContinueLoading ? (
               <div className="flex min-h-40 items-center justify-center">
-                <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
             ) : (
               <div className="space-y-8 pb-24">
                 <section className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                     {continuePayload?.previousFeaturedEntry ? (
-                      <div className="w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-300 bg-white px-2 py-2">
+                      <div className="w-full min-w-0 flex-1 overflow-hidden rounded-xl border border-border bg-card px-2 py-2">
                         <audio
                           key={continuePayload.previousFeaturedEntry.id}
                           controls
@@ -3656,14 +3708,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         />
                       </div>
                     ) : (
-                      <div className="flex h-12 w-full items-center border border-dashed border-slate-300 px-4 text-base text-slate-400">
+                      <div className="flex h-12 w-full items-center rounded-xl border border-dashed border-border px-4 text-base text-muted-foreground">
                         Sin audio previo
                       </div>
                     )}
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-12 border-black px-5 text-base text-black"
+                      className="h-12 border-border px-5 text-base text-foreground"
                       onClick={() => {
                         if (!currentSubject) return
 
@@ -3692,20 +3744,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <section className="space-y-5">
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-lg text-black">Archivo actual</p>
+                      <p className="text-lg text-foreground">Archivo actual</p>
                       <Button
                         type="button"
                         variant="outline"
                         onClick={() => void copyContinueEntries()}
                         disabled={continueMaterialEntries.length === 0 || isCopyingEntries}
-                        className="h-10 border-black px-3 text-black"
+                        className="h-10 border-border px-3 text-foreground"
                       >
                         {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                         Copiar dudas
                       </Button>
                     </div>
                     {currentContinueMaterial ? (
-                      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-300 px-4 py-3 text-lg text-black">
+                      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-lg text-foreground">
                         <Checkbox
                           checked={currentContinueMaterial.is_checkup_done}
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
@@ -3722,14 +3774,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           size="icon"
                           onClick={() => void deleteMaterial(currentContinueMaterial)}
                           disabled={isDeletingMaterialId === currentContinueMaterial.id}
-                          className="ml-auto h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          className="ml-auto h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                           aria-label={`Borrar ${currentContinueMaterial.file_name}`}
                         >
                           {isDeletingMaterialId === currentContinueMaterial.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
                         </Button>
                       </div>
                     ) : (
-                      <p className="text-base text-slate-500">No hay archivos de practica pendientes.</p>
+                      <p className="text-base text-muted-foreground">No hay archivos de practica pendientes.</p>
                     )}
                   </div>
 
@@ -3742,14 +3794,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         const isRevealed = revealedAnswers[entry.id]
 
                         return (
-                          <article key={entry.id} className="relative space-y-3 border-t border-slate-200 pt-5">
+                          <article key={entry.id} className="relative space-y-3 border-t border-border pt-5">
                             <Button
                               type="button"
                               variant="ghost"
                               size="icon"
                               onClick={() => void deleteEntry(entry)}
                               disabled={isDeletingEntryId === entry.id}
-                              className="absolute right-0 top-4 h-6 w-6 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              className="absolute right-0 top-4 h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                               aria-label={`Borrar ${getEntryDisplayTitle(entry)}`}
                             >
                               {isDeletingEntryId === entry.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
@@ -3774,7 +3826,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 </Button>
                               </div>
                             ) : (
-                              <div className="flex flex-wrap items-center gap-2 pr-8 text-black">
+                              <div className="flex flex-wrap items-center gap-2 pr-8 text-foreground">
                                 <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
                                 <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
                                   <Pencil className="h-4 w-4" />
@@ -3782,7 +3834,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               </div>
                             )}
 
-                            <p className="text-base leading-7 text-slate-800">{entry.transcript_text}</p>
+                            <p className="text-base leading-7 text-foreground">{entry.transcript_text}</p>
 
                             <button
                               type="button"
@@ -3796,7 +3848,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   [entry.id]: !previous[entry.id],
                                 }))
                               }}
-                              className="block w-full rounded-lg border border-slate-300 px-4 py-3 text-left text-base text-slate-700"
+                              className="block w-full rounded-lg border border-border bg-background px-4 py-3 text-left text-base text-foreground"
                             >
                               {entry.answer_text
                                 ? isRevealed
@@ -3806,11 +3858,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             </button>
 
                             <div className="flex flex-wrap items-center gap-2">
-                              <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-black px-4 text-base text-black">
+                              <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-border px-4 text-base text-foreground">
                                 Responder
                               </Button>
                               {entryHasAudio(entry) ? (
-                                <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-black px-4 text-base text-black">
+                                <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-border px-4 text-base text-foreground">
                                   {loadingAudioEntryId === entry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                                   audio
                                 </Button>
@@ -3833,7 +3885,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       })}
                     </div>
                   ) : currentContinueMaterial ? (
-                    <p className="text-base text-slate-500">Sin audios.</p>
+                    <p className="text-base text-muted-foreground">Sin audios.</p>
                   ) : null}
                 </section>
               </div>
@@ -3858,7 +3910,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
                     void (isRecording ? stopRecording() : startRecording(target))
                   }}
-                  className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
+                  className="flex h-16 w-16 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-sm"
                   aria-label={isRecording && recordingTarget?.source === "continue-practice" ? "Detener grabacion" : "Grabar audio"}
                   disabled={!currentContinueMaterial}
                 >
@@ -3882,7 +3934,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       materialId: currentContinueMaterial.id,
                     })
                   }}
-                  className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-white text-black shadow-sm"
+                  className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-sm"
                   aria-label="Escribir duda"
                   disabled={!currentContinueMaterial}
                 >
@@ -3909,7 +3961,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label="Cerrar modal"
                 >
                   <X className="h-7 w-7" />
@@ -3921,7 +3973,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           {editingEntry || manualEntryTarget ? (
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Pregunta</p>
+                <p className="text-sm font-medium text-foreground">Pregunta</p>
                 <Textarea
                   value={editingEntry ? (questionDrafts[editingEntry.id] ?? editingEntry.transcript_text) : manualQuestionDraft}
                   onChange={(event) => {
@@ -3940,7 +3992,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 />
               </div>
               <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Respuesta</p>
+                <p className="text-sm font-medium text-foreground">Respuesta</p>
                 <Textarea
                   value={editingEntry ? (answerDrafts[editingEntry.id] ?? "") : manualAnswerDraft}
                   onChange={(event) => {
@@ -3961,7 +4013,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
           ) : null}
 
-          <DialogFooter className="mt-4 border-t border-slate-200 pt-4">
+          <DialogFooter className="mt-4 border-t border-border pt-4">
             <Button variant="outline" onClick={closeAnswerDialog}>
               Cancelar
             </Button>
@@ -3993,7 +4045,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label="Cerrar modal"
                 >
                   <X className="h-7 w-7" />
@@ -4005,7 +4057,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           {reviewAudio ? (
             <div className="space-y-3">
               <audio controls src={reviewAudio.url} className="w-full" />
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-muted-foreground">
                 {recordingTarget?.subjectName || getSubjectDisplayName(currentSubject)} - {recordingTarget ? getWeekdayLabel(recordingTarget.sessionDate) : getWeekdayLabel(currentDateKey)} - {recordingTarget?.sessionDate || currentDateKey}
               </p>
             </div>
@@ -4034,7 +4086,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label="Cerrar modal"
                 >
                   <X className="h-7 w-7" />
@@ -4045,7 +4097,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Ingresa nombre</label>
+              <label className="text-sm font-medium text-foreground">Ingresa nombre</label>
               <Input
                 value={linkDraft.label}
                 onChange={(event) => setLinkDraft((previous) => ({ ...previous, label: event.target.value }))}
@@ -4053,7 +4105,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Insertar link</label>
+              <label className="text-sm font-medium text-foreground">Insertar link</label>
               <Input
                 type="url"
                 value={linkDraft.url}
@@ -4080,7 +4132,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           showCloseButton={false}
           className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none"
         >
-          <DialogHeader className="border-b border-slate-200 bg-white px-6 py-5 sm:px-8">
+          <DialogHeader className="border-b border-border bg-card px-6 py-5 sm:px-8">
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <DialogTitle>Repaso</DialogTitle>
@@ -4089,7 +4141,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <DialogClose asChild>
                 <button
                   type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                   aria-label="Cerrar modal"
                 >
                   <X className="h-7 w-7" />
@@ -4098,12 +4150,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+          <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
             {reviewSubjectId === "" ? (
               <div className="mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-8">
                 <div className="space-y-2">
-                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-slate-400">Acceso rapido</p>
-                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Elegi una materia</h2>
+                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-muted-foreground">Acceso rapido</p>
+                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Elegi una materia</h2>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {visibleSubjects.map((subject) => (
@@ -4111,23 +4163,23 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       key={subject.id}
                       type="button"
                       onClick={() => void loadReviewEntries(subject.id)}
-                      className="rounded-3xl border border-slate-200 bg-white px-5 py-6 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+                      className="rounded-3xl border border-border bg-card px-5 py-6 text-left shadow-sm transition hover:border-primary/40 hover:bg-accent"
                     >
-                      <p className="text-base font-semibold text-slate-800">{subject.name.replace("\n", " ")}</p>
+                      <p className="text-base font-semibold text-foreground">{subject.name.replace("\n", " ")}</p>
                     </button>
                   ))}
                 </div>
               </div>
             ) : isLoadingReview ? (
               <div className="flex h-full items-center justify-center py-10">
-                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
             ) : (
               <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm text-slate-500">Materia</p>
-                    <h2 className="text-2xl font-semibold text-slate-800">
+                    <p className="text-sm text-muted-foreground">Materia</p>
+                    <h2 className="text-2xl font-semibold text-foreground">
                       {getSubjectDisplayName(getSubjectById(reviewSubjectId, visibleSubjects))}
                     </h2>
                   </div>
@@ -4143,25 +4195,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </Button>
                 </div>
 
-                {reviewError ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{reviewError}</div> : null}
+                {reviewError ? <div className="rounded-2xl border border-red-300/60 bg-red-500/10 px-4 py-3 text-sm text-red-600">{reviewError}</div> : null}
 
                 {Object.keys(reviewEntriesByWeek).length === 0 ? (
-                  <div className="rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
-                    <p className="text-sm text-slate-500">No hay audios destacados para esta materia.</p>
+                  <div className="rounded-3xl border border-border bg-card px-6 py-10 text-center shadow-sm">
+                    <p className="text-sm text-muted-foreground">No hay audios destacados para esta materia.</p>
                   </div>
                 ) : (
                   Object.entries(reviewEntriesByWeek)
                     .sort(([leftWeek], [rightWeek]) => Number(leftWeek) - Number(rightWeek))
                     .map(([weekNumber, weekEntries]) => (
                       <section key={weekNumber} className="space-y-3">
-                        <h3 className="text-lg font-semibold text-slate-800">Semana {weekNumber}</h3>
+                        <h3 className="text-lg font-semibold text-foreground">Semana {weekNumber}</h3>
                         <div className="space-y-3">
                           {weekEntries.map((entry) => (
-                            <article key={entry.id} className="rounded-3xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                            <article key={entry.id} className="rounded-3xl border border-border bg-card px-4 py-4 shadow-sm">
                               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                                 <div className="min-w-0">
-                                  <p className="text-sm font-medium text-slate-500">{getWeekdayLabel(entry.session_date)}</p>
-                                  <p className="truncate text-lg font-semibold text-slate-800">{getEntryDisplayTitle(entry)}</p>
+                                  <p className="text-sm font-medium text-muted-foreground">{getWeekdayLabel(entry.session_date)}</p>
+                                  <p className="truncate text-lg font-semibold text-foreground">{getEntryDisplayTitle(entry)}</p>
                                 </div>
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                                   <audio controls preload="none" src={`/api/subject-day-entries/${entry.id}/audio`} className="sm:w-[320px]" />
@@ -4169,7 +4221,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                     type="button"
                                     variant="outline"
                                     onClick={() => void openSubjectDay(entry.subject_id, entry.session_date)}
-                                    className="border-black text-black"
+                                    className="border-border text-foreground"
                                   >
                                     Ver Dia
                                   </Button>
@@ -4190,24 +4242,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       {/* Practice Modal */}
       <Dialog open={isPracticeOpen} onOpenChange={setIsPracticeOpen}>
         <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
-          <DialogHeader className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-sky-50 px-6 py-5 sm:px-8">
+          <DialogHeader className="border-b border-border bg-card px-6 py-5 sm:px-8">
             <div className="flex items-start justify-between gap-4">
               <div className="flex min-w-0 flex-1 items-start gap-4">
                 <div className="min-w-0 space-y-2">
                   <DialogTitle className="flex items-center gap-2">
-                    <GraduationCap className="h-5 w-5 text-slate-600" />
+                    <GraduationCap className="h-5 w-5 text-muted-foreground" />
                     Practicar
                   </DialogTitle>
-                  <DialogDescription className="text-left text-sm text-slate-500">
+                  <DialogDescription className="text-left text-sm text-muted-foreground">
                     Abre teoria o ejercicios, aplica filtros y recorre las dudas de la materia elegida.
                   </DialogDescription>
                 </div>
-                <div className="flex items-center gap-2 pt-0.5 text-sm text-slate-500">
+                <div className="flex items-center gap-2 pt-0.5 text-sm text-muted-foreground">
                   <Switch
                     checked={showAllSubjectsForDay}
                     onCheckedChange={handleShowAllSubjectsChange}
                     aria-label="Mostrar todas las materias del dia"
-                    className="h-5 w-9 data-[state=checked]:bg-slate-900 data-[state=unchecked]:bg-slate-300"
+                    className="h-5 w-9 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input"
                   />
                 </div>
               </div>
@@ -4216,7 +4268,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <Button
                     onClick={() => setIsAdminModalOpen(true)}
                     variant="outline"
-                    className="h-10 border-slate-900 bg-[linear-gradient(135deg,rgba(15,23,42,0.95),rgba(51,65,85,0.92))] px-4 text-white shadow-[0_10px_30px_rgba(15,23,42,0.16)] hover:bg-slate-800 hover:text-white"
+                    className="h-10 border-border bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90 hover:text-primary-foreground"
                   >
                     Administrar
                   </Button>
@@ -4224,7 +4276,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <DialogClose asChild>
                   <button
                     type="button"
-                    className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-black text-black transition-colors hover:bg-black hover:text-white"
+                    className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     aria-label="Cerrar modal"
                   >
                     <X className="h-7 w-7" />
@@ -4234,22 +4286,22 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto bg-slate-50/60 px-6 py-6 sm:px-8">
+          <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
             {/* Subject selection */}
             {practiceLaunchView === "theory" && practiceSubjectIndex === null && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
                 <div className="space-y-2">
-                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-slate-400">Modo practica</p>
-                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">
+                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-muted-foreground">Modo practica</p>
+                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">
                     Elegi materia y como queres practicar
                   </h2>
-                  <p className="max-w-2xl text-sm text-slate-500 sm:text-base">
+                  <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
                     Se cargan todas las dudas de la semana elegida para la materia seleccionada.
                   </p>
                 </div>
                 <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Materia</p>
+                  <div className="space-y-3 rounded-3xl border border-border bg-card p-6 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Materia</p>
                     <Select value={practiceSubjectId} onValueChange={(value) => setPracticeSubjectId(value)}>
                       <SelectTrigger className="h-14 text-base">
                         <SelectValue placeholder="Seleccionar materia..." />
@@ -4263,8 +4315,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Semana</p>
+                  <div className="space-y-3 rounded-3xl border border-border bg-card p-6 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Semana</p>
                     <Select value={practiceWeekNumber} onValueChange={setPracticeWeekNumber}>
                       <SelectTrigger className="h-14 text-base">
                         <SelectValue placeholder="Seleccionar semana..." />
@@ -4278,8 +4330,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
-                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Filtros</p>
+                  <div className="space-y-3 rounded-3xl border border-border bg-card p-6 shadow-sm lg:col-span-2">
+                    <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Filtros</p>
                     <div className="grid gap-3 sm:grid-cols-3">
                       <div
                         role="button"
@@ -4293,14 +4345,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         }}
                         className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.random
-                            ? "border-sky-500 bg-sky-50 shadow-sm"
-                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                            ? "border-primary bg-primary/10 shadow-sm"
+                            : "border-border bg-muted/50 hover:border-border hover:bg-card"
                         }`}
                       >
                         <Checkbox checked={practiceFilters.random} className="mt-0.5 pointer-events-none" />
                         <span className="space-y-1">
-                          <span className="block text-sm font-semibold text-slate-700">Aleatorio</span>
-                          <span className="block text-xs text-slate-500">Mezcla el orden de las dudas cargadas.</span>
+                          <span className="block text-sm font-semibold text-foreground">Aleatorio</span>
+                          <span className="block text-xs text-muted-foreground">Mezcla el orden de las dudas cargadas.</span>
                         </span>
                       </div>
                       <div
@@ -4315,14 +4367,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         }}
                         className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.unanswered
-                            ? "border-amber-500 bg-amber-50 shadow-sm"
-                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                            ? "border-amber-500 bg-amber-500/10 shadow-sm"
+                            : "border-border bg-muted/50 hover:border-border hover:bg-card"
                         }`}
                       >
                         <Checkbox checked={practiceFilters.unanswered} className="mt-0.5 pointer-events-none" />
                         <span className="space-y-1">
-                          <span className="block text-sm font-semibold text-slate-700">Sin respuesta</span>
-                          <span className="block text-xs text-slate-500">Solo dudas que aun no tienen respuesta.</span>
+                          <span className="block text-sm font-semibold text-foreground">Sin respuesta</span>
+                          <span className="block text-xs text-muted-foreground">Solo dudas que aun no tienen respuesta.</span>
                         </span>
                       </div>
                       <div
@@ -4337,14 +4389,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         }}
                         className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-left transition ${
                           practiceFilters.erre
-                            ? "border-rose-500 bg-rose-50 shadow-sm"
-                            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"
+                            ? "border-rose-500 bg-rose-500/10 shadow-sm"
+                            : "border-border bg-muted/50 hover:border-border hover:bg-card"
                         }`}
                       >
                         <Checkbox checked={practiceFilters.erre} className="mt-0.5 pointer-events-none" />
                         <span className="space-y-1">
-                          <span className="block text-sm font-semibold text-slate-700">Erre</span>
-                          <span className="block text-xs text-slate-500">Solo dudas marcadas como erre.</span>
+                          <span className="block text-sm font-semibold text-foreground">Erre</span>
+                          <span className="block text-xs text-muted-foreground">Solo dudas marcadas como erre.</span>
                         </span>
                       </div>
                     </div>
@@ -4370,7 +4422,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             {practiceLaunchView === "exercises" && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
                 <div className="space-y-2">
-                  <h2 className="text-3xl font-semibold text-slate-800 sm:text-4xl">Materias del dia</h2>
+                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Materias del dia</h2>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -4379,9 +4431,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       key={subject.id}
                       type="button"
                       onClick={() => void openExercisesPracticeSubject(subject.id)}
-                      className="rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300"
+                      className="rounded-3xl border border-border bg-card p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40"
                     >
-                      <p className="text-lg font-semibold text-slate-800">{subject.name.replace("\n", " ")}</p>
+                      <p className="text-lg font-semibold text-foreground">{subject.name.replace("\n", " ")}</p>
                     </button>
                   ))}
                 </div>
@@ -4397,15 +4449,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             {/* Loading state */}
             {practiceLaunchView === "theory" && practiceSubjectIndex !== null && isLoadingPractice && (
               <div className="flex h-full items-center justify-center py-10">
-                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
             )}
 
             {/* No questions */}
             {practiceLaunchView === "theory" && practiceSubjectIndex !== null && !isLoadingPractice && practiceVisibleEntries.length === 0 && (
               <div className="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
-                <div className="w-full rounded-3xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
-                  <p className="mb-4 text-sm text-slate-500 sm:text-base">
+                <div className="w-full rounded-3xl border border-border bg-card px-6 py-10 text-center shadow-sm">
+                  <p className="mb-4 text-sm text-muted-foreground sm:text-base">
                     {practiceLoadError || "No hay dudas para esta materia con los filtros elegidos."}
                   </p>
                   <Button
@@ -4428,8 +4480,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <div className="mx-auto flex h-full w-full max-w-6xl flex-col">
                 {!isPracticeFinished && currentPracticeIndex < practiceVisibleEntries.length ? (
                   <div className="flex flex-1 flex-col gap-5">
-                    <div className="flex flex-col gap-2 rounded-3xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                      <p className="text-sm text-slate-500">
+                    <div className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-sm text-muted-foreground">
                         Duda {currentPracticeIndex + 1} de {practiceVisibleEntries.length}
                       </p>
                       <Button
@@ -4449,20 +4501,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
 
                     <div className="flex flex-1 items-center justify-center">
-                      <div className="w-full max-w-4xl rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm sm:p-8 lg:p-10">
+                      <div className="w-full max-w-4xl rounded-[2rem] border border-border bg-card p-6 shadow-sm sm:p-8 lg:p-10">
                         <div className="space-y-8">
                           <div className="space-y-3">
-                            <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Pregunta</p>
-                            <p className="text-sm font-medium text-slate-500">{getEntryDisplayTitle(currentPracticeEntry!)}</p>
-                            <p className="text-xl font-semibold leading-relaxed text-slate-800 sm:text-2xl">
+                            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Pregunta</p>
+                            <p className="text-sm font-medium text-muted-foreground">{getEntryDisplayTitle(currentPracticeEntry!)}</p>
+                            <p className="text-xl font-semibold leading-relaxed text-foreground sm:text-2xl">
                               {currentPracticeEntry?.transcript_text}
                             </p>
                           </div>
 
-                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-5 sm:p-6">
+                          <div className="rounded-3xl border border-dashed border-border bg-muted/40 p-5 sm:p-6">
                             <div className="flex items-start justify-between gap-3">
                               <div className="flex-1 space-y-3">
-                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Respuesta</p>
+                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Respuesta</p>
                                 <p
                                   role="button"
                                   tabIndex={0}
@@ -4473,7 +4525,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                       setIsAnswerRevealed((prev) => !prev)
                                     }
                                   }}
-                                  className="cursor-pointer text-base leading-relaxed text-slate-600 hover:text-slate-800 sm:text-lg"
+                                  className="cursor-pointer text-base leading-relaxed text-muted-foreground hover:text-foreground sm:text-lg"
                                 >
                                   {isAnswerRevealed
                                     ? currentPracticeEntry?.answer_text || "Sin respuesta registrada"
@@ -4506,12 +4558,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                 ) : (
                   <div className="flex flex-1 items-center justify-center">
-                    <div className="w-full max-w-3xl rounded-[2rem] border border-slate-200 bg-gradient-to-br from-emerald-50 via-sky-50 to-white px-6 py-10 text-center shadow-sm">
-                      <p className="mb-2 text-3xl font-semibold text-slate-700">Terminaste</p>
-                      <p className="mb-2 text-sm text-slate-500">
+                    <div className="w-full max-w-3xl rounded-[2rem] border border-border bg-card px-6 py-10 text-center shadow-sm">
+                      <p className="mb-2 text-3xl font-semibold text-foreground">Terminaste</p>
+                      <p className="mb-2 text-sm text-muted-foreground">
                         Cerralo un momento, respira hondo y afloja los hombros.
                       </p>
-                      <p className="mb-6 text-sm text-slate-500">
+                      <p className="mb-6 text-sm text-muted-foreground">
                         Totales visibles: {practiceVisibleEntries.length}. Erre visibles:{" "}
                         {practiceVisibleEntries.filter((entry) => entry.practice_state === "erre").length}
                       </p>

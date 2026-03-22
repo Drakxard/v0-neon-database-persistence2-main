@@ -146,23 +146,23 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[90vh] overflow-hidden border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.06),_transparent_35%),linear-gradient(180deg,_#ffffff,_#f8fafc)] p-0 sm:max-w-4xl"
+        className="max-h-[90vh] overflow-hidden border border-border bg-card p-0 sm:max-w-4xl"
       >
-        <DialogHeader className="border-b border-slate-200/80 px-6 py-5">
+        <DialogHeader className="border-b border-border px-6 py-5">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
-              <div className="inline-flex rounded-full border border-slate-300 bg-white px-3 py-1 text-[11px] font-medium uppercase tracking-[0.28em] text-slate-500">
+              <div className="inline-flex rounded-full border border-border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.28em] text-muted-foreground">
                 Admin
               </div>
-              <DialogTitle className="text-2xl text-slate-900">Correos y materias</DialogTitle>
-              <DialogDescription className="text-sm text-slate-500">
+              <DialogTitle className="text-2xl text-foreground">Correos y materias</DialogTitle>
+              <DialogDescription className="text-sm text-muted-foreground">
                 Agrega un correo por vez y define exactamente qué materias puede ver.
               </DialogDescription>
             </div>
             <DialogClose asChild>
               <button
                 type="button"
-                className="flex h-12 w-12 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-900 transition hover:border-slate-900 hover:bg-slate-900 hover:text-white"
+                className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-background text-foreground transition hover:bg-accent hover:text-accent-foreground"
                 aria-label="Cerrar modal admin"
               >
                 <X className="h-5 w-5" />
@@ -172,20 +172,20 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
         </DialogHeader>
 
         <div className="grid min-h-0 gap-0 lg:grid-cols-[340px_minmax(0,1fr)]">
-          <section className="border-b border-slate-200/80 bg-white/80 p-6 lg:border-r lg:border-b-0">
+          <section className="border-b border-border bg-background/70 p-6 lg:border-r lg:border-b-0">
             <div className="space-y-5">
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Nuevo acceso</p>
+                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Nuevo acceso</p>
                 <Input
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="correo@gmail.com"
-                  className="h-12 rounded-2xl border-slate-300 bg-white"
+                  className="h-12 rounded-2xl border-input bg-background"
                 />
               </div>
 
               <div className="space-y-3">
-                <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-400">Materias permitidas</p>
+                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Materias permitidas</p>
                 <div className="grid gap-2">
                   {sortedSubjectOptions.map((subject) => {
                     const checked = selectedSubjectIds.includes(subject.id)
@@ -196,7 +196,7 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
                         onClick={() => toggleSubject(subject.id)}
                         className={cn(
                           "flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
-                          checked ? "border-slate-900 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
+                          checked ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent hover:text-accent-foreground"
                         )}
                       >
                         <Checkbox checked={checked} className="border-current data-[state=checked]:bg-current data-[state=checked]:text-white" />
@@ -214,7 +214,7 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
                 type="button"
                 onClick={() => void handleCreate()}
                 disabled={isSaving}
-                className="h-12 w-full rounded-2xl bg-slate-950 text-white hover:bg-slate-800"
+                className="h-12 w-full rounded-2xl bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
                 Agregar correo
@@ -223,8 +223,8 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
           </section>
 
           <section className="flex min-h-0 flex-col">
-            <div className="border-b border-slate-200/80 px-6 py-4">
-              <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] gap-4 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+            <div className="border-b border-border px-6 py-4">
+              <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] gap-4 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 <span>Correo</span>
                 <span>Materias permitidas</span>
                 <span>Eliminar</span>
@@ -232,15 +232,15 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-              {error ? <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
-              {success ? <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div> : null}
+              {error ? <div className="mb-4 rounded-2xl border border-red-300/60 bg-red-500/10 px-4 py-3 text-sm text-red-600">{error}</div> : null}
+              {success ? <div className="mb-4 rounded-2xl border border-emerald-300/60 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600">{success}</div> : null}
 
               {isLoading ? (
                 <div className="flex h-full items-center justify-center py-16">
-                  <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : accounts.length === 0 ? (
-                <div className="flex h-full items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white/70 px-6 py-16 text-center text-sm text-slate-500">
+                <div className="flex h-full items-center justify-center rounded-3xl border border-dashed border-border bg-background/70 px-6 py-16 text-center text-sm text-muted-foreground">
                   Todavia no hay correos adicionales cargados.
                 </div>
               ) : (
@@ -248,10 +248,10 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
                   {accounts.map((account) => (
                     <article
                       key={account.id}
-                      className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] items-center gap-4 rounded-3xl border border-slate-200 bg-white/90 px-4 py-4 shadow-[0_8px_30px_rgba(15,23,42,0.04)]"
+                      className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto] items-center gap-4 rounded-3xl border border-border bg-card/90 px-4 py-4 shadow-sm"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-900">{account.email}</p>
+                        <p className="truncate text-sm font-medium text-foreground">{account.email}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {account.allowedSubjectIds.map((subjectId) => {
@@ -275,7 +275,7 @@ export function AdminAccessModal({ open, onOpenChange, subjectOptions }: AdminAc
                         size="icon"
                         disabled={deletingId === account.id}
                         onClick={() => void handleDelete(account.id)}
-                        className="h-10 w-10 rounded-full border-slate-300 bg-white text-slate-700 hover:border-red-500 hover:bg-red-50 hover:text-red-600"
+                        className="h-10 w-10 rounded-full border-border bg-background text-muted-foreground hover:border-red-400 hover:bg-red-500/10 hover:text-red-500"
                       >
                         {deletingId === account.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                       </Button>
