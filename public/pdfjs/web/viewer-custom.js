@@ -15,6 +15,7 @@
     modalCancel: null,
     busy: null,
     busyText: null,
+    draftOverlay: null,
   };
 
   function parseQuery() {
@@ -103,6 +104,23 @@
       state.busy = busy;
       state.busyText = busy.querySelector("#pdfjs-custom-busy-text");
     }
+
+    if (!state.draftOverlay) {
+      const overlay = document.createElement("div");
+      overlay.className = "pdfjs-custom-draft-overlay";
+      overlay.innerHTML = [
+        '<div class="pdfjs-custom-draft-card">',
+        "<h2>Agrega un PDF</h2>",
+        "<p>Carga un libro en RAM para seleccionar fragmentos y crear un PDF nuevo. Tambien puedes arrastrar un PDF a esta ventana.</p>",
+        '<button type="button" id="pdfjs-custom-draft-open">Elegir PDF</button>',
+        "</div>",
+      ].join("");
+      document.body.appendChild(overlay);
+      state.draftOverlay = overlay;
+      overlay.querySelector("#pdfjs-custom-draft-open").addEventListener("click", () => {
+        state.app?.eventBus?.dispatch("openfile", { source: window });
+      });
+    }
   }
 
   function showToast(message, tone = "info", duration = 2600) {
@@ -178,6 +196,16 @@
         /^\d{4}-\d{2}-\d{2}$/.test(query.sessionDate) &&
         Number.isInteger(query.weekNumber)
     );
+  }
+
+  function isDraftMode() {
+    return !Number.isInteger(state.query.materialId);
+  }
+
+  function updateDraftOverlay() {
+    if (!state.draftOverlay) return;
+    const shouldShow = isDraftMode() && !state.app?.pdfDocument;
+    state.draftOverlay.dataset.open = shouldShow ? "true" : "false";
   }
 
   function clearSelections() {
@@ -632,6 +660,7 @@
     state.sourcePdfLibDoc = null;
     clearSelections();
     leaveSelectionMode();
+    updateDraftOverlay();
   }
 
   function handleKeyDown(event) {
@@ -673,6 +702,7 @@
     state.query = parseQuery();
     ensureUi();
     refreshLayers();
+    updateDraftOverlay();
 
     const { eventBus } = app;
     eventBus.on("pagerendered", refreshLayers);
@@ -680,6 +710,7 @@
     eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
     eventBus.on("documentloaded", onDocumentLoaded);
+    eventBus.on("documenterror", updateDraftOverlay);
     document.addEventListener("keydown", handleKeyDown, true);
 
     if (!window.PDFLib?.PDFDocument) {

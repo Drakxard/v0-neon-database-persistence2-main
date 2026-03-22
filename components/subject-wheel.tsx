@@ -117,11 +117,6 @@ function buildPracticeMaterialViewerHref(materialId: number) {
   return `/practice/viewer?${searchParams.toString()}`
 }
 
-function buildPracticeDefaultViewerHref(materialId: number) {
-  const fileParam = encodeURIComponent(`/api/subject-day-materials/${materialId}/file`)
-  return `/pdfjs/web/viewer.html?file=${fileParam}#locale=es-AR`
-}
-
 interface ReviewAudio {
   blob: Blob
   url: string
@@ -3199,7 +3194,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           ) : (
                             <div key={material.id} className="relative flex items-center gap-3 border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 hover:bg-slate-50">
                                 <a
-                                  href={buildPracticeDefaultViewerHref(material.id)}
+                                  href={buildPracticeMaterialViewerHref(material.id)}
                                   className="min-w-0 flex-1 truncate pr-7"
                                 >
                                   <span className="truncate">{material.file_name}</span>
@@ -3303,7 +3298,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                                 />
                                   <a
-                                    href={buildPracticeDefaultViewerHref(material.id)}
+                                    href={buildPracticeMaterialViewerHref(material.id)}
                                     className="min-w-0 flex-1 truncate pr-7 text-sm text-slate-800 hover:underline"
                                   >
                                     {material.file_name}
@@ -3716,7 +3711,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                           <a
-                            href={buildPracticeDefaultViewerHref(currentContinueMaterial.id)}
+                            href={buildPracticeMaterialViewerHref(currentContinueMaterial.id)}
                             className="font-medium underline-offset-2 hover:underline"
                           >
                             {currentContinueMaterial.file_name}
