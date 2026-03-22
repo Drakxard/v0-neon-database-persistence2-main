@@ -452,6 +452,7 @@
       const bottom = cropBottom + cropHeight - maxYp * cropHeight;
       const width = Math.max(1, right - left);
       const height = Math.max(1, top - bottom);
+      const pageRotation = typeof selection.pageRotation === "number" ? selection.pageRotation : 0;
 
       const embeddedPage = await outputDoc.embedPage(sourcePage, {
         left,
@@ -459,13 +460,41 @@
         bottom,
         top,
       });
-      const page = outputDoc.addPage([width, height]);
-      page.drawPage(embeddedPage, {
-        x: 0,
-        y: 0,
-        width,
-        height,
-      });
+      const rotated = pageRotation === 90 || pageRotation === 270;
+      const page = outputDoc.addPage(rotated ? [height, width] : [width, height]);
+
+      if (pageRotation === 90) {
+        page.drawPage(embeddedPage, {
+          x: height,
+          y: 0,
+          width,
+          height,
+          rotate: window.PDFLib.degrees(90),
+        });
+      } else if (pageRotation === 180) {
+        page.drawPage(embeddedPage, {
+          x: width,
+          y: height,
+          width,
+          height,
+          rotate: window.PDFLib.degrees(180),
+        });
+      } else if (pageRotation === 270) {
+        page.drawPage(embeddedPage, {
+          x: 0,
+          y: width,
+          width,
+          height,
+          rotate: window.PDFLib.degrees(270),
+        });
+      } else {
+        page.drawPage(embeddedPage, {
+          x: 0,
+          y: 0,
+          width,
+          height,
+        });
+      }
     }
 
     const pdfBytes = await outputDoc.save();
