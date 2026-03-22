@@ -25,6 +25,15 @@ interface Subject {
   color: string
 }
 
+const NIGHT_SUBJECT_COLORS: Record<string, string> = {
+  algebra: "#0f6e8e",
+  calculo2: "#1d4ed8",
+  calculo3: "#c2410c",
+  fisica: "#b91c1c",
+  logica: "#15803d",
+  probabilidad: "#9333ea",
+}
+
 interface Question {
   id: number
   pregunta: string
@@ -526,6 +535,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
   const currentAppTheme = themeMenuMounted && isAppTheme(theme) ? theme : "daylight"
+  const getSubjectVisualColor = useCallback(
+    (subject: Subject) => (currentAppTheme === "night" ? NIGHT_SUBJECT_COLORS[subject.id] ?? subject.color : subject.color),
+    [currentAppTheme]
+  )
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
     currentDateKey: string
@@ -2785,7 +2798,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               >
                 <path
                   d={path}
-                  fill={subject.color}
+                  fill={getSubjectVisualColor(subject)}
                   stroke="white"
                   strokeWidth="3"
                   className="transition-all duration-500 hover:brightness-110 active:brightness-90"
@@ -2832,7 +2845,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 type="button"
                 onClick={() => handleSubjectClick(subject)}
                 className="px-3 py-1 rounded-full text-white text-xs font-medium transition-opacity hover:opacity-90"
-                style={{ backgroundColor: subject.color }}
+                style={{ backgroundColor: getSubjectVisualColor(subject) }}
               >
                 {subject.name.replace("\n", " ")}
               </button>
