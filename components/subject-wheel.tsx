@@ -3119,71 +3119,55 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <ChevronRight className="h-5 w-5" />
             </Button>
 
-            <DialogHeader className="space-y-3 border-b border-border pb-3 sm:pb-4 sm:pr-28">
+            <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <DialogTitle className="text-left text-[clamp(1.55rem,4.8vw,2.3rem)] font-normal leading-tight text-foreground">
-                      {practiceSectionView === "exercises"
-                        ? `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)}`
-                        : `Semana ${selectedWeekNumber} - ${getSubjectDisplayName(currentSubject)} - ${getWeekdayLabel(currentDateKey)}`}
-                    </DialogTitle>
-                    {practiceSectionView === "theory" ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void copyEntriesForDay()}
-                        disabled={entries.length === 0 || isCopyingEntries}
-                        className="h-9 border-border px-3 text-foreground"
-                      >
-                        {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                        Copiar
-                      </Button>
-                    ) : null}
-                    {practiceSectionView === "exercises" && subjectViewDateOverride ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void returnToCurrentDayView()}
-                        className="h-9 border-border px-3 text-foreground"
-                      >
-                        Volver
-                      </Button>
-                    ) : null}
-                  </div>
-                  <DialogDescription className="text-left text-sm text-muted-foreground sm:text-base">
-                    {practiceSectionView === "exercises"
-                      ? "Gestiona los materiales y audios de practica de la semana o del dia seleccionado."
-                      : "Revisa teoria, materiales y dudas del dia actual."}
-                  </DialogDescription>
-                </div>
+                {practiceSectionView === "theory" ? (
+                  <DialogTitle className="min-w-0 text-left text-[clamp(1.35rem,4.2vw,2rem)] font-normal leading-tight text-foreground">
+                    {getSubjectDisplayName(currentSubject)}
+                  </DialogTitle>
+                ) : (
+                  <DialogTitle className="sr-only">{getSubjectDisplayName(currentSubject)}</DialogTitle>
+                )}
 
-                <div className="flex items-start gap-3">
+                <div className="flex items-center gap-2">
                   {practiceSectionView === "theory" ? (
                     <Button
                       type="button"
-                      onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
-                      className="h-10 rounded-2xl border border-border bg-card px-4 text-sm text-foreground hover:bg-accent sm:h-11 sm:px-6"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => void copyEntriesForDay()}
+                      disabled={entries.length === 0 || isCopyingEntries}
+                      className="h-9 w-9 rounded-full border-border text-foreground"
+                      aria-label="Copiar"
+                      title="Copiar"
                     >
-                      Terminar
+                      {isCopyingEntries ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  ) : null}
+                  {practiceSectionView === "theory" ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => currentSubject && markSubjectAsCompleted(currentSubject)}
+                      className="h-9 w-9 rounded-full border-border text-foreground"
+                      aria-label="Terminar"
+                      title="Terminar"
+                    >
+                      <Check className="h-4 w-4" />
                     </Button>
                   ) : null}
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
-                    className="flex h-14 w-14 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     aria-label="Cerrar modal"
+                    title="Cerrar"
                   >
-                    <X className="h-7 w-7" />
+                    <X className="h-4 w-4" />
                   </button>
                 </div>
               </div>
-
-              {practiceSectionView === "theory" ? (
-                <div className="text-sm text-muted-foreground sm:text-base">{currentDateKey}</div>
-              ) : subjectViewDateOverride ? (
-                <div className="text-sm text-muted-foreground sm:text-base">{subjectDialogDateKey}</div>
-              ) : null}
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
@@ -4257,51 +4241,48 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       {/* Practice Modal */}
       <Dialog open={isPracticeOpen} onOpenChange={setIsPracticeOpen}>
         <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
-          <DialogHeader className="border-b border-border bg-card px-6 py-5 sm:px-8">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex min-w-0 flex-1 items-start gap-4">
-                <div className="min-w-0 space-y-2">
-                  <DialogTitle className="flex items-center gap-2">
-                    <GraduationCap className="h-5 w-5 text-muted-foreground" />
-                    Practicar
-                  </DialogTitle>
-                  <DialogDescription className="text-left text-sm text-muted-foreground">
-                    Abre teoria o ejercicios, aplica filtros y recorre las dudas de la materia elegida.
-                  </DialogDescription>
-                </div>
-                <div className="flex items-center gap-2 pt-0.5 text-sm text-muted-foreground">
-                  <Switch
-                    checked={showAllSubjectsForDay}
-                    onCheckedChange={handleShowAllSubjectsChange}
-                    aria-label="Mostrar todas las materias del dia"
-                    className="h-5 w-9 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {authSession.isAdmin ? (
-                  <Button
-                    onClick={() => setIsAdminModalOpen(true)}
-                    variant="outline"
-                    className="h-10 border-border bg-primary px-4 text-primary-foreground shadow-sm hover:bg-primary/90 hover:text-primary-foreground"
-                  >
-                    Administrar
-                  </Button>
-                ) : null}
-                <DialogClose asChild>
-                  <button
-                    type="button"
-                    className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                    aria-label="Cerrar modal"
-                  >
-                    <X className="h-7 w-7" />
-                  </button>
-                </DialogClose>
-              </div>
+          <DialogHeader className="border-b border-border bg-card px-6 py-4 sm:px-8">
+            <div className="flex items-center justify-end">
+              <DialogTitle className="sr-only">Practicar</DialogTitle>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Cerrar modal"
+                  title="Cerrar"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </DialogClose>
             </div>
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
+            {(authSession.isAdmin || practiceLaunchView === "exercises") && (
+              <div className="mx-auto mb-4 flex w-full max-w-5xl items-center justify-between gap-3">
+                {practiceLaunchView === "exercises" ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Switch
+                      checked={showAllSubjectsForDay}
+                      onCheckedChange={handleShowAllSubjectsChange}
+                      aria-label="Mostrar todas las materias del dia"
+                      className="h-5 w-9 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input"
+                    />
+                  </div>
+                ) : (
+                  <div />
+                )}
+                {authSession.isAdmin ? (
+                  <Button
+                    onClick={() => setIsAdminModalOpen(true)}
+                    variant="outline"
+                    className="h-9 border-border px-3 text-foreground"
+                  >
+                    Administrar
+                  </Button>
+                ) : null}
+              </div>
+            )}
             {/* Subject selection */}
             {practiceLaunchView === "theory" && practiceSubjectIndex === null && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
@@ -4436,10 +4417,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
             {practiceLaunchView === "exercises" && (
               <div className="mx-auto flex h-full w-full max-w-5xl flex-col justify-center gap-8">
-                <div className="space-y-2">
-                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Materias del dia</h2>
-                </div>
-
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   {practiceDaySubjects.map((subject) => (
                     <button
