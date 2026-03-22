@@ -26,12 +26,12 @@ interface Subject {
 }
 
 const NIGHT_SUBJECT_COLORS: Record<string, string> = {
-  algebra: "#0f6e8e",
-  calculo2: "#1d4ed8",
-  calculo3: "#c2410c",
-  fisica: "#b91c1c",
-  logica: "#15803d",
-  probabilidad: "#9333ea",
+  algebra: "#366476",
+  calculo2: "#3f5f94",
+  calculo3: "#8b6138",
+  fisica: "#8f434a",
+  logica: "#3c6953",
+  probabilidad: "#69598b",
 }
 
 interface Question {
@@ -539,6 +539,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     (subject: Subject) => (currentAppTheme === "night" ? NIGHT_SUBJECT_COLORS[subject.id] ?? subject.color : subject.color),
     [currentAppTheme]
   )
+  const wheelStrokeColor = currentAppTheme === "night" ? "#d8dfeb" : "white"
+  const wheelTextColor = currentAppTheme === "night" ? "#f2f5fb" : "white"
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
     currentDateKey: string
@@ -2799,7 +2801,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <path
                   d={path}
                   fill={getSubjectVisualColor(subject)}
-                  stroke="white"
+                  stroke={wheelStrokeColor}
                   strokeWidth="3"
                   className="transition-all duration-500 hover:brightness-110 active:brightness-90"
                 />
@@ -2808,7 +2810,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   y={labelY}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fill="white"
+                  fill={wheelTextColor}
                   fontSize={fontSize}
                   fontWeight="700"
                   className="pointer-events-none select-none"
