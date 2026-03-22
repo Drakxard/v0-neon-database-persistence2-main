@@ -24,8 +24,23 @@ type DraftViewerContext = {
 }
 
 function buildDefaultPdfJsViewerHref(materialId: number) {
-  const fileParam = encodeURIComponent(`/api/subject-day-materials/${materialId}/file`)
-  return `/pdfjs/web/viewer.html?file=${fileParam}#locale=es-AR`
+  return `/pdfjs/web/viewer.html?file=${encodeURIComponent(`/api/subject-day-materials/${materialId}/file`)}#locale=es-AR`
+}
+
+function buildPracticePdfJsViewerHref(material: MaterialContext) {
+  const params = new URLSearchParams({
+    file: `/api/subject-day-materials/${material.id}/file`,
+    materialId: String(material.id),
+    subjectId: material.subjectId,
+    subjectName: material.subjectName,
+    sessionDate: material.sessionDate,
+    weekNumber: String(material.weekNumber),
+    weekdayIndex: String(material.weekdayIndex),
+    fileName: material.fileName,
+    key: `subject-day-material-${material.id}`,
+  })
+
+  return `/pdfjs/web/viewer.html?${params.toString()}#locale=es-AR`
 }
 
 export function PracticeViewerShell({
@@ -38,7 +53,7 @@ export function PracticeViewerShell({
   useEffect(() => {
     if (!material) return
 
-    window.location.replace(buildDefaultPdfJsViewerHref(material.id))
+    window.location.replace(buildPracticePdfJsViewerHref(material))
   }, [material])
 
   if (material) {
@@ -48,7 +63,7 @@ export function PracticeViewerShell({
           <p className="text-sm font-medium text-neutral-800">Abriendo visor PDF.js...</p>
           <p className="mt-2 text-xs text-neutral-500">Se usa el Default Viewer oficial de PDF.js.</p>
           <a
-            href={buildDefaultPdfJsViewerHref(material.id)}
+            href={buildPracticePdfJsViewerHref(material)}
             className="mt-4 inline-flex text-sm text-sky-700 underline underline-offset-4"
           >
             Abrir manualmente
