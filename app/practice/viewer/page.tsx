@@ -190,6 +190,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     )
   }
 
+  let viewerHref: string | null = null
+
   try {
     const material = await getMaterial(materialId)
 
@@ -246,19 +248,17 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       )
     }
 
-    redirect(
-      buildPracticePdfJsViewerHref({
-        material: {
-          id: material.id,
-          subjectId: material.subject_id,
-          subjectName: getSubjectById(material.subject_id)?.name.replace("\n", " ") || SUBJECT_NAMES[material.subject_id] || material.subject_id,
-          sessionDate: normalizeSessionDateKey(material.session_date),
-          weekNumber: material.week_number,
-          weekdayIndex: material.weekday_index,
-          fileName: material.file_name,
-        },
-      })
-    )
+    viewerHref = buildPracticePdfJsViewerHref({
+      material: {
+        id: material.id,
+        subjectId: material.subject_id,
+        subjectName: getSubjectById(material.subject_id)?.name.replace("\n", " ") || SUBJECT_NAMES[material.subject_id] || material.subject_id,
+        sessionDate: normalizeSessionDateKey(material.session_date),
+        weekNumber: material.week_number,
+        weekdayIndex: material.weekday_index,
+        fileName: material.file_name,
+      },
+    })
   } catch (error) {
     console.error("GET /practice/viewer page error:", error)
 
@@ -276,5 +276,9 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
         </div>
       </main>
     )
+  }
+
+  if (viewerHref) {
+    redirect(viewerHref)
   }
 }
