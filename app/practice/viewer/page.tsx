@@ -7,6 +7,7 @@ import { parseDateKey } from "@/lib/subject-utils"
 import { getSubjectById } from "@/lib/subjects"
 
 export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
 
 const sql = neon(process.env.DATABASE_URL!)
 
@@ -124,16 +125,22 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const materialId = Number.parseInt(params.materialId || "", 10)
 
   const subjectId = (params.subjectId || "").trim()
-  const subjectName = (params.subjectName || "").trim()
+  const subjectNameParam = (params.subjectName || "").trim()
   const sessionDate = (params.sessionDate || "").trim()
   const parsedSessionDate = parseDateKey(sessionDate)
   const weekNumber = Number.parseInt(params.weekNumber || "", 10)
   const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
   const materialType = params.materialType === "practice" ? "practice" : null
 
+  const resolvedSubjectName =
+    subjectNameParam ||
+    getSubjectById(subjectId)?.name.replace("\n", " ") ||
+    SUBJECT_NAMES[subjectId] ||
+    ""
+
   const hasDraftContext =
     Boolean(subjectId) &&
-    Boolean(subjectName) &&
+    Boolean(resolvedSubjectName) &&
     /^\d{4}-\d{2}-\d{2}$/.test(sessionDate) &&
     !Number.isNaN(parsedSessionDate.getTime()) &&
     Number.isInteger(weekNumber) &&
@@ -158,7 +165,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
 
     const draftContext: DraftViewerContext = {
       subjectId,
-      subjectName,
+      subjectName: resolvedSubjectName,
       sessionDate,
       weekNumber,
       weekdayIndex,
