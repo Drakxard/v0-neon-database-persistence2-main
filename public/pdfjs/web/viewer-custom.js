@@ -17,6 +17,7 @@
     busyText: null,
     draftOverlay: null,
   };
+  const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -739,6 +740,15 @@
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && key === "e") {
+      const canvases = document.querySelectorAll("#viewer .page canvas");
+      canvases.forEach((canvas) => {
+        canvas.style.filter =
+          canvas.style.filter === ENHANCED_PDF_CANVAS_FILTER ? "" : ENHANCED_PDF_CANVAS_FILTER;
+      });
+      return;
+    }
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && key === "i") {
       event.preventDefault();
