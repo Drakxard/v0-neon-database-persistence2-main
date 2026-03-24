@@ -102,6 +102,14 @@ interface PendingSubjectDayMaterial extends SubjectDayMaterial {
   is_pending_upload: true
 }
 
+type SubjectShortcutKey = "e_fich" | "figma"
+
+type SubjectShortcuts = {
+  subjectId: string
+  eFich: string | null
+  figma: string | null
+}
+
 function buildPracticeDraftViewerHref(params: {
   subjectId: string
   subjectName: string
@@ -363,6 +371,18 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
+function getEmptySubjectShortcuts(subjectId = ""): SubjectShortcuts {
+  return {
+    subjectId,
+    eFich: null,
+    figma: null,
+  }
+}
+
+function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcutKey) {
+  return shortcutKey === "e_fich" ? shortcuts.eFich : shortcuts.figma
+}
+
 function isPdfFile(file: File) {
   return file.type === "application/pdf" || file.name.trim().toLowerCase().endsWith(".pdf")
 }
@@ -509,6 +529,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
   const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
   const [isSavingLink, setIsSavingLink] = useState(false)
+  const [subjectShortcuts, setSubjectShortcuts] = useState<SubjectShortcuts>(() => getEmptySubjectShortcuts())
+  const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false)
+  const [shortcutDraft, setShortcutDraft] = useState("")
+  const [shortcutDialogKey, setShortcutDialogKey] = useState<SubjectShortcutKey | null>(null)
+  const [shortcutDialogMode, setShortcutDialogMode] = useState<"create" | "edit">("create")
+  const [isSubjectShortcutsLoading, setIsSubjectShortcutsLoading] = useState(false)
+  const [isSavingShortcut, setIsSavingShortcut] = useState(false)
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
@@ -574,6 +601,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
   const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
+  const shortcutLongPressTimerRef = useRef<number | null>(null)
+  const shouldSuppressShortcutClickRef = useRef(false)
+  const subjectShortcutsRequestIdRef = useRef(0)
   const subjectDayDataRequestIdRef = useRef(0)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
@@ -634,6 +664,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         window.clearTimeout(timerId)
       })
       pendingMaterialCheckupTimersRef.current.clear()
+      if (shortcutLongPressTimerRef.current !== null) {
+        window.clearTimeout(shortcutLongPressTimerRef.current)
+      }
     }
   }, [])
 
@@ -1001,6 +1034,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [loadSubjectDayData])
 
   useEffect(() => {
+    if (!isDialogOpen || !currentSubject) return
+    void loadSubjectShortcuts(currentSubject.id)
+  }, [currentSubject, isDialogOpen, loadSubjectShortcuts])
+
+  useEffect(() => {
     if (typeof window === "undefined") return
 
     const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
@@ -1132,8 +1170,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const resetSubjectUiState = () => {
     subjectDayDataRequestIdRef.current += 1
+    subjectShortcutsRequestIdRef.current += 1
     clearPendingFeaturedSave()
     pendingFeaturedUpdateRef.current = null
+    if (shortcutLongPressTimerRef.current !== null) {
+      window.clearTimeout(shortcutLongPressTimerRef.current)
+      shortcutLongPressTimerRef.current = null
+    }
+    shouldSuppressShortcutClickRef.current = false
     audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
     audioCacheRef.current.clear()
     audioElementRefs.current = {}
@@ -1154,6 +1198,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setLoadingAudioEntryId(null)
     setAudioSourceUrls({})
     setIsCopyingEntries(false)
+    setSubjectShortcuts(getEmptySubjectShortcuts())
+    setIsShortcutDialogOpen(false)
+    setShortcutDraft("")
+    setShortcutDialogKey(null)
+    setShortcutDialogMode("create")
+    setIsSubjectShortcutsLoading(false)
+    setIsSavingShortcut(false)
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
     setSubjectViewDateOverride(null)
@@ -1819,6 +1870,140 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     } finally {
       setIsSavingLink(false)
     }
+  }
+
+  const loadSubjectShortcuts = useCallback(async (subjectId: string) => {
+    const requestId = subjectShortcutsRequestIdRef.current + 1
+    subjectShortcutsRequestIdRef.current = requestId
+    setIsSubjectShortcutsLoading(true)
+
+    try {
+      const response = await fetch(`/api/subject-shortcuts?${new URLSearchParams({ subjectId }).toString()}`, {
+        cache: "no-store",
+      })
+      const payload = await parseJsonResponse(response)
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudieron cargar los accesos directos de la materia."))
+      }
+
+      if (requestId !== subjectShortcutsRequestIdRef.current) return
+
+      setSubjectShortcuts({
+        subjectId,
+        eFich:
+          payload && typeof payload === "object" && "eFich" in payload && typeof payload.eFich === "string"
+            ? payload.eFich
+            : null,
+        figma:
+          payload && typeof payload === "object" && "figma" in payload && typeof payload.figma === "string"
+            ? payload.figma
+            : null,
+      })
+    } catch (error) {
+      console.error("Failed to load subject shortcuts:", error)
+      if (requestId !== subjectShortcutsRequestIdRef.current) return
+      setSubjectShortcuts(getEmptySubjectShortcuts(subjectId))
+      setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar los accesos directos de la materia.")
+    } finally {
+      if (requestId !== subjectShortcutsRequestIdRef.current) return
+      setIsSubjectShortcutsLoading(false)
+    }
+  }, [])
+
+  const closeShortcutDialog = () => {
+    setIsShortcutDialogOpen(false)
+    setShortcutDraft("")
+    setShortcutDialogKey(null)
+    setShortcutDialogMode("create")
+  }
+
+  const openShortcutDialog = (shortcutKey: SubjectShortcutKey, mode: "create" | "edit") => {
+    const currentUrl = getShortcutUrl(subjectShortcuts, shortcutKey) ?? ""
+    setShortcutDialogKey(shortcutKey)
+    setShortcutDialogMode(mode)
+    setShortcutDraft(currentUrl)
+    setIsShortcutDialogOpen(true)
+  }
+
+  const saveSubjectShortcut = async () => {
+    if (!currentSubject || !shortcutDialogKey) return
+
+    setIsSavingShortcut(true)
+    try {
+      const response = await fetch("/api/subject-shortcuts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: currentSubject.id,
+          shortcutKey: shortcutDialogKey,
+          url: shortcutDraft.trim(),
+        }),
+      })
+
+      const payload = await parseJsonResponse(response)
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo guardar el acceso directo."))
+      }
+
+      setSubjectShortcuts({
+        subjectId: currentSubject.id,
+        eFich:
+          payload && typeof payload === "object" && "eFich" in payload && typeof payload.eFich === "string"
+            ? payload.eFich
+            : null,
+        figma:
+          payload && typeof payload === "object" && "figma" in payload && typeof payload.figma === "string"
+            ? payload.figma
+            : null,
+      })
+      closeShortcutDialog()
+    } catch (error) {
+      console.error("Failed to save subject shortcut:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo guardar el acceso directo.")
+    } finally {
+      setIsSavingShortcut(false)
+    }
+  }
+
+  const clearShortcutLongPressTimer = () => {
+    if (shortcutLongPressTimerRef.current !== null) {
+      window.clearTimeout(shortcutLongPressTimerRef.current)
+      shortcutLongPressTimerRef.current = null
+    }
+  }
+
+  const handleShortcutPointerDown = (shortcutKey: SubjectShortcutKey) => {
+    shouldSuppressShortcutClickRef.current = false
+    clearShortcutLongPressTimer()
+    shortcutLongPressTimerRef.current = window.setTimeout(() => {
+      shouldSuppressShortcutClickRef.current = true
+      openShortcutDialog(shortcutKey, getShortcutUrl(subjectShortcuts, shortcutKey) ? "edit" : "create")
+      shortcutLongPressTimerRef.current = null
+    }, 700)
+  }
+
+  const handleShortcutPointerUp = () => {
+    clearShortcutLongPressTimer()
+  }
+
+  const handleShortcutPointerCancel = () => {
+    clearShortcutLongPressTimer()
+    shouldSuppressShortcutClickRef.current = false
+  }
+
+  const handleShortcutClick = (shortcutKey: SubjectShortcutKey) => {
+    if (shouldSuppressShortcutClickRef.current) {
+      shouldSuppressShortcutClickRef.current = false
+      return
+    }
+
+    const url = getShortcutUrl(subjectShortcuts, shortcutKey)
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer")
+      return
+    }
+
+    openShortcutDialog(shortcutKey, "create")
   }
 
   const handleMaterialUpload = async (materialType: SubjectDayMaterialType, files: File[]) => {
@@ -3157,6 +3342,40 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <Check className="h-4 w-4" />
                     </Button>
                   ) : null}
+                  {practiceSectionView === "theory"
+                    ? ([
+                        { key: "e_fich" as const, label: "E-Fich" },
+                        { key: "figma" as const, label: "Figma" },
+                      ]).map((shortcut) => {
+                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                        return (
+                          <Button
+                            key={shortcut.key}
+                            type="button"
+                            variant="outline"
+                            onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                            onPointerUp={handleShortcutPointerUp}
+                            onPointerLeave={handleShortcutPointerCancel}
+                            onPointerCancel={handleShortcutPointerCancel}
+                            onClick={() => handleShortcutClick(shortcut.key)}
+                            disabled={isSavingShortcut}
+                            className={`h-9 border-border px-3 text-xs ${
+                              url ? "text-foreground" : "text-muted-foreground"
+                            }`}
+                            aria-label={shortcut.label}
+                            title={
+                              isSubjectShortcutsLoading
+                                ? `Cargando ${shortcut.label}`
+                                : url
+                                  ? shortcut.label
+                                  : `Agregar ${shortcut.label}`
+                            }
+                          >
+                            {shortcut.label}
+                          </Button>
+                        )
+                      })
+                    : null}
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
@@ -4120,6 +4339,60 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </Button>
             <Button onClick={() => void saveEntryLink()} disabled={isSavingLink || !linkDraft.label.trim() || !linkDraft.url.trim()}>
               {isSavingLink ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isShortcutDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeShortcutDialog()
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>
+                  {shortcutDialogMode === "edit" ? "Editar" : "Agregar"}{" "}
+                  {shortcutDialogKey === "figma" ? "Figma" : "E-Fich"}
+                </DialogTitle>
+                <DialogDescription>
+                  Este enlace queda guardado para toda la materia en el cursado.
+                </DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Insertar link</label>
+            <Input
+              type="url"
+              value={shortcutDraft}
+              onChange={(event) => setShortcutDraft(event.target.value)}
+              placeholder="https://..."
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeShortcutDialog} disabled={isSavingShortcut}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void saveSubjectShortcut()} disabled={isSavingShortcut || !shortcutDraft.trim()}>
+              {isSavingShortcut ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               Guardar
             </Button>
           </DialogFooter>
