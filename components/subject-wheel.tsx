@@ -583,6 +583,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [reviewError, setReviewError] = useState("")
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
+  const activePracticeShortcutSubject =
+    isPracticeOpen && practiceLaunchView === "theory" && practiceSubjectId
+      ? getSubjectById(practiceSubjectId, visibleSubjects)
+      : null
 
   // AI modal state
   const [isAiOpen, setIsAiOpen] = useState(false)
@@ -1906,9 +1910,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [])
 
   useEffect(() => {
-    if (!isDialogOpen || !currentSubject) return
-    void loadSubjectShortcuts(currentSubject.id)
-  }, [currentSubject, isDialogOpen, loadSubjectShortcuts])
+    if (!isPracticeOpen || practiceLaunchView !== "theory" || !practiceSubjectId) return
+    void loadSubjectShortcuts(practiceSubjectId)
+  }, [isPracticeOpen, loadSubjectShortcuts, practiceLaunchView, practiceSubjectId])
 
   const closeShortcutDialog = () => {
     setIsShortcutDialogOpen(false)
@@ -1926,7 +1930,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const saveSubjectShortcut = async () => {
-    if (!currentSubject || !shortcutDialogKey) return
+    const subjectId = activePracticeShortcutSubject?.id
+    if (!subjectId || !shortcutDialogKey) return
 
     setIsSavingShortcut(true)
     try {
@@ -1934,7 +1939,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          subjectId: currentSubject.id,
+          subjectId,
           shortcutKey: shortcutDialogKey,
           url: shortcutDraft.trim(),
         }),
@@ -1946,7 +1951,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       setSubjectShortcuts({
-        subjectId: currentSubject.id,
+        subjectId,
         eFich:
           payload && typeof payload === "object" && "eFich" in payload && typeof payload.eFich === "string"
             ? payload.eFich
@@ -3342,40 +3347,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <Check className="h-4 w-4" />
                     </Button>
                   ) : null}
-                  {practiceSectionView === "theory"
-                    ? ([
-                        { key: "e_fich" as const, label: "E-Fich" },
-                        { key: "figma" as const, label: "Figma" },
-                      ]).map((shortcut) => {
-                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
-                        return (
-                          <Button
-                            key={shortcut.key}
-                            type="button"
-                            variant="outline"
-                            onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
-                            onPointerUp={handleShortcutPointerUp}
-                            onPointerLeave={handleShortcutPointerCancel}
-                            onPointerCancel={handleShortcutPointerCancel}
-                            onClick={() => handleShortcutClick(shortcut.key)}
-                            disabled={isSavingShortcut}
-                            className={`h-9 border-border px-3 text-xs ${
-                              url ? "text-foreground" : "text-muted-foreground"
-                            }`}
-                            aria-label={shortcut.label}
-                            title={
-                              isSubjectShortcutsLoading
-                                ? `Cargando ${shortcut.label}`
-                                : url
-                                  ? shortcut.label
-                                  : `Agregar ${shortcut.label}`
-                            }
-                          >
-                            {shortcut.label}
-                          </Button>
-                        )
-                      })
-                    : null}
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
@@ -4515,18 +4486,62 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       <Dialog open={isPracticeOpen} onOpenChange={setIsPracticeOpen}>
         <DialogContent showCloseButton={false} className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 sm:max-w-none">
           <DialogHeader className="border-b border-border bg-card px-6 py-4 sm:px-8">
-            <div className="flex items-center justify-end">
-              <DialogTitle className="sr-only">Practicar</DialogTitle>
-              <DialogClose asChild>
-                <button
-                  type="button"
-                  className="flex h-9 w-9 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                  aria-label="Cerrar modal"
-                  title="Cerrar"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </DialogClose>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                {activePracticeShortcutSubject ? (
+                  <DialogTitle className="truncate text-left text-[clamp(1.35rem,4.2vw,2rem)] font-normal leading-tight text-foreground">
+                    {getSubjectDisplayName(activePracticeShortcutSubject)}
+                  </DialogTitle>
+                ) : (
+                  <DialogTitle className="sr-only">Practicar</DialogTitle>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {activePracticeShortcutSubject
+                  ? ([
+                      { key: "e_fich" as const, label: "E-Fich" },
+                      { key: "figma" as const, label: "Figma" },
+                    ]).map((shortcut) => {
+                      const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                      return (
+                        <Button
+                          key={shortcut.key}
+                          type="button"
+                          variant="outline"
+                          onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                          onPointerUp={handleShortcutPointerUp}
+                          onPointerLeave={handleShortcutPointerCancel}
+                          onPointerCancel={handleShortcutPointerCancel}
+                          onClick={() => handleShortcutClick(shortcut.key)}
+                          disabled={isSavingShortcut || isSubjectShortcutsLoading}
+                          className={`h-9 border-border px-3 text-xs ${
+                            url ? "text-foreground" : "text-muted-foreground"
+                          }`}
+                          aria-label={shortcut.label}
+                          title={
+                            isSubjectShortcutsLoading
+                              ? `Cargando ${shortcut.label}`
+                              : url
+                                ? shortcut.label
+                                : `Agregar ${shortcut.label}`
+                          }
+                        >
+                          {shortcut.label}
+                        </Button>
+                      )
+                    })
+                  : null}
+                <DialogClose asChild>
+                  <button
+                    type="button"
+                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    aria-label="Cerrar modal"
+                    title="Cerrar"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </DialogClose>
+              </div>
             </div>
           </DialogHeader>
 
