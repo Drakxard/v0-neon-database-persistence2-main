@@ -583,6 +583,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [reviewError, setReviewError] = useState("")
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
+  const activeShortcutSubject = isDialogOpen && currentSubject
+    ? currentSubject
+    : isPracticeOpen && practiceLaunchView === "theory" && practiceSubjectId
+      ? getSubjectById(practiceSubjectId, visibleSubjects)
+      : null
   const activePracticeShortcutSubject =
     isPracticeOpen && practiceLaunchView === "theory" && practiceSubjectId
       ? getSubjectById(practiceSubjectId, visibleSubjects)
@@ -1910,9 +1915,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [])
 
   useEffect(() => {
+    if (isDialogOpen && currentSubject) {
+      void loadSubjectShortcuts(currentSubject.id)
+      return
+    }
+
     if (!isPracticeOpen || practiceLaunchView !== "theory" || !practiceSubjectId) return
     void loadSubjectShortcuts(practiceSubjectId)
-  }, [isPracticeOpen, loadSubjectShortcuts, practiceLaunchView, practiceSubjectId])
+  }, [currentSubject, isDialogOpen, isPracticeOpen, loadSubjectShortcuts, practiceLaunchView, practiceSubjectId])
 
   const closeShortcutDialog = () => {
     setIsShortcutDialogOpen(false)
@@ -1930,7 +1940,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const saveSubjectShortcut = async () => {
-    const subjectId = activePracticeShortcutSubject?.id
+    const subjectId = activeShortcutSubject?.id
     if (!subjectId || !shortcutDialogKey) return
 
     setIsSavingShortcut(true)
@@ -3320,6 +3330,40 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 )}
 
                 <div className="flex items-center gap-2">
+                  {practiceSectionView === "exercises" && currentSubject
+                    ? ([
+                        { key: "e_fich" as const, label: "E-Fich" },
+                        { key: "figma" as const, label: "Figma" },
+                      ]).map((shortcut) => {
+                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                        return (
+                          <Button
+                            key={shortcut.key}
+                            type="button"
+                            variant="outline"
+                            onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                            onPointerUp={handleShortcutPointerUp}
+                            onPointerLeave={handleShortcutPointerCancel}
+                            onPointerCancel={handleShortcutPointerCancel}
+                            onClick={() => handleShortcutClick(shortcut.key)}
+                            disabled={isSavingShortcut || isSubjectShortcutsLoading}
+                            className={`h-9 border-border px-3 text-xs ${
+                              url ? "text-foreground" : "text-muted-foreground"
+                            }`}
+                            aria-label={shortcut.label}
+                            title={
+                              isSubjectShortcutsLoading
+                                ? `Cargando ${shortcut.label}`
+                                : url
+                                  ? shortcut.label
+                                  : `Agregar ${shortcut.label}`
+                            }
+                          >
+                            {shortcut.label}
+                          </Button>
+                        )
+                      })
+                    : null}
                   {practiceSectionView === "theory" ? (
                     <Button
                       type="button"
