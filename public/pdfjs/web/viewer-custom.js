@@ -16,6 +16,7 @@
     busy: null,
     busyText: null,
     draftOverlay: null,
+    enhancedPdfReadability: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
 
@@ -122,6 +123,13 @@
         state.app?.eventBus?.dispatch("openfile", { source: window });
       });
     }
+  }
+
+  function applyEnhancedPdfReadability() {
+    const canvases = document.querySelectorAll("#viewer .page canvas");
+    canvases.forEach((canvas) => {
+      canvas.style.filter = state.enhancedPdfReadability ? ENHANCED_PDF_CANVAS_FILTER : "";
+    });
   }
 
   function showToast(message, tone = "info", duration = 2600) {
@@ -733,6 +741,7 @@
     clearSelections();
     leaveSelectionMode();
     updateDraftOverlay();
+    applyEnhancedPdfReadability();
   }
 
   function handleKeyDown(event) {
@@ -742,11 +751,8 @@
     const key = event.key.toLowerCase();
 
     if (!event.ctrlKey && !event.altKey && !event.metaKey && key === "e") {
-      const canvases = document.querySelectorAll("#viewer .page canvas");
-      canvases.forEach((canvas) => {
-        canvas.style.filter =
-          canvas.style.filter === ENHANCED_PDF_CANVAS_FILTER ? "" : ENHANCED_PDF_CANVAS_FILTER;
-      });
+      state.enhancedPdfReadability = !state.enhancedPdfReadability;
+      applyEnhancedPdfReadability();
       return;
     }
 
@@ -786,7 +792,10 @@
     updateDraftOverlay();
 
     const { eventBus } = app;
-    eventBus.on("pagerendered", refreshLayers);
+    eventBus.on("pagerendered", () => {
+      refreshLayers();
+      applyEnhancedPdfReadability();
+    });
     eventBus.on("pagechanging", refreshLayers);
     eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
