@@ -1034,11 +1034,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [loadSubjectDayData])
 
   useEffect(() => {
-    if (!isDialogOpen || !currentSubject) return
-    void loadSubjectShortcuts(currentSubject.id)
-  }, [currentSubject, isDialogOpen, loadSubjectShortcuts])
-
-  useEffect(() => {
     if (typeof window === "undefined") return
 
     const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
@@ -1909,6 +1904,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setIsSubjectShortcutsLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (!isDialogOpen || !currentSubject) return
+    void loadSubjectShortcuts(currentSubject.id)
+  }, [currentSubject, isDialogOpen, loadSubjectShortcuts])
 
   const closeShortcutDialog = () => {
     setIsShortcutDialogOpen(false)
