@@ -3330,6 +3330,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 )}
 
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void closeSubjectDialogOrReturn()}
+                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    aria-label="Cerrar modal"
+                    title="Cerrar"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                   {practiceSectionView === "exercises" && currentSubject
                     ? ([
                         { key: "e_fich" as const, label: "E-Fich" },
@@ -3391,15 +3400,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <Check className="h-4 w-4" />
                     </Button>
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void closeSubjectDialogOrReturn()}
-                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                    aria-label="Cerrar modal"
-                    title="Cerrar"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
                 </div>
               </div>
             </DialogHeader>
