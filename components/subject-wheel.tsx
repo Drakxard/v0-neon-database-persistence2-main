@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Smartphone } from "lucide-react"
+import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { useTheme } from "next-themes"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
@@ -144,14 +144,13 @@ interface ReviewAudio {
 }
 
 type AudioUploadTarget = {
-  source: "subject-dialog" | "mobile-shortcut" | "manual-mobile-shortcut" | "continue-practice" | "continue-context"
+  source: "subject-dialog" | "continue-practice" | "continue-context"
   subjectId: string
   subjectName: string
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
   materialId?: number | null
-  shortcutIndex?: number
 }
 
 type ManualEntryTarget = {
@@ -160,14 +159,6 @@ type ManualEntryTarget = {
   weekNumber: number
   weekdayIndex: number
   materialId?: number | null
-}
-
-type MobileShortcutWindow = {
-  index: number
-  weekdayIndex: number
-  startMinutes: number
-  endMinutes: number
-  subjectId: string
 }
 
 type PendingFeaturedUpdate = {
@@ -189,16 +180,6 @@ type SubjectHistoryState = SubjectVisibilityState & {
   allCompletedIds: string[]
 }
 
-const MOBILE_SHORTCUT_WINDOWS: MobileShortcutWindow[] = [
-  { index: 1, weekdayIndex: 0, startMinutes: 11 * 60, endMinutes: 12 * 60, subjectId: "fisica" },
-  { index: 2, weekdayIndex: 0, startMinutes: 17 * 60, endMinutes: 18 * 60, subjectId: "calculo3" },
-  { index: 3, weekdayIndex: 1, startMinutes: 16 * 60, endMinutes: 17 * 60, subjectId: "probabilidad" },
-  { index: 4, weekdayIndex: 2, startMinutes: 14 * 60, endMinutes: 14 * 60 + 30, subjectId: "fisica" },
-  { index: 5, weekdayIndex: 2, startMinutes: 18 * 60, endMinutes: 19 * 60, subjectId: "probabilidad" },
-  { index: 6, weekdayIndex: 3, startMinutes: 11 * 60, endMinutes: 12 * 60, subjectId: "calculo3" },
-  { index: 7, weekdayIndex: 4, startMinutes: 16 * 60, endMinutes: 17 * 60, subjectId: "logica" },
-]
-
 const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
   0: ["fisica", "calculo3"],
   1: ["logica", "probabilidad"],
@@ -212,10 +193,6 @@ const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
 function getTodayDateString() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
-}
-
-function getMinutesOfDay(date: Date) {
-  return date.getHours() * 60 + date.getMinutes()
 }
 
 function getSubjectById(subjectId: string, subjects: Subject[]) {
@@ -238,34 +215,6 @@ function getDisplaySubjectsForDate(date: Date, showAllSubjects: boolean, subject
   return getDisplaySubjectIdsForDate(date, showAllSubjects, visibleSubjectIds)
     .map((subjectId) => getSubjectById(subjectId, subjects))
     .filter(Boolean) as Subject[]
-}
-
-function getActiveMobileShortcutWindow(date: Date, visibleSubjectIds: string[]) {
-  const jsDay = date.getDay()
-  const weekdayIndex = jsDay === 0 ? 6 : jsDay - 1
-  const currentMinutes = getMinutesOfDay(date)
-
-  return (
-    MOBILE_SHORTCUT_WINDOWS.find(
-      (window) =>
-        window.weekdayIndex === weekdayIndex &&
-        visibleSubjectIds.includes(window.subjectId) &&
-        currentMinutes >= window.startMinutes &&
-        currentMinutes < window.endMinutes
-    ) || null
-  )
-}
-
-function getShortcutDismissKey(dateKey: string, shortcutIndex: number) {
-  return `mobile-shortcut-dismissed:${dateKey}:${shortcutIndex}`
-}
-
-function formatClockTime(date: Date) {
-  return new Intl.DateTimeFormat("es-AR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date)
 }
 
 function formatMinutesLabel(totalMinutes: number) {
@@ -500,9 +449,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false)
   const [isUploadingAudio, setIsUploadingAudio] = useState(false)
   const [now, setNow] = useState(() => new Date())
-  const [isMobileShortcutPickerOpen, setIsMobileShortcutPickerOpen] = useState(false)
-  const [isMobileShortcutOpen, setIsMobileShortcutOpen] = useState(false)
-  const [manualMobileSubjectId, setManualMobileSubjectId] = useState("")
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
   const [manualEntryTarget, setManualEntryTarget] = useState<ManualEntryTarget | null>(null)
   const [manualQuestionDraft, setManualQuestionDraft] = useState("")
@@ -616,42 +562,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const subjectDayDataRequestIdRef = useRef(0)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
-  const activeMobileShortcut = useMemo(() => getActiveMobileShortcutWindow(now, visibleSubjectIds), [now, visibleSubjectIds])
-  const mobileShortcutTarget = useMemo(() => {
-    if (!activeMobileShortcut) return null
-
-    const subject = getSubjectById(activeMobileShortcut.subjectId, visibleSubjects)
-    if (!subject) return null
-
-    const sessionDate = formatDateKey(now)
-    return {
-      source: "mobile-shortcut" as const,
-      subjectId: subject.id,
-      subjectName: getSubjectDisplayName(subject),
-      sessionDate,
-      weekNumber: getWeekNumberForDate(now),
-      weekdayIndex: activeMobileShortcut.weekdayIndex,
-      shortcutIndex: activeMobileShortcut.index,
-    }
-  }, [activeMobileShortcut, now, visibleSubjects])
-  const manualMobileShortcutTarget = useMemo(() => {
-    const subject = getSubjectById(manualMobileSubjectId, visibleSubjects)
-    if (!subject) return null
-
-    return {
-      source: "manual-mobile-shortcut" as const,
-      subjectId: subject.id,
-      subjectName: getSubjectDisplayName(subject),
-      sessionDate: formatDateKey(now),
-      weekNumber: getWeekNumberForDate(now),
-      weekdayIndex: mobileShortcutTarget?.weekdayIndex ?? (() => {
-        const jsDay = now.getDay()
-        return jsDay === 0 ? 6 : jsDay - 1
-      })(),
-    }
-  }, [manualMobileSubjectId, mobileShortcutTarget?.weekdayIndex, now, visibleSubjects])
-  const activeMobileModalTarget = manualMobileShortcutTarget ?? mobileShortcutTarget
-  const mobileClockLabel = useMemo(() => formatClockTime(now), [now])
   const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
   const selectedWeekNumber = useMemo(() => getWeekNumberForDate(selectedDate), [selectedDate])
   const weekDates = useMemo(() => getWeekDates(selectedWeekNumber), [selectedWeekNumber])
@@ -866,16 +776,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [openAiModal])
-
-  useEffect(() => {
-    if (!mobileShortcutTarget || typeof window === "undefined") return
-    if (isDialogOpen || isReviewDialogOpen || isPracticeOpen || isAiOpen || isLinkDialogOpen || isMobileShortcutPickerOpen) return
-
-    const dismissKey = getShortcutDismissKey(mobileShortcutTarget.sessionDate, mobileShortcutTarget.shortcutIndex ?? -1)
-    if (window.localStorage.getItem(dismissKey) === "1") return
-
-    setIsMobileShortcutOpen(true)
-  }, [isAiOpen, isDialogOpen, isLinkDialogOpen, isMobileShortcutPickerOpen, isPracticeOpen, isReviewDialogOpen, mobileShortcutTarget])
 
   // Auto-scroll AI response box
   useEffect(() => {
@@ -1232,40 +1132,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setRecordingTarget(null)
   }
 
-  const closeMobileShortcutModal = (persistDismissal: boolean) => {
-    if (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") {
-      stopAndDiscardRecording()
-      cancelReview()
-    }
-
-    if (
-      persistDismissal &&
-      typeof window !== "undefined" &&
-      mobileShortcutTarget?.shortcutIndex !== undefined
-    ) {
-      window.localStorage.setItem(
-        getShortcutDismissKey(mobileShortcutTarget.sessionDate, mobileShortcutTarget.shortcutIndex),
-        "1"
-      )
-    }
-
-    setIsMobileShortcutOpen(false)
-    setManualMobileSubjectId("")
-  }
-
-  const openManualMobileShortcutPicker = () => {
-    setManualMobileSubjectId("")
-    setIsMobileShortcutPickerOpen(true)
-  }
-
-  const handleManualMobileSubjectSelect = (subjectId: string) => {
-    setManualMobileSubjectId(subjectId)
-    setRecordingError("")
-    setEntriesError("")
-    setIsMobileShortcutPickerOpen(false)
-    setIsMobileShortcutOpen(true)
-  }
-
   const closeSubjectDialog = async () => {
     await flushPendingFeaturedUpdate()
     stopAndDiscardRecording()
@@ -1547,24 +1413,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       cancelReview()
-      if (target.source === "mobile-shortcut") {
-        closeMobileShortcutModal(true)
-      }
     } catch (error) {
       console.error("Failed to upload audio entry:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar el audio.")
     } finally {
       setIsUploadingAudio(false)
     }
-  }
-
-  const handleMobileShortcutReset = () => {
-    if ((recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") && isRecording) {
-      stopAndDiscardRecording()
-    }
-
-    setRecordingError("")
-    cancelReview()
   }
 
   const startAnswerEdit = (entry: SubjectDayEntry) => {
@@ -2910,16 +2764,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
           <div className="order-1 flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:order-2 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <Button
-              onClick={openManualMobileShortcutPicker}
-              variant="outline"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-              aria-label="Celular"
-              title="Celular"
-            >
-              <Smartphone className="h-4 w-4" />
-            </Button>
-            <Button
               onClick={openPracticeModal}
               variant="outline"
               size="icon"
@@ -3060,134 +2904,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       {authSession.isAdmin ? (
         <AdminAccessModal open={isAdminModalOpen} onOpenChange={setIsAdminModalOpen} subjectOptions={SUBJECTS} />
       ) : null}
-
-      <Dialog open={isMobileShortcutPickerOpen} onOpenChange={setIsMobileShortcutPickerOpen}>
-        <DialogContent showCloseButton={false} className="sm:max-w-md">
-          <DialogHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
-                <DialogTitle>Elegir materia</DialogTitle>
-                <DialogDescription>Selecciona una de las materias disponibles para abrir el modal del celular.</DialogDescription>
-              </div>
-              <DialogClose asChild>
-                <button
-                  type="button"
-                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                  aria-label="Cerrar modal"
-                >
-                  <X className="h-7 w-7" />
-                </button>
-              </DialogClose>
-            </div>
-          </DialogHeader>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {visibleSubjects.map((subject) => (
-              <button
-                key={subject.id}
-                type="button"
-                onClick={() => handleManualMobileSubjectSelect(subject.id)}
-                className="rounded-xl border border-border bg-card px-4 py-3 text-left text-sm font-medium text-foreground transition hover:border-primary/40 hover:bg-accent"
-              >
-                {subject.name.replace("\n", " ")}
-              </button>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isMobileShortcutOpen} onOpenChange={(open) => (!open ? closeMobileShortcutModal(true) : undefined)}>
-        <DialogContent
-          className="top-0 left-0 z-[60] h-dvh w-screen max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 bg-muted p-0 shadow-none sm:top-1/2 sm:left-1/2 sm:h-[min(92dvh,760px)] sm:w-[440px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[28px] sm:border sm:border-border sm:shadow-2xl"
-          showCloseButton={false}
-          onPointerDownOutside={(event) => event.preventDefault()}
-          onInteractOutside={(event) => event.preventDefault()}
-          onEscapeKeyDown={(event) => event.preventDefault()}
-        >
-          <DialogHeader className="sr-only">
-            <DialogTitle>Atajo de celular</DialogTitle>
-            <DialogDescription>Modal para grabar y confirmar un audio rápido.</DialogDescription>
-          </DialogHeader>
-
-          <div className="flex h-full min-h-0 flex-col justify-between bg-muted px-6 py-6 text-foreground sm:rounded-[26px]">
-            <div className="space-y-8 pt-2">
-              <div className="mx-auto flex h-28 w-full max-w-[320px] items-center justify-center rounded-[18px] border-[8px] border-border bg-card text-6xl font-medium text-foreground">
-                {mobileClockLabel}
-              </div>
-
-              <div className="space-y-5 text-center">
-                <p className="text-3xl font-semibold text-foreground">
-                  {activeMobileModalTarget ? activeMobileModalTarget.subjectName : "Esperando horario"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!activeMobileModalTarget) return
-
-                    void (
-                      isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")
-                        ? stopRecording()
-                        : startRecording(activeMobileModalTarget)
-                    )
-                  }}
-                  disabled={!activeMobileModalTarget || isUploadingAudio}
-                  className={`mx-auto flex h-52 w-52 items-center justify-center rounded-full border-[8px] border-border transition ${
-                    !activeMobileModalTarget || isUploadingAudio
-                      ? "cursor-not-allowed opacity-50"
-                      : isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")
-                        ? "bg-red-500 text-white"
-                        : "bg-card text-foreground hover:bg-accent"
-                  }`}
-                  aria-label={isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? "Detener grabacion" : "Iniciar grabacion"}
-                >
-                  {isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
-                    <Square className="h-20 w-20" />
-                  ) : (
-                    <Mic className="h-20 w-20" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-3 pb-1">
-              {reviewAudio && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
-                <audio controls src={reviewAudio.url} className="w-full" />
-              ) : (
-                <div className="h-12 rounded-full border-4 border-border bg-card" />
-              )}
-
-              {recordingError ? <div className="text-sm text-red-900">{recordingError}</div> : null}
-              {entriesError && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut") ? (
-                <div className="text-sm text-red-900">{entriesError}</div>
-              ) : null}
-              {!activeMobileModalTarget ? (
-                <p className="text-sm text-muted-foreground">
-                  Este modal se abre solo en los bloques definidos. El boton queda disponible para la fase 1.
-                </p>
-              ) : null}
-
-              <div className="flex items-center justify-between gap-4 pt-2 text-[2rem] font-medium leading-none text-foreground">
-                <button
-                  type="button"
-                  onClick={handleMobileShortcutReset}
-                  disabled={isUploadingAudio || (!reviewAudio && !(isRecording && (recordingTarget?.source === "mobile-shortcut" || recordingTarget?.source === "manual-mobile-shortcut")))}
-                  className="transition disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Reiniciar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void confirmReview()}
-                  disabled={!reviewAudio || !recordingTarget || !["mobile-shortcut", "manual-mobile-shortcut"].includes(recordingTarget.source) || isUploadingAudio}
-                  className="transition disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {isUploadingAudio ? "Subiendo..." : "Confirmar"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* AI Modal */}
       <Dialog open={isAiOpen} onOpenChange={(open) => { if (!open) { setIsAiOpen(false); setAiSent(false); setAiResponse("") } }}>
@@ -4391,7 +4107,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </DialogClose>
             </div>
           </DialogHeader>
-
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">Insertar link</label>
             <Input
@@ -4588,7 +4303,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </div>
             </div>
           </DialogHeader>
-
           <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
             {(authSession.isAdmin || practiceLaunchView === "exercises") && (
               <div className="mx-auto mb-4 flex w-full max-w-5xl items-center justify-between gap-3">
