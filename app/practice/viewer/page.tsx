@@ -4,7 +4,7 @@ import { neon } from "@neondatabase/serverless"
 import { getRequestAuthSession, canAccessSubject } from "@/lib/authz"
 import { parseDateKey } from "@/lib/subject-utils"
 import { getSubjectById } from "@/lib/subjects"
-import { PracticeViewerClient } from "./practice-viewer-client"
+import { PracticeViewerShell } from "./practice-viewer-shell"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -137,7 +137,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       materialType,
     }
 
-    return <PracticeViewerClient draftContext={draftContext} />
+    return <PracticeViewerShell draftContext={draftContext} />
   }
 
   if (!Number.isInteger(materialId)) {
@@ -212,7 +212,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     }
 
     return (
-      <PracticeViewerClient
+      <PracticeViewerShell
         material={{
           id: material.id,
           subjectId: material.subject_id,
