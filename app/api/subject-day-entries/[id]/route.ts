@@ -124,7 +124,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     try {
       rows = await sql`
         WITH entry_scope AS (
-          SELECT subject_id, week_number, session_date
+          SELECT subject_id, week_number, session_date, subject_day_material_id
           FROM subject_day_entries
           WHERE id = ${entryId}
         ),
@@ -132,9 +132,22 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           UPDATE subject_day_entries
           SET is_featured = FALSE
           WHERE ${isFeatured === true}
-            AND (subject_id, week_number, session_date) IN (
-              SELECT subject_id, week_number, session_date
-              FROM entry_scope
+            AND (
+              (
+                (SELECT subject_day_material_id FROM entry_scope LIMIT 1) IS NULL
+                AND (subject_id, week_number) IN (
+                  SELECT subject_id, week_number
+                  FROM entry_scope
+                )
+                AND subject_day_material_id IS NULL
+              )
+              OR (
+                (subject_id, week_number, session_date) IN (
+                  SELECT subject_id, week_number, session_date
+                  FROM entry_scope
+                )
+                AND subject_day_material_id = (SELECT subject_day_material_id FROM entry_scope LIMIT 1)
+              )
             )
           RETURNING id
         )

@@ -1397,7 +1397,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
         setEntries((previousEntries) =>
           sortSubjectDayEntries(
-            [...previousEntries.filter((entry) => !(target.source === "continue-context" && entry.is_featured)), createdEntry]
+            [
+              ...previousEntries.filter((entry) => {
+                if (target.source !== "continue-context" || !entry.is_featured) {
+                  return true
+                }
+
+                return (
+                  entry.subject_id !== target.subjectId ||
+                  entry.week_number !== target.weekNumber ||
+                  entry.subject_day_material_id != null
+                )
+              }),
+              createdEntry,
+            ]
           )
         )
         if (target.source === "continue-context") {
@@ -2028,15 +2041,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
       const serverPayload = payload as ContinuePayload
 
-      setContinuePayload((previous) => ({
-        ...serverPayload,
-        material: localPayload?.material ?? previous?.material ?? serverPayload.material,
-        previousFeaturedEntry:
-          localContinueFeaturedEntry ??
-          previous?.previousFeaturedEntry ??
+      setContinuePayload((previous) => {
+        const resolvedMaterial = localPayload?.material ?? previous?.material ?? serverPayload.material
+        const previousFeaturedEntry =
+          getLocalContinueFeaturedEntry() ??
           localPayload?.previousFeaturedEntry ??
-          serverPayload.previousFeaturedEntry,
-      }))
+          previous?.previousFeaturedEntry ??
+          serverPayload.previousFeaturedEntry
+
+        return {
+          ...serverPayload,
+          material: resolvedMaterial,
+          previousFeaturedEntry,
+        }
+      })
     } catch (error) {
       console.error("Failed to load next practice material:", error)
       setContinuePayload((previous) => previous ?? localPayload)
@@ -2059,7 +2077,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const localPayload: ContinuePayload | null = currentSubject
       ? {
           material: selectedMaterial ?? buildLocalContinuePayload()?.material ?? null,
-          previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
+          previousFeaturedEntry: getLocalContinueFeaturedEntry() ?? continuePayload?.previousFeaturedEntry ?? null,
         }
       : null
 
@@ -2550,16 +2568,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
     setSelectedPracticeMaterialId(null)
   }, [selectedPracticeMaterial, selectedPracticeMaterialEntries.length, selectedPracticeMaterialId])
-  const localContinueFeaturedEntry = useMemo(
+  const getLocalContinueFeaturedEntry = useCallback(
     () =>
       entries.find(
         (entry) =>
           entry.subject_id === currentSubject?.id &&
-          entry.session_date === subjectDialogDateKey &&
+          entry.week_number === selectedWeekNumber &&
           entry.is_featured &&
           entry.subject_day_material_id == null
       ) ?? null,
-    [currentSubject?.id, entries, subjectDialogDateKey]
+    [currentSubject?.id, entries, selectedWeekNumber]
   )
   const weekAudioDays = useMemo(() => {
     const grouped = activeDayEntries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -2581,17 +2599,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
     if (!currentSubject) return null
 
+    const material =
+      selectedPracticeMaterial ??
+      getNextUncheckedPracticeMaterial(materials, {
+        subjectId: currentSubject.id,
+        sessionDate: subjectDialogDateKey,
+        weekNumber: selectedWeekNumber,
+      })
+
+    const previousFeaturedEntry =
+      getLocalContinueFeaturedEntry() ??
+      continuePayload?.previousFeaturedEntry ??
+      null
+
     return {
-      material:
-        selectedPracticeMaterial ??
-        getNextUncheckedPracticeMaterial(materials, {
-          subjectId: currentSubject.id,
-          sessionDate: subjectDialogDateKey,
-          weekNumber: selectedWeekNumber,
-        }),
-      previousFeaturedEntry: localContinueFeaturedEntry ?? continuePayload?.previousFeaturedEntry ?? null,
+      material,
+      previousFeaturedEntry,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentSubject, localContinueFeaturedEntry, materials, selectedPracticeMaterial, selectedWeekNumber, subjectDialogDateKey])
+  }, [continuePayload?.previousFeaturedEntry, currentSubject, getLocalContinueFeaturedEntry, materials, selectedPracticeMaterial, selectedWeekNumber, subjectDialogDateKey])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -3613,14 +3638,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         >
           <div className="relative min-h-full bg-background px-5 py-5 text-foreground sm:px-8 sm:py-6">
             <DialogHeader className="mb-6 border-b border-border pb-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-2">
+                <div className="flex items-start justify-between gap-4">
+                <div>
                   <DialogTitle className="text-left text-[2rem] font-normal leading-none text-foreground sm:text-[2.5rem]">
                     Continuar
                   </DialogTitle>
-                  <DialogDescription className="text-left text-sm text-muted-foreground sm:text-base">
-                    Retoma el archivo de practica pendiente, escucha el audio previo y agrega nuevas dudas.
-                  </DialogDescription>
                 </div>
                 <DialogClose asChild>
                   <button
@@ -3675,6 +3697,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     sessionDate: subjectDialogDateKey,
                     weekNumber: selectedWeekNumber,
                     weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+                    materialId: null,
                   }
 
                         void (isRecording ? stopRecording() : startRecording(target))

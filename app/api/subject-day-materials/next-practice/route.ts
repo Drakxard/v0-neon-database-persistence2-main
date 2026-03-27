@@ -27,6 +27,7 @@ type SubjectDayMaterialRow = {
 
 type EntryRow = {
   id: number
+  subject_day_material_id: number | null
   subject_id: string
   week_number: number
   session_date: string
@@ -119,7 +120,6 @@ export async function GET(request: Request) {
 
     const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
     const weekNumber = Number.isNaN(rawWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : rawWeekNumber
-
     const materialRows = await sql`
       SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       FROM subject_day_materials
@@ -135,12 +135,13 @@ export async function GET(request: Request) {
     let previousFeaturedEntry: EntryRow | null = null
     try {
       const previousEntryRows = await sql`
-        SELECT id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+        SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId}
+          AND week_number = ${weekNumber}
+          AND subject_day_material_id IS NULL
           AND is_featured = TRUE
-          AND session_date < ${sessionDate}
-        ORDER BY session_date DESC, updated_at DESC, id DESC
+        ORDER BY updated_at DESC, session_date DESC, id DESC
         LIMIT 1
       ` as EntryRow[]
       previousFeaturedEntry = previousEntryRows[0] ?? null
