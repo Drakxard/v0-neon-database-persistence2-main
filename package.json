@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "audio:legacy:check": "node scripts/migrate-legacy-audio-to-r2.js",
+    "audio:legacy:migrate": "node scripts/migrate-legacy-audio-to-r2.js --migrate"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1010.0",

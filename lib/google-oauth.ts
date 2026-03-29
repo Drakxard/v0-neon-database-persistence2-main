@@ -1,3 +1,5 @@
+import { RemoteProviderAuthError } from "@/lib/remote-file-errors"
+
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
@@ -54,7 +56,7 @@ export async function exchangeCodeForRefreshToken(code: string) {
 export async function getGoogleAccessToken() {
   const { clientId, clientSecret, refreshToken } = getGoogleOAuthConfig()
   if (!refreshToken) {
-    throw new Error("Missing environment variable: GOOGLE_DRIVE_REFRESH_TOKEN")
+    throw new RemoteProviderAuthError("drive", "Missing environment variable: GOOGLE_DRIVE_REFRESH_TOKEN")
   }
 
   const response = await fetch(GOOGLE_TOKEN_URL, {
@@ -72,7 +74,7 @@ export async function getGoogleAccessToken() {
 
   const payload = await response.json()
   if (!response.ok || !payload.access_token) {
-    throw new Error(payload.error_description || payload.error || "Failed to refresh Google access token")
+    throw new RemoteProviderAuthError("drive", payload.error_description || payload.error || "Failed to refresh Google access token")
   }
 
   return payload.access_token as string

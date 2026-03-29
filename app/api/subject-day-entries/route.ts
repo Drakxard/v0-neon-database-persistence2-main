@@ -55,6 +55,15 @@ function isMissingColumn(error: unknown) {
   )
 }
 
+function isForeignKeyViolation(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "23503"
+  )
+}
+
 function isGeminiQuotaError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "")
   return message.toLowerCase().includes("quota exceeded")
@@ -118,6 +127,35 @@ async function getNextOrderIndex(params: {
     `
 
     return Number(countRow?.max_order ?? -1) + 1
+  }
+}
+
+async function resolveMaterialId(params: {
+  subjectId: string
+  weekNumber: number
+  sessionDate: string
+  materialId: number | null
+}) {
+  const { subjectId, weekNumber, sessionDate, materialId } = params
+  if (materialId == null) return null
+
+  try {
+    const rows = await sql`
+      SELECT id
+      FROM subject_day_materials
+      WHERE id = ${materialId}
+        AND subject_id = ${subjectId}
+        AND week_number = ${weekNumber}
+        AND session_date = ${sessionDate}
+      LIMIT 1
+    ` as Array<{ id: number }>
+
+    return rows[0]?.id ?? null
+  } catch (error) {
+    if (isMissingSubjectDayEntriesTable(error)) {
+      return null
+    }
+    throw error
   }
 }
 
@@ -310,11 +348,18 @@ export async function POST(request: Request) {
     const weekdayIndex =
       Number.isNaN(requestedWeekdayIndex) ? getWeekdayIndexFromDateKey(sessionDate) : requestedWeekdayIndex
 
-    const nextOrderIndex = await getNextOrderIndex({
+    const resolvedMaterialId = await resolveMaterialId({
       subjectId,
       weekNumber,
       sessionDate,
       materialId,
+    })
+
+    const nextOrderIndex = await getNextOrderIndex({
+      subjectId,
+      weekNumber,
+      sessionDate,
+      materialId: resolvedMaterialId,
     })
 
     let rows: EntryRow[]
@@ -337,7 +382,7 @@ export async function POST(request: Request) {
         )
         VALUES (
           ${subjectId},
-          ${materialId},
+          ${resolvedMaterialId},
           ${weekNumber},
           ${sessionDate},
           ${weekdayIndex},
@@ -353,37 +398,75 @@ export async function POST(request: Request) {
         RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
-      if (!isMissingColumn(error)) throw error
+      if (isForeignKeyViolation(error) && resolvedMaterialId != null) {
+        rows = await sql`
+          INSERT INTO subject_day_entries (
+            subject_id,
+            subject_day_material_id,
+            week_number,
+            session_date,
+            weekday_index,
+            order_index,
+            transcript_text,
+            drive_file_id,
+            drive_file_name,
+            drive_mime_type,
+            drive_web_view_link,
+            answer_text,
+            custom_title
+          )
+          VALUES (
+            ${subjectId},
+            ${null},
+            ${weekNumber},
+            ${sessionDate},
+            ${weekdayIndex},
+            ${nextOrderIndex},
+            ${transcriptText},
+            '',
+            '',
+            'text/plain',
+            '',
+            ${answerText || null},
+            ${customTitle || null}
+          )
+          RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+        ` as EntryRow[]
+      } else if (!isMissingColumn(error)) {
+        throw error
+      }
 
-      rows = await sql`
-        INSERT INTO subject_day_entries (
-          subject_id,
-          week_number,
-          session_date,
-          weekday_index,
-          order_index,
-          transcript_text,
-          drive_file_id,
-          drive_file_name,
-          drive_mime_type,
-          drive_web_view_link,
-          answer_text
-        )
-        VALUES (
-          ${subjectId},
-          ${weekNumber},
-          ${sessionDate},
-          ${weekdayIndex},
-          ${nextOrderIndex},
-          ${transcriptText},
-          '',
-          '',
-          'text/plain',
-          '',
-          ${answerText || null}
-        )
-        RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
-      ` as EntryRow[]
+      if (isMissingColumn(error)) {
+        rows = await sql`
+          INSERT INTO subject_day_entries (
+            subject_id,
+            week_number,
+            session_date,
+            weekday_index,
+            order_index,
+            transcript_text,
+            drive_file_id,
+            drive_file_name,
+            drive_mime_type,
+            drive_web_view_link,
+            answer_text
+          )
+          VALUES (
+            ${subjectId},
+            ${weekNumber},
+            ${sessionDate},
+            ${weekdayIndex},
+            ${nextOrderIndex},
+            ${transcriptText},
+            '',
+            '',
+            'text/plain',
+            '',
+            ${answerText || null}
+          )
+          RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+        ` as EntryRow[]
+      }
     }
 
     const [entryWithLinks] = await withLinks(rows)

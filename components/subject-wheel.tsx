@@ -2356,7 +2356,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }, 0)
     } catch (error) {
       console.error("Failed to play remote audio:", error)
-      setEntriesError("No se pudo reproducir el audio.")
+      setEntriesError(error instanceof Error ? error.message : "No se pudo reproducir el audio.")
     } finally {
       setLoadingAudioEntryId(null)
     }

@@ -1,6 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 
 import { downloadDriveFile } from "@/lib/google-drive"
+import { isRemoteFileNotFoundError, isRemoteProviderAuthError } from "@/lib/remote-file-errors"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
@@ -59,6 +60,18 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       return Response.json(
         { error: "Falta crear la tabla subject_day_entries. Ejecuta scripts/005-create-subject-day-entries.sql en Neon." },
         { status: 503 }
+      )
+    }
+    if (isRemoteFileNotFoundError(error) && error.provider === "drive") {
+      return Response.json(
+        { error: "El audio heredado no esta disponible en Google Drive. Requiere migracion o reautorizacion." },
+        { status: 424 }
+      )
+    }
+    if (isRemoteProviderAuthError(error) && error.provider === "drive") {
+      return Response.json(
+        { error: "El audio heredado no esta disponible en Google Drive. Requiere migracion o reautorizacion." },
+        { status: 424 }
       )
     }
     const message = error instanceof Error ? error.message : "Failed to stream audio"

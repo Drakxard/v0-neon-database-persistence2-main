@@ -13,3 +13,17 @@ export class RemoteFileNotFoundError extends Error {
 export function isRemoteFileNotFoundError(error: unknown): error is RemoteFileNotFoundError {
   return error instanceof RemoteFileNotFoundError
 }
+
+export class RemoteProviderAuthError extends Error {
+  provider: "r2" | "drive"
+
+  constructor(provider: "r2" | "drive", message?: string) {
+    super(message || "The remote provider authentication failed.")
+    this.name = "RemoteProviderAuthError"
+    this.provider = provider
+  }
+}
+
+export function isRemoteProviderAuthError(error: unknown): error is RemoteProviderAuthError {
+  return error instanceof RemoteProviderAuthError
+}
