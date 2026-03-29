@@ -348,6 +348,21 @@ function entryHasAudio(entry: Pick<SubjectDayEntry, "drive_file_id" | "drive_mim
   return entry.drive_file_id.trim().length > 0 && entry.drive_mime_type.startsWith("audio/")
 }
 
+function isDailyEntryWithoutMaterial(entry: Pick<SubjectDayEntry, "subject_id" | "week_number" | "session_date" | "subject_day_material_id">, target: {
+  subjectId: string
+  weekNumber: number
+  sessionDate: string
+  materialId?: number | null
+}) {
+  return (
+    entry.subject_id === target.subjectId &&
+    entry.week_number === target.weekNumber &&
+    entry.session_date === target.sessionDate &&
+    entry.subject_day_material_id == null &&
+    (target.materialId ?? null) == null
+  )
+}
+
 function applyPracticeFilters(entries: SubjectDayEntry[], filters: PracticeFilters, options?: { shuffle?: boolean }) {
   const filteredEntries = entries.filter((entry) => {
     if (filters.unanswered && entry.answer_text?.trim()) return false
@@ -1016,6 +1031,69 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
+  const persistFeaturedEntry = useCallback(async (entryId: number, isFeatured: boolean) => {
+    const response = await fetch(`/api/subject-day-entries/${entryId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isFeatured }),
+    })
+
+    const payload = await response.json()
+    if (!response.ok) {
+      throw new Error(getErrorMessage(payload, "No se pudo actualizar el destacado."))
+    }
+
+    return payload as SubjectDayEntry
+  }, [])
+
+  const applyFeaturedEntryLocally = useCallback((updatedEntry: SubjectDayEntry) => {
+    setEntries((previousEntries) =>
+      sortSubjectDayEntries(
+        previousEntries.map((item) => {
+          if (
+            item.session_date === updatedEntry.session_date &&
+            item.subject_id === updatedEntry.subject_id &&
+            updatedEntry.is_featured
+          ) {
+            return { ...item, is_featured: false }
+          }
+          return item.id === updatedEntry.id ? updatedEntry : item
+        })
+      )
+    )
+  }, [])
+
+  const ensureDailyEntryFeatured = useCallback(
+    async (
+      createdEntry: SubjectDayEntry,
+      options: {
+        source: AudioUploadTarget["source"] | "manual-entry"
+        target: Pick<AudioUploadTarget, "subjectId" | "weekNumber" | "sessionDate" | "materialId">
+        existingEntries: SubjectDayEntry[]
+      }
+    ) => {
+      if (options.source !== "subject-dialog" && options.source !== "manual-entry") {
+        return createdEntry
+      }
+
+      if (!isDailyEntryWithoutMaterial(createdEntry, options.target)) {
+        return createdEntry
+      }
+
+      const hasExistingFeatured = options.existingEntries.some(
+        (entry) => entry.id !== createdEntry.id && isDailyEntryWithoutMaterial(entry, options.target) && entry.is_featured
+      )
+      if (hasExistingFeatured || createdEntry.is_featured) {
+        return createdEntry
+      }
+
+      const updatedEntry = await persistFeaturedEntry(createdEntry.id, true)
+      applyFeaturedEntryLocally(updatedEntry)
+      return updatedEntry
+    },
+    [applyFeaturedEntryLocally, persistFeaturedEntry]
+  )
+
   const flushPendingFeaturedUpdate = async () => {
     const pendingUpdate = pendingFeaturedUpdateRef.current
     if (!pendingUpdate) return
@@ -1024,28 +1102,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     pendingFeaturedUpdateRef.current = null
 
     try {
-      const response = await fetch(`/api/subject-day-entries/${pendingUpdate.entryId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isFeatured: pendingUpdate.isFeatured }),
-      })
-
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo actualizar el destacado."))
-      }
-
-      const updatedEntry = payload as SubjectDayEntry
-      setEntries((previousEntries) =>
-        sortSubjectDayEntries(
-          previousEntries.map((item) => {
-            if (item.session_date === updatedEntry.session_date && item.subject_id === updatedEntry.subject_id && updatedEntry.is_featured) {
-              return { ...item, is_featured: false }
-            }
-            return item.id === updatedEntry.id ? updatedEntry : item
-          })
-        )
-      )
+      const updatedEntry = await persistFeaturedEntry(pendingUpdate.entryId, pendingUpdate.isFeatured)
+      applyFeaturedEntryLocally(updatedEntry)
     } catch (error) {
       console.error("Failed to persist featured entry:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo actualizar el destacado.")
@@ -1375,6 +1433,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       if (currentSubject?.id === target.subjectId && subjectDialogDateKey === target.sessionDate) {
+        const previousEntriesSnapshot = entries
         setEntries((previousEntries) =>
           sortSubjectDayEntries(
             [
@@ -1393,6 +1452,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             ]
           )
         )
+        createdEntry = await ensureDailyEntryFeatured(createdEntry, {
+          source: target.source,
+          target,
+          existingEntries: previousEntriesSnapshot,
+        })
         if (target.source === "continue-practice" && target.materialId != null) {
           setContinuePayload((previous) =>
             previous
@@ -1500,7 +1564,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setEntriesError("")
 
     try {
-      const createdEntry = await createPracticeTextEntry<SubjectDayEntry>({
+      let createdEntry = await createPracticeTextEntry<SubjectDayEntry>({
         subjectId: manualEntryTarget.subjectId,
         sessionDate: manualEntryTarget.sessionDate,
         weekNumber: manualEntryTarget.weekNumber,
@@ -1510,7 +1574,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         answerText,
       })
 
+      const previousEntriesSnapshot = entries
       setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, createdEntry]))
+      createdEntry = await ensureDailyEntryFeatured(createdEntry, {
+        source: "manual-entry",
+        target: manualEntryTarget,
+        existingEntries: previousEntriesSnapshot,
+      })
       if (manualEntryTarget.materialId != null) {
         setContinuePayload((previous) =>
           previous
