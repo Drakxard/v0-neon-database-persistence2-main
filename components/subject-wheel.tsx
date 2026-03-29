@@ -421,6 +421,17 @@ function getNextUncheckedPracticeMaterial(
   )[0] ?? null
 }
 
+function resolveContinueMaterial(
+  materials: SubjectDayMaterial[],
+  materialId?: number
+) {
+  if (typeof materialId === "number") {
+    return materials.find((material) => material.id === materialId) ?? null
+  }
+
+  return materials.find((material) => !material.is_checkup_done) ?? materials[0] ?? null
+}
+
 export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const visibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => authSession.isAdmin || authSession.allowedSubjectIds.includes(subject.id)),
@@ -2138,26 +2149,31 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const openContinueModal = async (materialId?: number) => {
-    const selectedMaterial =
-      typeof materialId === "number"
-        ? practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === materialId) ?? null
-        : null
+    const resolvedVisiblePracticeMaterials = practiceMaterials.filter(
+      (material): material is SubjectDayMaterial => !("is_pending_upload" in material)
+    )
+    const selectedMaterial = resolveContinueMaterial(resolvedVisiblePracticeMaterials, materialId)
 
     setSelectedPracticeMaterialId(selectedMaterial?.id ?? null)
 
     const localPayload: ContinuePayload | null = currentSubject
       ? {
-          material: selectedMaterial ?? buildLocalContinuePayload()?.material ?? null,
+          material: selectedMaterial,
           previousFeaturedEntry: getLocalContinueFeaturedEntry() ?? continuePayload?.previousFeaturedEntry ?? null,
         }
       : null
 
     setContinuePayload(localPayload)
     setIsContinueOpen(true)
+    setContinueError(
+      resolvedVisiblePracticeMaterials.length === 0
+        ? ""
+        : selectedMaterial
+          ? ""
+          : "No se pudo resolver un PDF de practica para Continuar."
+    )
 
-    if (!selectedMaterial) {
-      void loadContinuePayload({ silent: Boolean(localPayload) })
-    }
+    void loadContinuePayload({ silent: Boolean(localPayload) })
   }
 
   const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
@@ -2628,6 +2644,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     [practiceMaterials, selectedPracticeMaterialId]
   )
   const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
+  const visiblePracticeMaterials = useMemo(
+    () => practiceMaterials.filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material)),
+    [practiceMaterials]
+  )
   const continueMaterialEntries = useMemo(
     () =>
       currentContinueMaterial
@@ -3814,7 +3834,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         </Button>
                       </div>
                     ) : (
-                      <p className="text-base text-muted-foreground">No hay archivos de practica pendientes.</p>
+                      <p className="text-base text-muted-foreground">
+                        {visiblePracticeMaterials.length === 0
+                          ? "No hay archivos de practica cargados."
+                          : "No se pudo resolver un PDF de practica para continuar."}
+                      </p>
                     )}
                   </div>
 
