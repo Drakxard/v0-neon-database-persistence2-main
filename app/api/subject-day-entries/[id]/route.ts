@@ -61,6 +61,16 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
 }
 
+function getDatabaseHost() {
+  try {
+    const databaseUrl = process.env.DATABASE_URL
+    if (!databaseUrl) return "unknown"
+    return new URL(databaseUrl).host
+  } catch {
+    return "invalid"
+  }
+}
+
 function getMissingMetadataColumnResponse(body: Record<string, unknown>) {
   if ("customTitle" in body) {
     return NextResponse.json(
@@ -123,6 +133,15 @@ async function withLinks(row: EntryRow | null) {
     }
   }
 
+  return {
+    ...row,
+    session_date: normalizeSessionDateKey(row.session_date),
+    display_title: getDisplayTitle(row),
+    external_links: links,
+  }
+}
+
+function buildEntryResponse(row: EntryRow, links: { id: number; label: string; url: string }[] = []) {
   return {
     ...row,
     session_date: normalizeSessionDateKey(row.session_date),
@@ -230,7 +249,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: "Entry not found" }, { status: 404 })
     }
 
-    const [entryWithLinks] = await withLinks(rows)
+    let entryWithLinks
+    try {
+      entryWithLinks = await withLinks(rows[0])
+    } catch (error) {
+      console.error("PATCH /api/subject-day-entries/[id] succeeded but failed to load links:", {
+        entryId,
+        databaseHost: getDatabaseHost(),
+        error,
+      })
+      entryWithLinks = buildEntryResponse(rows[0], [])
+    }
+
     return NextResponse.json(entryWithLinks)
   } catch (error) {
     console.error("PATCH /api/subject-day-entries/[id] error:", error)
