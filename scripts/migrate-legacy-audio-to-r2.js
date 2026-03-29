@@ -75,8 +75,32 @@ function buildR2ObjectKey(params) {
 }
 
 function normalizeDateKey(sessionDate) {
+  if (sessionDate instanceof Date) {
+    return `${sessionDate.getFullYear()}-${String(sessionDate.getMonth() + 1).padStart(2, "0")}-${String(sessionDate.getDate()).padStart(2, "0")}`
+  }
   if (typeof sessionDate !== "string") return ""
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
+function normalizeMetadataValue(value) {
+  const normalized = String(value || "")
+    .trim()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  return normalized.length > 0 ? normalized : undefined
+}
+
+function normalizeMetadata(input) {
+  return Object.fromEntries(
+    Object.entries(input || {}).flatMap(([key, value]) => {
+      const normalizedValue = normalizeMetadataValue(value)
+      return normalizedValue ? [[key, normalizedValue]] : []
+    })
+  )
 }
 
 function guessFileExtension(mimeType) {
@@ -234,7 +258,7 @@ async function uploadBufferToR2(client, objectKey, mimeType, body, metadata) {
       Key: objectKey,
       Body: body,
       ContentType: mimeType,
-      Metadata: metadata,
+      Metadata: normalizeMetadata(metadata),
     })
   )
 }
