@@ -348,6 +348,16 @@ function entryHasAudio(entry: Pick<SubjectDayEntry, "drive_file_id" | "drive_mim
   return entry.drive_file_id.trim().length > 0 && entry.drive_mime_type.startsWith("audio/")
 }
 
+function entryHasTranscript(entry: Pick<SubjectDayEntry, "transcript_text">) {
+  return entry.transcript_text.trim().length > 0
+}
+
+function shouldRenderInTheoryView(
+  entry: Pick<SubjectDayEntry, "subject_day_material_id" | "transcript_text" | "drive_file_id" | "drive_mime_type">
+) {
+  return entry.subject_day_material_id == null || (!entryHasTranscript(entry) && entryHasAudio(entry))
+}
+
 function isDailyEntryWithoutMaterial(entry: Pick<SubjectDayEntry, "subject_id" | "week_number" | "session_date" | "subject_day_material_id">, target: {
   subjectId: string
   weekNumber: number
@@ -2620,7 +2630,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () =>
       activeDayEntries.filter(
         (entry) =>
-          entry.subject_day_material_id == null &&
+          shouldRenderInTheoryView(entry) &&
           (!isWeeklyExercisesScope || entry.week_number === dialogSelectedWeekNumber)
       ),
     [activeDayEntries, dialogSelectedWeekNumber, isWeeklyExercisesScope]
@@ -3576,7 +3586,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 <Plus className="h-4 w-4" />
                               </Button>
                             </div>
-                            <p className="text-sm leading-6 text-foreground sm:text-base sm:leading-7">{entry.transcript_text}</p>
+                            <p className="text-sm leading-6 text-foreground sm:text-base sm:leading-7">
+                              {entryHasTranscript(entry) ? entry.transcript_text : "Sin texto. Solo audio cargado."}
+                            </p>
                           </div>
 
                           {entryHasAudio(entry) ? (
@@ -3634,7 +3646,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   })}
                 </div>
               ) : practiceSectionView === "theory" ? (
-                <div className="pb-24 text-sm text-muted-foreground sm:pb-28"></div>
+                <div className="pb-24 sm:pb-28">
+                  <div className="rounded-2xl border border-dashed border-border bg-card px-4 py-6 text-sm text-muted-foreground sm:px-5">
+                    No hay contenido teórico visible para este día.
+                  </div>
+                </div>
               ) : (
                 <div className="pb-24 sm:pb-28"></div>
               )}
