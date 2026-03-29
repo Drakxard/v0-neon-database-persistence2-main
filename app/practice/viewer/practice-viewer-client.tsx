@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 
 type MaterialContext = {
   id: number
@@ -327,44 +327,16 @@ export function PracticeViewerClient({
     setRecordingError("")
 
     try {
-      const audioFile = new File([reviewAudio.blob], `${material.subjectId}-${material.sessionDate}.webm`, {
-        type: reviewAudio.mimeType,
+      const createdEntry = await createPracticeAudioEntry<{ id: number }>({
+        subjectId: material.subjectId,
+        subjectName: material.subjectName,
+        sessionDate: material.sessionDate,
+        weekNumber: material.weekNumber,
+        weekdayIndex: material.weekdayIndex,
+        materialId: material.id,
+        blob: reviewAudio.blob,
+        mimeType: reviewAudio.mimeType,
       })
-
-      const sessionResponse = await fetch("/api/subject-day-entries/upload-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: material.subjectId,
-          subjectName: material.subjectName,
-          sessionDate: material.sessionDate,
-          weekNumber: material.weekNumber,
-          materialId: material.id,
-          mimeType: audioFile.type || "audio/webm",
-        }),
-      })
-      const sessionPayload = (await requireOkJson(
-        sessionResponse,
-        "No se pudo preparar la subida del audio."
-      )) as DriveUploadSessionResponse
-
-      const { driveFileId } = await uploadBlobToStorage(sessionPayload, audioFile)
-
-      const entryResponse = await fetch("/api/subject-day-entries/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: material.subjectId,
-          sessionDate: material.sessionDate,
-          weekNumber: material.weekNumber,
-          materialId: material.id,
-          driveFileId,
-          fileName: audioFile.name,
-        }),
-      })
-      const entryPayload = await requireOkJson(entryResponse, "No se pudo confirmar el audio.")
-
-      const createdEntry = entryPayload as { id: number }
       const positionResponse = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

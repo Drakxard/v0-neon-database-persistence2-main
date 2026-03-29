@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
-import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
@@ -1354,44 +1354,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setEntriesError("")
 
     try {
-      const audioFile = new File([reviewAudio.blob], `${target.subjectId}-${target.sessionDate}.webm`, {
-        type: reviewAudio.mimeType,
+      let createdEntry = await createPracticeAudioEntry<SubjectDayEntry>({
+        subjectId: target.subjectId,
+        subjectName: target.subjectName,
+        sessionDate: target.sessionDate,
+        weekNumber: target.weekNumber,
+        weekdayIndex: target.weekdayIndex,
+        materialId: target.materialId ?? null,
+        blob: reviewAudio.blob,
+        mimeType: reviewAudio.mimeType,
       })
-
-      const sessionResponse = await fetch("/api/subject-day-entries/upload-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: target.subjectId,
-          subjectName: target.subjectName,
-          sessionDate: target.sessionDate,
-          weekNumber: target.weekNumber,
-          materialId: target.materialId ?? null,
-          mimeType: audioFile.type || "audio/webm",
-        }),
-      })
-      const sessionPayload = (await requireOkJson(
-        sessionResponse,
-        "No se pudo preparar la subida del audio."
-      )) as DriveUploadSessionResponse
-
-      const { driveFileId } = await uploadBlobToStorage(sessionPayload, audioFile)
-
-      const response = await fetch("/api/subject-day-entries/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: target.subjectId,
-          sessionDate: target.sessionDate,
-          weekNumber: target.weekNumber,
-          materialId: target.materialId ?? null,
-          driveFileId,
-          fileName: audioFile.name,
-        }),
-      })
-      const payload = await requireOkJson(response, "No se pudo confirmar el audio.")
-
-      let createdEntry = payload as SubjectDayEntry
       if (target.source === "continue-context") {
         const featuredResponse = await fetch(`/api/subject-day-entries/${createdEntry.id}`, {
           method: "PATCH",
@@ -1421,6 +1393,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             ]
           )
         )
+        if (target.source === "continue-practice" && target.materialId != null) {
+          setContinuePayload((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  material:
+                    previous.material && previous.material.id === target.materialId
+                      ? previous.material
+                      : currentContinueMaterial && currentContinueMaterial.id === target.materialId
+                        ? currentContinueMaterial
+                        : previous.material,
+                }
+              : previous
+          )
+        }
         if (target.source === "continue-context") {
           setContinuePayload((previous) =>
             previous
@@ -1513,26 +1500,32 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setEntriesError("")
 
     try {
-      const response = await fetch("/api/subject-day-entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId: manualEntryTarget.subjectId,
-          sessionDate: manualEntryTarget.sessionDate,
-          weekNumber: manualEntryTarget.weekNumber,
-          weekdayIndex: manualEntryTarget.weekdayIndex,
-          materialId: manualEntryTarget.materialId ?? null,
-          transcriptText,
-          answerText,
-        }),
+      const createdEntry = await createPracticeTextEntry<SubjectDayEntry>({
+        subjectId: manualEntryTarget.subjectId,
+        sessionDate: manualEntryTarget.sessionDate,
+        weekNumber: manualEntryTarget.weekNumber,
+        weekdayIndex: manualEntryTarget.weekdayIndex,
+        materialId: manualEntryTarget.materialId ?? null,
+        transcriptText,
+        answerText,
       })
 
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo crear la duda."))
+      setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, createdEntry]))
+      if (manualEntryTarget.materialId != null) {
+        setContinuePayload((previous) =>
+          previous
+            ? {
+                ...previous,
+                material:
+                  previous.material && previous.material.id === manualEntryTarget.materialId
+                    ? previous.material
+                    : currentContinueMaterial && currentContinueMaterial.id === manualEntryTarget.materialId
+                      ? currentContinueMaterial
+                      : previous.material,
+              }
+            : previous
+        )
       }
-
-      setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, payload as SubjectDayEntry]))
       closeAnswerDialog()
     } catch (error) {
       console.error("Failed to create manual entry:", error)
@@ -3863,6 +3856,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
             <div className="pointer-events-none absolute bottom-4 right-4">
               <div className="pointer-events-auto flex flex-col items-center gap-3">
+                {!currentContinueMaterial ? (
+                  <div className="max-w-xs rounded-2xl border border-amber-300/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 shadow-sm">
+                    No hay un PDF de practica activo para guardar audio o texto.
+                  </div>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
