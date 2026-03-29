@@ -61,6 +61,49 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
 }
 
+function getMissingMetadataColumnResponse(body: Record<string, unknown>) {
+  if ("customTitle" in body) {
+    return NextResponse.json(
+      {
+        error:
+          "No se puede guardar el nombre de la duda porque falta aplicar scripts/006-add-subject-day-entry-metadata.sql en Neon (columna custom_title).",
+        code: "MISSING_CUSTOM_TITLE_COLUMN",
+      },
+      { status: 409 }
+    )
+  }
+
+  if ("practiceState" in body) {
+    return NextResponse.json(
+      {
+        error:
+          "No se puede guardar el estado de practica porque falta aplicar scripts/006-add-subject-day-entry-metadata.sql en Neon (columna practice_state).",
+        code: "MISSING_PRACTICE_STATE_COLUMN",
+      },
+      { status: 409 }
+    )
+  }
+
+  if ("isFeatured" in body) {
+    return NextResponse.json(
+      {
+        error:
+          "No se puede guardar el destacado porque faltan las migraciones de metadata de subject_day_entries en Neon (scripts/006 y/o 007).",
+        code: "MISSING_ENTRY_METADATA_COLUMNS",
+      },
+      { status: 409 }
+    )
+  }
+
+  return NextResponse.json(
+    {
+      error: "Falta ejecutar scripts/006-add-subject-day-entry-metadata.sql en Neon para usar esta funcion.",
+      code: "MISSING_ENTRY_METADATA_COLUMNS",
+    },
+    { status: 409 }
+  )
+}
+
 async function withLinks(row: EntryRow | null) {
   if (!row) return null
 
@@ -164,7 +207,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       ` as EntryRow[]
     } catch (error) {
       const isTryingNewFields = "customTitle" in body || practiceState !== undefined || isFeatured !== undefined
-      if (!isMissingColumn(error) || isTryingNewFields) {
+      if (isMissingColumn(error) && isTryingNewFields) {
+        return getMissingMetadataColumnResponse(body as Record<string, unknown>)
+      }
+
+      if (!isMissingColumn(error)) {
         throw error
       }
 
@@ -194,10 +241,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       )
     }
     if (isMissingColumn(error)) {
-      return NextResponse.json(
-        { error: "Falta ejecutar scripts/006-add-subject-day-entry-metadata.sql en Neon para usar esta funcion." },
-        { status: 409 }
-      )
+      return getMissingMetadataColumnResponse({})
     }
     return NextResponse.json({ error: "Failed to update entry" }, { status: 500 })
   }

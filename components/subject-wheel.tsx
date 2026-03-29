@@ -467,7 +467,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isCopyingEntries, setIsCopyingEntries] = useState(false)
   const [practiceSectionView, setPracticeSectionView] = useState<"theory" | "exercises">("theory")
   const [exerciseWeeklyScopeEnabled, setExerciseWeeklyScopeEnabled] = useState(false)
+  const [dialogDateKey, setDialogDateKey] = useState(getTodayDateString())
   const [subjectViewDateOverride, setSubjectViewDateOverride] = useState<string | null>(null)
+  const [dialogShowAllSubjectsForDay, setDialogShowAllSubjectsForDay] = useState(false)
   const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
   const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
@@ -516,10 +518,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const wheelTextColor = currentAppTheme === "night" ? "#f2f5fb" : "white"
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
-    currentDateKey: string
+    dialogDateKey: string
     practiceSectionView: "theory" | "exercises"
     exerciseWeeklyScopeEnabled: boolean
     subjectViewDateOverride: string | null
+    dialogShowAllSubjectsForDay: boolean
     selectedPracticeMaterialId: number | null
   } | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
@@ -562,16 +565,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const subjectDayDataRequestIdRef = useRef(0)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
-  const selectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
-  const selectedWeekNumber = useMemo(() => getWeekNumberForDate(selectedDate), [selectedDate])
-  const weekDates = useMemo(() => getWeekDates(selectedWeekNumber), [selectedWeekNumber])
-  const selectedWeekNumberRef = useRef(selectedWeekNumber)
+  const homeSelectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
+  const homeSelectedWeekNumber = useMemo(() => getWeekNumberForDate(homeSelectedDate), [homeSelectedDate])
+  const homeSelectedWeekNumberRef = useRef(homeSelectedWeekNumber)
+  const dialogSelectedDate = useMemo(() => parseDateKey(dialogDateKey), [dialogDateKey])
+  const dialogSelectedWeekNumber = useMemo(() => getWeekNumberForDate(dialogSelectedDate), [dialogSelectedDate])
+  const dialogWeekDates = useMemo(() => getWeekDates(dialogSelectedWeekNumber), [dialogSelectedWeekNumber])
   const currentCalendarWeekRef = useRef(currentCalendarWeek)
   const previousCalendarWeekRef = useRef(currentCalendarWeek)
-  const currentDayIndex = weekDates.findIndex((date) => formatDateKey(date) === currentDateKey)
-  const subjectDialogDateKey = subjectViewDateOverride ?? currentDateKey
-  const subjectDialogDayIndex = weekDates.findIndex((date) => formatDateKey(date) === subjectDialogDateKey)
-  const lastVisibleDayIndex = weekDates.reduce((lastIndex, date, index) => {
+  const subjectDialogDateKey = subjectViewDateOverride ?? dialogDateKey
+  const subjectDialogDayIndex = dialogWeekDates.findIndex((date) => formatDateKey(date) === subjectDialogDateKey)
+  const lastVisibleDayIndex = dialogWeekDates.reduce((lastIndex, date, index) => {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
   const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
@@ -590,8 +594,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [])
 
   useEffect(() => {
-    selectedWeekNumberRef.current = selectedWeekNumber
-  }, [selectedWeekNumber])
+    homeSelectedWeekNumberRef.current = homeSelectedWeekNumber
+  }, [homeSelectedWeekNumber])
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -599,11 +603,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   useEffect(() => {
     const previousWeekNumber = previousCalendarWeekRef.current
-    if (currentCalendarWeek > previousWeekNumber && selectedWeekNumber < currentCalendarWeek) {
+    if (currentCalendarWeek > previousWeekNumber && homeSelectedWeekNumber < currentCalendarWeek) {
       setCurrentDateKey(todayKey)
     }
     previousCalendarWeekRef.current = currentCalendarWeek
-  }, [currentCalendarWeek, selectedWeekNumber, todayKey])
+  }, [currentCalendarWeek, homeSelectedWeekNumber, todayKey])
 
   useEffect(() => {
     const loadFromDatabase = async () => {
@@ -618,7 +622,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           const completedSubjectsData = session.completed_subjects || {}
           const completedIds = Object.keys(completedSubjectsData)
           const nextShowAllSubjects = Boolean(session.show_all_subjects)
-          const normalized = normalizeSubjectsForDay(completedIds, selectedDate, nextShowAllSubjects, visibleSubjects)
+          const normalized = normalizeSubjectsForDay(completedIds, homeSelectedDate, nextShowAllSubjects, visibleSubjects)
           setShowAllSubjectsForDay(nextShowAllSubjects)
           setAllCompletedSubjectIds(completedIds)
           setActiveSubjects(normalized.activeSubjects)
@@ -626,14 +630,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         } else {
           setShowAllSubjectsForDay(false)
           setAllCompletedSubjectIds([])
-          setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false, visibleSubjects))
+          setActiveSubjects(getDisplaySubjectsForDate(homeSelectedDate, false, visibleSubjects))
           setCompletedSubjects([])
         }
       } catch (error) {
         console.error("Failed to load from database:", error)
         setShowAllSubjectsForDay(false)
         setAllCompletedSubjectIds([])
-        setActiveSubjects(getDisplaySubjectsForDate(selectedDate, false, visibleSubjects))
+        setActiveSubjects(getDisplaySubjectsForDate(homeSelectedDate, false, visibleSubjects))
         setCompletedSubjects([])
       } finally {
         setHistory([])
@@ -647,7 +651,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
 
     loadFromDatabase()
-  }, [currentDateKey, selectedDate, visibleSubjects])
+  }, [currentDateKey, homeSelectedDate, visibleSubjects])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -763,7 +767,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
       if (e.ctrlKey && e.key === "Enter") {
         e.preventDefault()
-        if (selectedWeekNumberRef.current < currentCalendarWeekRef.current + 1) {
+        if (homeSelectedWeekNumberRef.current < currentCalendarWeekRef.current + 1) {
           setIsNextWeekDialogOpen(true)
         }
         return
@@ -837,11 +841,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     try {
       const entriesParams = new URLSearchParams({
         subjectId: currentSubject.id,
-        weekNumber: String(selectedWeekNumber),
+        weekNumber: String(dialogSelectedWeekNumber),
       })
 
       if (!isWeeklyExercisesScope) {
-        entriesParams.set("sessionDate", currentDateKey)
+        entriesParams.set("sessionDate", subjectDialogDateKey)
       }
 
       const materialRequestUrls =
@@ -849,21 +853,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           ? [
               `/api/subject-day-materials?${new URLSearchParams({
                 subjectId: currentSubject.id,
-                weekNumber: String(selectedWeekNumber),
+                weekNumber: String(dialogSelectedWeekNumber),
                 scope: "week",
                 materialType: "theory",
               }).toString()}`,
               `/api/subject-day-materials?${new URLSearchParams({
                 subjectId: currentSubject.id,
-                weekNumber: String(selectedWeekNumber),
+                weekNumber: String(dialogSelectedWeekNumber),
                 scope: "week",
                 materialType: "practice",
               }).toString()}`,
             ]
           : [`/api/subject-day-materials?${new URLSearchParams({
               subjectId: currentSubject.id,
-              weekNumber: String(selectedWeekNumber),
-              sessionDate: currentDateKey,
+              weekNumber: String(dialogSelectedWeekNumber),
+              sessionDate: subjectDialogDateKey,
             }).toString()}`]
 
       const [entriesResult, ...materialResults] = await Promise.all([
@@ -936,7 +940,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setIsEntriesLoading(false)
       setIsMaterialsLoading(false)
     }
-  }, [currentDateKey, currentSubject, isDialogOpen, isWeeklyExercisesScope, practiceSectionView, selectedWeekNumber, subjectDialogDateKey])
+  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, isWeeklyExercisesScope, practiceSectionView, subjectDialogDateKey])
 
   useEffect(() => {
     void loadSubjectDayData()
@@ -953,7 +957,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       const subjectId = typeof payload.subjectId === "string" ? payload.subjectId : ""
       const sessionDate = typeof payload.sessionDate === "string" ? payload.sessionDate : ""
       const weekNumber = Number(payload.weekNumber)
-      if (subjectId !== currentSubject.id || weekNumber !== selectedWeekNumber) return
+      if (subjectId !== currentSubject.id || weekNumber !== dialogSelectedWeekNumber) return
       if (!isWeeklyExercisesScope && sessionDate !== subjectDialogDateKey) return
 
       void loadSubjectDayData()
@@ -978,7 +982,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       channel?.close()
       window.removeEventListener("storage", handleStorage)
     }
-  }, [currentSubject, isDialogOpen, isWeeklyExercisesScope, loadSubjectDayData, selectedWeekNumber, subjectDialogDateKey])
+  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, isWeeklyExercisesScope, loadSubjectDayData, subjectDialogDateKey])
 
   useEffect(() => {
     return () => {
@@ -1112,6 +1116,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
     setSubjectViewDateOverride(null)
+    setDialogShowAllSubjectsForDay(showAllSubjectsForDay)
     setSelectedPracticeMaterialId(null)
     setIsUploadingMaterialType(null)
     setIsLinkDialogOpen(false)
@@ -1148,6 +1153,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const handleSubjectClick = (subject: Subject) => {
     setCurrentSubject(subject)
+    setDialogDateKey(currentDateKey)
     resetSubjectUiState()
     setIsDialogOpen(true)
   }
@@ -1158,7 +1164,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (!subject) return
 
     setCurrentSubject(subject)
-    setCurrentDateKey(dateKey)
+    setDialogDateKey(dateKey)
     resetSubjectUiState()
     setIsReviewOpen(false)
     setIsDialogOpen(true)
@@ -1185,38 +1191,39 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const moveDay = async (direction: -1 | 1) => {
     await flushPendingFeaturedUpdate()
     const nextIndex = subjectDialogDayIndex + direction
-    if (nextIndex < 0 || nextIndex >= weekDates.length || nextIndex > lastVisibleDayIndex) return
-    const nextDateKey = formatDateKey(weekDates[nextIndex])
+    if (nextIndex < 0 || nextIndex >= dialogWeekDates.length || nextIndex > lastVisibleDayIndex) return
+    const nextDateKey = formatDateKey(dialogWeekDates[nextIndex])
     if (subjectViewDateOverride) {
       setSubjectViewDateOverride(nextDateKey)
     } else {
-      setCurrentDateKey(nextDateKey)
+      setDialogDateKey(nextDateKey)
     }
     setSelectedPracticeMaterialId(null)
   }
 
   const moveWeek = async (direction: -1 | 1) => {
     await flushPendingFeaturedUpdate()
-    const nextDate = parseDateKey(currentDateKey)
+    const nextDate = parseDateKey(dialogDateKey)
     nextDate.setDate(nextDate.getDate() + direction * 7)
 
     const nextWeekNumber = getWeekNumberForDate(nextDate)
     const latestWeekNumber = getCurrentWeekNumber()
     if (nextWeekNumber < 0 || nextWeekNumber > latestWeekNumber) return
 
-    setCurrentDateKey(formatDateKey(nextDate))
+    setDialogDateKey(formatDateKey(nextDate))
   }
 
   const openWeekAudioDay = async (dateKey: string) => {
     await flushPendingFeaturedUpdate()
     setStackedDayViewReturnState({
-      currentDateKey,
+      dialogDateKey,
       practiceSectionView,
       exerciseWeeklyScopeEnabled,
       subjectViewDateOverride,
+      dialogShowAllSubjectsForDay,
       selectedPracticeMaterialId,
     })
-    setCurrentDateKey(dateKey)
+    setDialogDateKey(dateKey)
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
     setSubjectViewDateOverride(null)
@@ -1232,10 +1239,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const closeSubjectDialogOrReturn = async () => {
     if (stackedDayViewReturnState) {
       await flushPendingFeaturedUpdate()
-      setCurrentDateKey(stackedDayViewReturnState.currentDateKey)
+      setDialogDateKey(stackedDayViewReturnState.dialogDateKey)
       setPracticeSectionView(stackedDayViewReturnState.practiceSectionView)
       setExerciseWeeklyScopeEnabled(stackedDayViewReturnState.exerciseWeeklyScopeEnabled)
       setSubjectViewDateOverride(stackedDayViewReturnState.subjectViewDateOverride)
+      setDialogShowAllSubjectsForDay(stackedDayViewReturnState.dialogShowAllSubjectsForDay)
       setSelectedPracticeMaterialId(stackedDayViewReturnState.selectedPracticeMaterialId)
       setStackedDayViewReturnState(null)
       return
@@ -1394,7 +1402,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         createdEntry = featuredPayload as SubjectDayEntry
       }
 
-      if (currentSubject?.id === target.subjectId && currentDateKey === target.sessionDate) {
+      if (currentSubject?.id === target.subjectId && subjectDialogDateKey === target.sessionDate) {
         setEntries((previousEntries) =>
           sortSubjectDayEntries(
             [
@@ -1902,7 +1910,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const subjectSnapshot = currentSubject
     const subjectId = subjectSnapshot.id
     const subjectName = getSubjectDisplayName(subjectSnapshot)
-    const weekNumber = selectedWeekNumber
+    const weekNumber = dialogSelectedWeekNumber
     const sessionDate = subjectDialogDateKey
     const weekdayIndex = subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0
     const baseOrderIndex =
@@ -2030,7 +2038,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       const params = new URLSearchParams({
         subjectId: currentSubject.id,
         sessionDate: subjectDialogDateKey,
-        weekNumber: String(selectedWeekNumber),
+        weekNumber: String(dialogSelectedWeekNumber),
       })
 
       const response = await fetch(`/api/subject-day-materials/next-practice?${params.toString()}`)
@@ -2102,7 +2110,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         ? getNextUncheckedPracticeMaterial(nextMaterials, {
             subjectId: currentSubject.id,
             sessionDate: subjectDialogDateKey,
-            weekNumber: selectedWeekNumber,
+            weekNumber: dialogSelectedWeekNumber,
           })
         : null
 
@@ -2206,7 +2214,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 material: getNextUncheckedPracticeMaterial(remainingMaterials, {
                   subjectId: currentSubject.id,
                   sessionDate: subjectDialogDateKey,
-                  weekNumber: selectedWeekNumber,
+                  weekNumber: dialogSelectedWeekNumber,
                 }),
               }
             : previous
@@ -2298,6 +2306,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     setIsPracticeOpen(false)
     setCurrentSubject(subject)
+    setDialogDateKey(currentDateKey)
     resetSubjectUiState()
     setExerciseWeeklyScopeEnabled(true)
     setPracticeSectionView("exercises")
@@ -2499,43 +2508,43 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const canRedo = historyIndex < history.length - 1
   const currentPracticeEntry = practiceVisibleEntries[currentPracticeIndex]
   const practiceDaySubjects = useMemo(
-    () => getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay, visibleSubjects),
-    [selectedDate, showAllSubjectsForDay, visibleSubjects]
+    () => getDisplaySubjectsForDate(dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects),
+    [dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects]
   )
   const latestWeekNumber = currentCalendarWeek
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
         [...materials, ...pendingMaterials].filter((material) =>
-          material.material_type === "theory" && (!isWeeklyExercisesScope || material.week_number === selectedWeekNumber)
+          material.material_type === "theory" && (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
         )
       ),
-    [isWeeklyExercisesScope, materials, pendingMaterials, selectedWeekNumber]
+    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials]
   )
   const practiceMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
         [...materials, ...pendingMaterials].filter((material) =>
-          material.material_type === "practice" && (!isWeeklyExercisesScope || material.week_number === selectedWeekNumber)
+          material.material_type === "practice" && (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
         )
       ),
-    [isWeeklyExercisesScope, materials, pendingMaterials, selectedWeekNumber]
+    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials]
   )
   const activeDayEntries = useMemo(
     () =>
       isWeeklyExercisesScope
-        ? entries.filter((entry) => entry.week_number === selectedWeekNumber)
+        ? entries.filter((entry) => entry.week_number === dialogSelectedWeekNumber)
         : entries.filter((entry) => entry.session_date === subjectDialogDateKey),
-    [entries, isWeeklyExercisesScope, selectedWeekNumber, subjectDialogDateKey]
+    [dialogSelectedWeekNumber, entries, isWeeklyExercisesScope, subjectDialogDateKey]
   )
   const theoryDayEntries = useMemo(
     () =>
       activeDayEntries.filter(
         (entry) =>
           entry.subject_day_material_id == null &&
-          (!isWeeklyExercisesScope || entry.week_number === selectedWeekNumber)
+          (!isWeeklyExercisesScope || entry.week_number === dialogSelectedWeekNumber)
       ),
-    [activeDayEntries, isWeeklyExercisesScope, selectedWeekNumber]
+    [activeDayEntries, dialogSelectedWeekNumber, isWeeklyExercisesScope]
   )
   const practiceEntriesByMaterialId = useMemo(() => {
     return entries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -2573,11 +2582,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       entries.find(
         (entry) =>
           entry.subject_id === currentSubject?.id &&
-          entry.week_number === selectedWeekNumber &&
+          entry.week_number === dialogSelectedWeekNumber &&
           entry.is_featured &&
           entry.subject_day_material_id == null
       ) ?? null,
-    [currentSubject?.id, entries, selectedWeekNumber]
+    [currentSubject?.id, dialogSelectedWeekNumber, entries]
   )
   const weekAudioDays = useMemo(() => {
     const grouped = activeDayEntries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -2604,7 +2613,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       getNextUncheckedPracticeMaterial(materials, {
         subjectId: currentSubject.id,
         sessionDate: subjectDialogDateKey,
-        weekNumber: selectedWeekNumber,
+        weekNumber: dialogSelectedWeekNumber,
       })
 
     const previousFeaturedEntry =
@@ -2616,7 +2625,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       material,
       previousFeaturedEntry,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentSubject, getLocalContinueFeaturedEntry, materials, selectedPracticeMaterial, selectedWeekNumber, subjectDialogDateKey])
+  }, [continuePayload?.previousFeaturedEntry, currentSubject, dialogSelectedWeekNumber, getLocalContinueFeaturedEntry, materials, selectedPracticeMaterial, subjectDialogDateKey])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -2632,7 +2641,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const handleReset = async () => {
     try {
-      const scheduledSubjects = getDisplaySubjectsForDate(selectedDate, showAllSubjectsForDay, visibleSubjects)
+      const scheduledSubjects = getDisplaySubjectsForDate(homeSelectedDate, showAllSubjectsForDay, visibleSubjects)
       const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
       
       // Reset local state
@@ -2659,23 +2668,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const handleShowAllSubjectsChange = (checked: boolean) => {
-    const nextCompletedIds = checked
-      ? allCompletedSubjectIds
-      : allCompletedSubjectIds.filter((subjectId) => getDisplaySubjectIdsForDate(selectedDate, false, visibleSubjectIds).includes(subjectId))
-
-    setShowAllSubjectsForDay(checked)
-    setAllCompletedSubjectIds(nextCompletedIds)
-    const normalized = normalizeSubjectsForDay(nextCompletedIds, selectedDate, checked, visibleSubjects)
-    setActiveSubjects(normalized.activeSubjects)
-    setCompletedSubjects(normalized.completedSubjects)
-    setHistory([])
-    setHistoryIndex(-1)
+    setDialogShowAllSubjectsForDay(checked)
 
     if (!checked && isDialogOpen && practiceSectionView === "exercises") {
-      if (currentSubject && !getDisplaySubjectIdsForDate(selectedDate, false, visibleSubjectIds).includes(currentSubject.id)) {
+      const visibleDialogSubjectIds = getDisplaySubjectIdsForDate(dialogSelectedDate, false, visibleSubjectIds)
+      if (currentSubject && !visibleDialogSubjectIds.includes(currentSubject.id)) {
         void closeSubjectDialog()
-      } else {
-        setExerciseWeeklyScopeEnabled(false)
       }
     }
   }
@@ -3021,7 +3019,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               type="button"
               onClick={() => void startNextWeek()}
-              disabled={selectedWeekNumber >= currentCalendarWeek + 1}
+              disabled={homeSelectedWeekNumber >= currentCalendarWeek + 1}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
               Comenzar semana {currentCalendarWeek + 1}
@@ -3039,7 +3037,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(-1) : moveDay(-1))}
               disabled={
                 practiceSectionView === "exercises" && !subjectViewDateOverride
-                  ? selectedWeekNumber <= 0
+                  ? dialogSelectedWeekNumber <= 0
                   : subjectDialogDayIndex <= 0
               }
               className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
@@ -3052,7 +3050,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
               disabled={
                 practiceSectionView === "exercises" && !subjectViewDateOverride
-                  ? selectedWeekNumber >= latestWeekNumber
+                  ? dialogSelectedWeekNumber >= latestWeekNumber
                   : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
               }
               className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
@@ -3265,7 +3263,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                 subjectId: currentSubject.id,
                                 subjectName: getSubjectDisplayName(currentSubject),
                                 sessionDate: subjectDialogDateKey,
-                                weekNumber: selectedWeekNumber,
+                                weekNumber: dialogSelectedWeekNumber,
                                 weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                               }),
                               "_blank",
@@ -3582,9 +3580,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       source: "subject-dialog",
                       subjectId: currentSubject.id,
                       subjectName: getSubjectDisplayName(currentSubject),
-                      sessionDate: currentDateKey,
-                      weekNumber: selectedWeekNumber,
-                      weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                      sessionDate: subjectDialogDateKey,
+                      weekNumber: dialogSelectedWeekNumber,
+                      weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                     }
 
                     void (isRecording ? stopRecording() : startRecording(target))
@@ -3606,9 +3604,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
                     startManualEntry({
                       subjectId: currentSubject.id,
-                      sessionDate: currentDateKey,
-                      weekNumber: selectedWeekNumber,
-                      weekdayIndex: currentDayIndex >= 0 ? currentDayIndex : 0,
+                      sessionDate: subjectDialogDateKey,
+                      weekNumber: dialogSelectedWeekNumber,
+                      weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                     })
                   }}
                   className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-sm sm:h-14 sm:w-14"
@@ -3695,7 +3693,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     subjectId: currentSubject.id,
                     subjectName: getSubjectDisplayName(currentSubject),
                     sessionDate: subjectDialogDateKey,
-                    weekNumber: selectedWeekNumber,
+                    weekNumber: dialogSelectedWeekNumber,
                     weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                     materialId: null,
                   }
@@ -3875,7 +3873,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       subjectId: currentSubject.id,
                       subjectName: getSubjectDisplayName(currentSubject),
                       sessionDate: subjectDialogDateKey,
-                      weekNumber: selectedWeekNumber,
+                      weekNumber: dialogSelectedWeekNumber,
                       weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                       materialId: currentContinueMaterial.id,
                     }
@@ -3901,7 +3899,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     startManualEntry({
                       subjectId: currentSubject.id,
                       sessionDate: subjectDialogDateKey,
-                      weekNumber: selectedWeekNumber,
+                      weekNumber: dialogSelectedWeekNumber,
                       weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
                       materialId: currentContinueMaterial.id,
                     })
@@ -4030,7 +4028,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <div className="space-y-3">
               <audio controls src={reviewAudio.url} className="w-full" />
               <p className="text-sm text-muted-foreground">
-                {recordingTarget?.subjectName || getSubjectDisplayName(currentSubject)} - {recordingTarget ? getWeekdayLabel(recordingTarget.sessionDate) : getWeekdayLabel(currentDateKey)} - {recordingTarget?.sessionDate || currentDateKey}
+                {recordingTarget?.subjectName || getSubjectDisplayName(currentSubject)} - {recordingTarget ? getWeekdayLabel(recordingTarget.sessionDate) : getWeekdayLabel(subjectDialogDateKey)} - {recordingTarget?.sessionDate || subjectDialogDateKey}
               </p>
             </div>
           ) : null}
@@ -4332,7 +4330,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 {practiceLaunchView === "exercises" ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Switch
-                      checked={showAllSubjectsForDay}
+                      checked={dialogShowAllSubjectsForDay}
                       onCheckedChange={handleShowAllSubjectsChange}
                       aria-label="Mostrar todas las materias del dia"
                       className="h-5 w-9 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input"
