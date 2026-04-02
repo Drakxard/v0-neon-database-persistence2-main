@@ -4,6 +4,9 @@ import { requireAuthSession } from "@/lib/authz"
 import { listSubjectSixDayVectors } from "@/lib/audio-coverage"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
 }
@@ -37,7 +40,8 @@ export async function GET(request: Request) {
           : getWeekNumberForDate(new Date())
 
     const includeInactive = searchParams.get("includeInactive") === "true"
-    const vectors = await listSubjectSixDayVectors({ weekNumber, includeInactive })
+    const subjectIds = auth.session?.isAdmin ? undefined : auth.session?.allowedSubjectIds ?? []
+    const vectors = await listSubjectSixDayVectors({ weekNumber, includeInactive, subjectIds })
     return NextResponse.json({ weekNumber, vectors })
   } catch (error) {
     console.error("GET /api/mobile/review/overview error:", error)
