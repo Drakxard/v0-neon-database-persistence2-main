@@ -73,6 +73,8 @@ async function verifySession(token: string, secret: string) {
 function isPublicPath(pathname: string) {
   return (
     pathname === "/login" ||
+    pathname === "/mobile/review" ||
+    pathname.startsWith("/api/mobile/review/") ||
     pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/api/google/oauth/") ||
     pathname.startsWith("/_next/") ||
