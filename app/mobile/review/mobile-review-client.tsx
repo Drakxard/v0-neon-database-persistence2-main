@@ -177,6 +177,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const [error, setError] = useState(initialError)
   const [accessError, setAccessError] = useState("")
   const [accessDeviceId, setAccessDeviceId] = useState("")
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null)
   const [isAccessLoading, setIsAccessLoading] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -210,6 +211,41 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     questionAudio.currentTime = 0
     void questionAudio.play().catch(() => {})
   }, [payload?.pair?.pairId])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const root = document.documentElement
+    const body = document.body
+    const previousRootBackground = root.style.backgroundColor
+    const previousBodyBackground = body.style.backgroundColor
+
+    const applyViewportHeight = () => {
+      const nextHeight = Math.round(
+        window.visualViewport?.height ??
+          window.innerHeight ??
+          root.clientHeight ??
+          body.clientHeight
+      )
+      setViewportHeight(nextHeight)
+    }
+
+    root.style.backgroundColor = "#f1e4a9"
+    body.style.backgroundColor = "#f1e4a9"
+
+    applyViewportHeight()
+    window.addEventListener("resize", applyViewportHeight)
+    window.addEventListener("orientationchange", applyViewportHeight)
+    window.visualViewport?.addEventListener("resize", applyViewportHeight)
+
+    return () => {
+      root.style.backgroundColor = previousRootBackground
+      body.style.backgroundColor = previousBodyBackground
+      window.removeEventListener("resize", applyViewportHeight)
+      window.removeEventListener("orientationchange", applyViewportHeight)
+      window.visualViewport?.removeEventListener("resize", applyViewportHeight)
+    }
+  }, [])
 
   const refreshCurrent = async () => {
     const response = await fetch(`/api/mobile/review/current?device=${encodeURIComponent(deviceId)}&sig=${encodeURIComponent(signature)}`)
@@ -441,13 +477,17 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       : "No hay un par disponible para la franja actual."
   const slotsForSelectedDay = slots.filter((slot) => slot.weekdayIndex === scheduleDayIndex)
   const scheduleDayLabel = WEEKDAY_OPTIONS.find((option) => Number(option.value) === scheduleDayIndex)?.label || "Dia"
+  const viewportStyle =
+    viewportHeight && Number.isFinite(viewportHeight)
+      ? { height: `${viewportHeight}px`, minHeight: `${viewportHeight}px` }
+      : { minHeight: "100vh" }
 
   if (requiresAccess) {
     return (
-      <main className="box-border h-full bg-[#f1e4a9] px-3 pt-2 text-black">
+      <main style={viewportStyle} className="box-border overflow-hidden bg-[#f1e4a9] px-3 pt-2 text-black">
         <div className="mx-auto flex h-full w-full max-w-[320px] box-border flex-col border-4 border-black bg-[#f1e4a9] px-4 py-5">
           <div className="grid flex-1 grid-rows-[auto_1fr_auto] gap-5">
-            <header className="text-center text-[2rem] leading-none">Repaso movil</header>
+            <header className="pt-1 text-center text-[1.9rem] leading-[1.05]">Repaso movil</header>
 
             <div className="space-y-5">
               <p className="text-sm leading-relaxed">Escribe un nombre simple para este dispositivo y la web lo recordara para entrar sola la proxima vez.</p>
@@ -486,12 +526,12 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   }
 
   return (
-    <main className="box-border h-full bg-[#f1e4a9] px-3 pt-2 text-black">
+    <main style={viewportStyle} className="box-border overflow-hidden bg-[#f1e4a9] px-3 pt-2 text-black">
       <div className="mx-auto flex h-full w-full max-w-[320px] box-border flex-col border-4 border-black bg-[#f1e4a9] px-3 py-4">
         <div className="grid flex-1 grid-rows-[auto_1fr_auto] gap-6">
-          <header className="grid grid-cols-[2.5rem_1fr_2.5rem] items-start gap-3">
+          <header className="grid min-h-11 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-3">
             <div aria-hidden="true" className="h-10 w-10" />
-            <div className="pt-1 text-center text-[2rem] leading-none text-black">{subjectTitle}</div>
+            <div className="text-center text-[1.9rem] leading-[1.05] text-black">{subjectTitle}</div>
             <button
               type="button"
               onClick={() => void openSlotsModal()}
@@ -506,7 +546,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
             </button>
           </header>
 
-          <div className="flex min-h-0 flex-col justify-start gap-7">
+          <div className="flex min-h-0 flex-col justify-start gap-7 overflow-hidden">
             <AudioRow
               label="Pregunta"
               audioRef={questionAudioRef}
