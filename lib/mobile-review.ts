@@ -2,7 +2,7 @@ import { neon } from "@neondatabase/serverless"
 
 import { downloadDriveFile } from "@/lib/google-drive"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
-import { getSubjectById } from "@/lib/subjects"
+import { getSubjectById, isValidSubjectId } from "@/lib/subjects"
 import { getCurrentWeekNumber, getWeekdayIndexFromDateKey } from "@/lib/subject-utils"
 
 const sql = neon(process.env.DATABASE_URL!)
@@ -35,6 +35,26 @@ type SlotRow = {
   weekday_index: number
   start_time: string
   end_time: string
+  enabled: boolean
+  priority: number
+}
+
+export type MobileReviewSlot = {
+  id: number
+  subjectId: string
+  subjectName: string
+  weekdayIndex: number
+  startTime: string
+  endTime: string
+  enabled: boolean
+  priority: number
+}
+
+export type MobileReviewSlotInput = {
+  subjectId: string
+  weekdayIndex: number
+  startTime: string
+  endTime: string
   enabled: boolean
   priority: number
 }
@@ -72,6 +92,67 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   }
 
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
+function mapSlotRow(row: SlotRow): MobileReviewSlot {
+  const subject = getSubjectById(row.subject_id)
+  return {
+    id: row.id,
+    subjectId: row.subject_id,
+    subjectName: subject?.name.replace(/\n/g, " ") || row.subject_id,
+    weekdayIndex: row.weekday_index,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    enabled: row.enabled,
+    priority: row.priority,
+  }
+}
+
+function normalizeTimeValue(value: string) {
+  return String(value || "").trim()
+}
+
+function isValidTimeValue(value: string) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value)
+}
+
+function compareTimeValue(a: string, b: string) {
+  return a.localeCompare(b)
+}
+
+export function validateMobileReviewSlotInput(input: Partial<MobileReviewSlotInput>) {
+  const subjectId = String(input.subjectId || "").trim()
+  if (!isValidSubjectId(subjectId)) {
+    throw new Error("Materia invalida.")
+  }
+
+  if (!Number.isInteger(input.weekdayIndex) || (input.weekdayIndex as number) < 0 || (input.weekdayIndex as number) > 6) {
+    throw new Error("Dia invalido.")
+  }
+
+  const startTime = normalizeTimeValue(input.startTime || "")
+  const endTime = normalizeTimeValue(input.endTime || "")
+  if (!isValidTimeValue(startTime) || !isValidTimeValue(endTime)) {
+    throw new Error("Las horas deben usar formato HH:MM.")
+  }
+
+  if (compareTimeValue(startTime, endTime) >= 0) {
+    throw new Error("La hora de inicio debe ser menor que la hora de fin.")
+  }
+
+  const priority = Number(input.priority)
+  if (!Number.isInteger(priority)) {
+    throw new Error("La prioridad debe ser un numero entero.")
+  }
+
+  return {
+    subjectId,
+    weekdayIndex: Number(input.weekdayIndex),
+    startTime,
+    endTime,
+    enabled: Boolean(input.enabled),
+    priority,
+  }
 }
 
 function mapPairRow(row: PairRow): MobileReviewPair {
@@ -123,6 +204,71 @@ export async function getActiveMobileReviewSlot(now = new Date()) {
   ` as SlotRow[]
 
   return rows[0] ?? null
+}
+
+export async function listMobileReviewSlots() {
+  const rows = await sql`
+    SELECT id, subject_id, weekday_index, start_time, end_time, enabled, priority
+    FROM mobile_review_slots
+    ORDER BY weekday_index ASC, start_time ASC, priority DESC, id ASC
+  ` as SlotRow[]
+
+  return rows.map(mapSlotRow)
+}
+
+export async function createMobileReviewSlot(input: Partial<MobileReviewSlotInput>) {
+  const normalized = validateMobileReviewSlotInput(input)
+
+  const rows = await sql`
+    INSERT INTO mobile_review_slots (
+      subject_id,
+      weekday_index,
+      start_time,
+      end_time,
+      enabled,
+      priority
+    ) VALUES (
+      ${normalized.subjectId},
+      ${normalized.weekdayIndex},
+      ${normalized.startTime},
+      ${normalized.endTime},
+      ${normalized.enabled},
+      ${normalized.priority}
+    )
+    RETURNING id, subject_id, weekday_index, start_time, end_time, enabled, priority
+  ` as SlotRow[]
+
+  return mapSlotRow(rows[0])
+}
+
+export async function updateMobileReviewSlot(slotId: number, input: Partial<MobileReviewSlotInput>) {
+  const normalized = validateMobileReviewSlotInput(input)
+
+  const rows = await sql`
+    UPDATE mobile_review_slots
+    SET
+      subject_id = ${normalized.subjectId},
+      weekday_index = ${normalized.weekdayIndex},
+      start_time = ${normalized.startTime},
+      end_time = ${normalized.endTime},
+      enabled = ${normalized.enabled},
+      priority = ${normalized.priority},
+      updated_at = NOW()
+    WHERE id = ${slotId}
+    RETURNING id, subject_id, weekday_index, start_time, end_time, enabled, priority
+  ` as SlotRow[]
+
+  return rows[0] ? mapSlotRow(rows[0]) : null
+}
+
+export async function deleteMobileReviewSlot(slotId: number) {
+  const rows = await sql`
+    DELETE FROM mobile_review_slots
+    WHERE id = ${slotId}
+    RETURNING id
+  ` as Array<{ id: number }>
+
+  return rows.length > 0
 }
 
 async function selectPairCandidate(params: {

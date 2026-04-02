@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react"
 
+import { SUBJECTS } from "@/lib/subjects"
+
 type MobileReviewPair = {
   pairId: string
   subjectId: string
@@ -37,11 +39,72 @@ type MobileReviewPayload = {
   status: MobileReviewStatus
 }
 
+type MobileReviewSlot = {
+  id: number
+  subjectId: string
+  subjectName: string
+  weekdayIndex: number
+  startTime: string
+  endTime: string
+  enabled: boolean
+  priority: number
+}
+
+type SlotFormState = {
+  id: number | null
+  subjectId: string
+  weekdayIndex: string
+  startTime: string
+  endTime: string
+  enabled: boolean
+  priority: string
+}
+
 type Props = {
   deviceId: string
   signature: string
   initialPayload: MobileReviewPayload | null
   initialError: string
+  requiresAccess?: boolean
+}
+
+const WEEKDAY_OPTIONS = [
+  { value: "0", label: "Lunes" },
+  { value: "1", label: "Martes" },
+  { value: "2", label: "Miercoles" },
+  { value: "3", label: "Jueves" },
+  { value: "4", label: "Viernes" },
+  { value: "5", label: "Sabado" },
+  { value: "6", label: "Domingo" },
+]
+
+function createEmptySlotForm(): SlotFormState {
+  return {
+    id: null,
+    subjectId: SUBJECTS[0]?.id || "",
+    weekdayIndex: "0",
+    startTime: "09:00",
+    endTime: "10:00",
+    enabled: true,
+    priority: "10",
+  }
+}
+
+function mapSlotToForm(slot: MobileReviewSlot): SlotFormState {
+  return {
+    id: slot.id,
+    subjectId: slot.subjectId,
+    weekdayIndex: String(slot.weekdayIndex),
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    enabled: slot.enabled,
+    priority: String(slot.priority),
+  }
+}
+
+function formatSlotLabel(slot: MobileReviewSlot) {
+  const weekday = WEEKDAY_OPTIONS.find((option) => option.value === String(slot.weekdayIndex))?.label || "Dia"
+  return `${weekday} ${slot.startTime}-${slot.endTime}`
 }
 
 function AudioRow({
@@ -77,12 +140,73 @@ function AudioRow({
   )
 }
 
-export function MobileReviewClient({ deviceId, signature, initialPayload, initialError }: Props) {
+function SlotRow({
+  slot,
+  onEdit,
+  onToggle,
+  onDelete,
+  busy,
+}: {
+  slot: MobileReviewSlot
+  onEdit: (slot: MobileReviewSlot) => void
+  onToggle: (slot: MobileReviewSlot) => void
+  onDelete: (slot: MobileReviewSlot) => void
+  busy: boolean
+}) {
+  return (
+    <div className="space-y-2 border-2 border-black/80 bg-[#f7ecc0] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold leading-tight">{slot.subjectName}</p>
+          <p className="text-sm leading-tight">{formatSlotLabel(slot)}</p>
+          <p className="text-xs leading-tight">Prioridad {slot.priority}</p>
+        </div>
+        <span className="text-xs uppercase">{slot.enabled ? "Activa" : "Pausada"}</span>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-sm">
+        <button type="button" onClick={() => onEdit(slot)} className="border border-black px-2 py-1" disabled={busy}>
+          Editar
+        </button>
+        <button type="button" onClick={() => onToggle(slot)} className="border border-black px-2 py-1" disabled={busy}>
+          {slot.enabled ? "Desactivar" : "Activar"}
+        </button>
+        <button type="button" onClick={() => onDelete(slot)} className="border border-black px-2 py-1" disabled={busy}>
+          Eliminar
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export function MobileReviewClient({ deviceId, signature, initialPayload, initialError, requiresAccess = false }: Props) {
   const [payload, setPayload] = useState<MobileReviewPayload | null>(initialPayload)
   const [error, setError] = useState(initialError)
+  const [accessError, setAccessError] = useState("")
+  const [accessDeviceId, setAccessDeviceId] = useState("")
+  const [isAccessLoading, setIsAccessLoading] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isSlotsLoading, setIsSlotsLoading] = useState(false)
+  const [slotsError, setSlotsError] = useState("")
+  const [slots, setSlots] = useState<MobileReviewSlot[]>([])
+  const [slotForm, setSlotForm] = useState<SlotFormState>(createEmptySlotForm)
+  const [isSavingSlot, setIsSavingSlot] = useState(false)
   const questionAudioRef = useRef<HTMLAudioElement | null>(null)
   const answerAudioRef = useRef<HTMLAudioElement | null>(null)
+
+  useEffect(() => {
+    if (!requiresAccess) return
+    try {
+      const rememberedDeviceId = window.localStorage.getItem("mobile-review-device-id") || ""
+      if (rememberedDeviceId) {
+        setAccessDeviceId(rememberedDeviceId)
+        void submitAccess(rememberedDeviceId, true)
+      }
+    } catch {
+      // Ignore localStorage access issues in constrained webviews.
+    }
+  }, [requiresAccess])
 
   useEffect(() => {
     if (!payload?.pair) return
@@ -91,6 +215,75 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     questionAudio.currentTime = 0
     void questionAudio.play().catch(() => {})
   }, [payload?.pair?.pairId])
+
+  const refreshCurrent = async () => {
+    const response = await fetch(`/api/mobile/review/current?device=${encodeURIComponent(deviceId)}&sig=${encodeURIComponent(signature)}`)
+    const nextPayload = (await response.json()) as MobileReviewPayload & { error?: string }
+    if (!response.ok) {
+      throw new Error(nextPayload.error || "No se pudo actualizar el repaso.")
+    }
+    setPayload({
+      pair: nextPayload.pair,
+      status: nextPayload.status,
+    })
+  }
+
+  const submitAccess = async (deviceValue?: string, silent = false) => {
+    const nextDeviceId = String(deviceValue ?? accessDeviceId).trim()
+    if (!nextDeviceId) {
+      if (!silent) setAccessError("Ingresa un nombre de dispositivo.")
+      return
+    }
+
+    setIsAccessLoading(true)
+    if (!silent) setAccessError("")
+    try {
+      const response = await fetch("/api/mobile/review/access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device: nextDeviceId }),
+      })
+      const result = (await response.json()) as { url?: string; deviceId?: string; error?: string }
+      if (!response.ok || !result.url || !result.deviceId) {
+        throw new Error(result.error || "No se pudo abrir el repaso movil.")
+      }
+
+      try {
+        window.localStorage.setItem("mobile-review-device-id", result.deviceId)
+      } catch {
+        // Ignore localStorage access issues in constrained webviews.
+      }
+
+      window.location.assign(result.url)
+    } catch (accessLoadError) {
+      setAccessError(accessLoadError instanceof Error ? accessLoadError.message : "No se pudo abrir el repaso movil.")
+    } finally {
+      setIsAccessLoading(false)
+    }
+  }
+
+  const loadSlots = async () => {
+    setIsSlotsLoading(true)
+    setSlotsError("")
+    try {
+      const response = await fetch(`/api/mobile/review/slots?device=${encodeURIComponent(deviceId)}&sig=${encodeURIComponent(signature)}`)
+      const slotsPayload = (await response.json()) as { slots?: MobileReviewSlot[]; error?: string }
+      if (!response.ok) {
+        throw new Error(slotsPayload.error || "No se pudieron cargar las franjas.")
+      }
+      setSlots(slotsPayload.slots || [])
+    } catch (slotsLoadError) {
+      setSlotsError(slotsLoadError instanceof Error ? slotsLoadError.message : "No se pudieron cargar las franjas.")
+    } finally {
+      setIsSlotsLoading(false)
+    }
+  }
+
+  const openSlotsModal = async () => {
+    setIsModalOpen(true)
+    setSlotForm(createEmptySlotForm())
+    await loadSlots()
+  }
 
   const playQuestion = () => {
     const audio = questionAudioRef.current
@@ -133,12 +326,172 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     }
   }
 
+  const handleSlotInputChange = (field: keyof SlotFormState, value: string | boolean) => {
+    setSlotForm((current) => ({
+      ...current,
+      [field]: value,
+    }))
+  }
+
+  const saveSlot = async () => {
+    setIsSavingSlot(true)
+    setSlotsError("")
+    try {
+      const body = {
+        device: deviceId,
+        sig: signature,
+        subjectId: slotForm.subjectId,
+        weekdayIndex: Number(slotForm.weekdayIndex),
+        startTime: slotForm.startTime,
+        endTime: slotForm.endTime,
+        enabled: slotForm.enabled,
+        priority: Number(slotForm.priority),
+      }
+
+      const response = await fetch(
+        slotForm.id ? `/api/mobile/review/slots/${slotForm.id}` : "/api/mobile/review/slots",
+        {
+          method: slotForm.id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      )
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        throw new Error(result.error || "No se pudo guardar la franja.")
+      }
+
+      setSlotForm(createEmptySlotForm())
+      await Promise.all([loadSlots(), refreshCurrent()])
+      setError("")
+    } catch (saveError) {
+      setSlotsError(saveError instanceof Error ? saveError.message : "No se pudo guardar la franja.")
+    } finally {
+      setIsSavingSlot(false)
+    }
+  }
+
+  const toggleSlot = async (slot: MobileReviewSlot) => {
+    setIsSavingSlot(true)
+    setSlotsError("")
+    try {
+      const response = await fetch(`/api/mobile/review/slots/${slot.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: deviceId,
+          sig: signature,
+          subjectId: slot.subjectId,
+          weekdayIndex: slot.weekdayIndex,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          enabled: !slot.enabled,
+          priority: slot.priority,
+        }),
+      })
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        throw new Error(result.error || "No se pudo actualizar la franja.")
+      }
+
+      await Promise.all([loadSlots(), refreshCurrent()])
+      setError("")
+    } catch (toggleError) {
+      setSlotsError(toggleError instanceof Error ? toggleError.message : "No se pudo actualizar la franja.")
+    } finally {
+      setIsSavingSlot(false)
+    }
+  }
+
+  const deleteSlot = async (slot: MobileReviewSlot) => {
+    setIsSavingSlot(true)
+    setSlotsError("")
+    try {
+      const response = await fetch(`/api/mobile/review/slots/${slot.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: deviceId,
+          sig: signature,
+        }),
+      })
+      const result = (await response.json()) as { error?: string }
+      if (!response.ok) {
+        throw new Error(result.error || "No se pudo eliminar la franja.")
+      }
+
+      if (slotForm.id === slot.id) {
+        setSlotForm(createEmptySlotForm())
+      }
+      await Promise.all([loadSlots(), refreshCurrent()])
+      setError("")
+    } catch (deleteError) {
+      setSlotsError(deleteError instanceof Error ? deleteError.message : "No se pudo eliminar la franja.")
+    } finally {
+      setIsSavingSlot(false)
+    }
+  }
+
   const subjectTitle = payload?.pair?.subjectName || payload?.status.subjectName || "Sin materia"
+
+  if (requiresAccess) {
+    return (
+      <main className="min-h-screen bg-[#f1e4a9] px-3 py-2 text-black">
+        <div className="mx-auto flex min-h-[calc(100vh-1rem)] w-full max-w-[320px] flex-col border-4 border-black bg-[#f1e4a9] px-4 py-6">
+          <div className="flex-1 space-y-5">
+            <header className="text-center text-[2rem] leading-none">Repaso movil</header>
+            <p className="text-sm leading-relaxed">Escribe un nombre simple para este dispositivo y la web lo recordara para entrar sola la proxima vez.</p>
+
+            <label className="block space-y-2 text-sm">
+              <span>Dispositivo</span>
+              <input
+                type="text"
+                value={accessDeviceId}
+                onChange={(event) => setAccessDeviceId(event.target.value)}
+                placeholder="celu-rafa"
+                className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-2 text-base"
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoComplete="off"
+              />
+            </label>
+
+            {accessError ? <p className="text-sm text-red-700">{accessError}</p> : null}
+          </div>
+
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => void submitAccess()}
+              disabled={isAccessLoading}
+              className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-3 text-left text-[1.4rem] leading-none disabled:opacity-60"
+            >
+              {isAccessLoading ? "Entrando..." : "Entrar"}
+            </button>
+          </div>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="min-h-screen bg-[#f1e4a9] px-3 py-2 text-black">
       <div className="mx-auto flex min-h-[calc(100vh-1rem)] w-full max-w-[320px] flex-col border-4 border-black bg-[#f1e4a9] px-3 py-4">
-        <header className="pb-5 text-center text-[2rem] leading-none text-black">{subjectTitle}</header>
+        <header className="relative pb-5">
+          <button
+            type="button"
+            onClick={() => void openSlotsModal()}
+            className="absolute right-0 top-0 grid h-10 w-10 place-items-center border-2 border-black bg-[#f7ecc0]"
+            aria-label="Configurar horarios"
+          >
+            <span className="relative block h-5 w-5 border-2 border-black">
+              <span className="absolute inset-x-0 top-0 h-1 border-b-2 border-black bg-black/15" />
+              <span className="absolute left-[3px] top-[-4px] h-2 w-[2px] bg-black" />
+              <span className="absolute right-[3px] top-[-4px] h-2 w-[2px] bg-black" />
+            </span>
+          </button>
+          <div className="px-10 text-center text-[2rem] leading-none text-black">{subjectTitle}</div>
+        </header>
 
         <div className="flex-1 space-y-10">
           <AudioRow
@@ -170,6 +523,131 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
           {isLoading ? "Cargando..." : "Siguiente pregunta"}
         </button>
       </div>
+
+      {isModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-3 py-4">
+          <div className="flex max-h-full w-full max-w-[360px] flex-col border-4 border-black bg-[#f1e4a9]">
+            <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
+              <h2 className="text-xl leading-none">Horarios</h2>
+              <button type="button" onClick={() => setIsModalOpen(false)} className="border border-black px-2 py-1 text-sm">
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto px-4 py-4">
+              <section className="space-y-3 border-2 border-black bg-[#f7ecc0] p-3">
+                <h3 className="text-sm font-semibold">{slotForm.id ? "Editar franja" : "Nueva franja"}</h3>
+
+                <label className="block space-y-1 text-sm">
+                  <span>Materia</span>
+                  <select
+                    value={slotForm.subjectId}
+                    onChange={(event) => handleSlotInputChange("subjectId", event.target.value)}
+                    className="w-full border border-black bg-white px-2 py-1"
+                  >
+                    {SUBJECTS.map((subject) => (
+                      <option key={subject.id} value={subject.id}>
+                        {subject.name.replace(/\n/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block space-y-1 text-sm">
+                  <span>Dia</span>
+                  <select
+                    value={slotForm.weekdayIndex}
+                    onChange={(event) => handleSlotInputChange("weekdayIndex", event.target.value)}
+                    className="w-full border border-black bg-white px-2 py-1"
+                  >
+                    {WEEKDAY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block space-y-1 text-sm">
+                    <span>Inicio</span>
+                    <input
+                      type="time"
+                      value={slotForm.startTime}
+                      onChange={(event) => handleSlotInputChange("startTime", event.target.value)}
+                      className="w-full border border-black bg-white px-2 py-1"
+                    />
+                  </label>
+
+                  <label className="block space-y-1 text-sm">
+                    <span>Fin</span>
+                    <input
+                      type="time"
+                      value={slotForm.endTime}
+                      onChange={(event) => handleSlotInputChange("endTime", event.target.value)}
+                      className="w-full border border-black bg-white px-2 py-1"
+                    />
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                  <label className="block space-y-1 text-sm">
+                    <span>Prioridad</span>
+                    <input
+                      type="number"
+                      step="1"
+                      value={slotForm.priority}
+                      onChange={(event) => handleSlotInputChange("priority", event.target.value)}
+                      className="w-full border border-black bg-white px-2 py-1"
+                    />
+                  </label>
+
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={slotForm.enabled}
+                      onChange={(event) => handleSlotInputChange("enabled", event.target.checked)}
+                    />
+                    <span>Activa</span>
+                  </label>
+                </div>
+
+                <div className="flex gap-2 text-sm">
+                  <button type="button" onClick={() => void saveSlot()} className="border border-black px-3 py-1" disabled={isSavingSlot}>
+                    {isSavingSlot ? "Guardando..." : slotForm.id ? "Guardar" : "Crear"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSlotForm(createEmptySlotForm())}
+                    className="border border-black px-3 py-1"
+                    disabled={isSavingSlot}
+                  >
+                    Nueva
+                  </button>
+                </div>
+
+                {slotsError ? <p className="text-sm text-red-700">{slotsError}</p> : null}
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold">Franjas cargadas</h3>
+                {isSlotsLoading ? <p className="text-sm">Cargando horarios...</p> : null}
+                {!isSlotsLoading && slots.length === 0 ? <p className="text-sm">Todavia no hay franjas.</p> : null}
+                {slots.map((slot) => (
+                  <SlotRow
+                    key={slot.id}
+                    slot={slot}
+                    onEdit={(selectedSlot) => setSlotForm(mapSlotToForm(selectedSlot))}
+                    onToggle={(selectedSlot) => void toggleSlot(selectedSlot)}
+                    onDelete={(selectedSlot) => void deleteSlot(selectedSlot)}
+                    busy={isSavingSlot}
+                  />
+                ))}
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }

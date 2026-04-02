@@ -12,14 +12,17 @@ export default async function MobileReviewPage({
   const params = await searchParams
   const deviceId = typeof params.device === "string" ? params.device.trim() : ""
   const signature = typeof params.sig === "string" ? params.sig.trim() : ""
+  const hasValidAccess = deviceId && verifyMobileReviewSignature(deviceId, signature)
 
-  if (!deviceId || !verifyMobileReviewSignature(deviceId, signature)) {
+  if (!hasValidAccess) {
     return (
-      <main className="grid min-h-screen place-items-center bg-[#f1e4a9] p-6 text-center text-black">
-        <div className="max-w-sm border-4 border-black bg-[#f1e4a9] px-6 py-8">
-          <p className="text-2xl">Acceso invalido</p>
-        </div>
-      </main>
+      <MobileReviewClient
+        deviceId=""
+        signature=""
+        initialPayload={null}
+        initialError=""
+        requiresAccess
+      />
     )
   }
 
@@ -37,6 +40,7 @@ export default async function MobileReviewPage({
         signature={signature}
         initialPayload={initialPayload}
         initialError=""
+        requiresAccess={false}
       />
     )
   } catch (error) {
@@ -63,6 +67,7 @@ export default async function MobileReviewPage({
           })),
         }}
         initialError={message}
+        requiresAccess={false}
       />
     )
   }
