@@ -3676,18 +3676,34 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       </Dialog>
 
       <Dialog open={isAnalysisOpen} onOpenChange={setIsAnalysisOpen}>
-        <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden border border-border bg-card text-foreground">
-          <DialogHeader className="space-y-2 text-left">
-            <DialogTitle className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              Cobertura minima util
-            </DialogTitle>
-            <DialogDescription className="text-sm text-muted-foreground">
-              Muestra que materias estas dejando atras segun su vector propio de 6 dias.
-            </DialogDescription>
+        <DialogContent
+          showCloseButton={false}
+          className="fixed inset-3 top-3 left-3 z-50 flex max-h-none w-auto max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-2xl border border-border bg-card p-0 text-foreground shadow-xl sm:inset-6"
+        >
+          <DialogHeader className="border-b border-border px-5 py-4 text-left sm:px-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2">
+                <DialogTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4 text-muted-foreground" />
+                  Cobertura minima util
+                </DialogTitle>
+                <DialogDescription className="max-w-3xl text-sm text-muted-foreground">
+                  Muestra que materias estas dejando atras segun su vector propio de 6 dias.
+                </DialogDescription>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAnalysisOpen(false)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                aria-label="Cerrar analisis"
+                title="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </DialogHeader>
 
-          <div className="space-y-4 overflow-y-auto pr-1">
+          <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
             {isVectorsLoading ? (
               <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -3700,7 +3716,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 {vectorsError ? <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-sm text-red-700">{vectorsError}</div> : null}
 
                 {!vectorsError ? (
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
                       <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Materias activas</p>
                       <p className="mt-2 text-2xl font-semibold text-foreground">{analysisSummary.activeCount}</p>
@@ -3729,11 +3745,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 ) : null}
 
                 {!vectorsError ? (
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-4 xl:grid-cols-2">
                     {activeVectorOverviews.map((vector) => (
                       <article
                         key={`${vector.subjectId}-${vector.weekNumber}`}
-                        className={`rounded-2xl border px-4 py-4 ${
+                        className={`rounded-2xl border px-5 py-5 ${
                           vector.severity === "red"
                             ? "border-red-300 bg-red-50"
                             : vector.severity === "yellow"
@@ -3753,7 +3769,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           </span>
                         </div>
 
-                        <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
+                        <div className="mt-4 grid gap-2 text-sm text-foreground md:grid-cols-2">
                           <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
                           <p>Ultima interaccion: {formatLastInteractionLabel(vector.lastInteractionAt)}</p>
                         </div>
