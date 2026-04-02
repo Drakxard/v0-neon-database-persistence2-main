@@ -24,6 +24,8 @@ type EntryRow = {
   answer_text: string | null
   custom_title: string | null
   practice_state: "erre" | null
+  pair_id: string | null
+  pair_role: "question" | "answer" | null
   is_featured: boolean
   created_at: string
   updated_at: string
@@ -205,7 +207,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
   try {
     if (sessionDate) {
       return await sql`
-        SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+        SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
           AND (${materialId ?? null}::INTEGER IS NULL OR subject_day_material_id = ${materialId ?? null})
@@ -214,7 +216,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
     }
 
     return await sql`
-      SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+      SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
         AND (${materialId ?? null}::INTEGER IS NULL OR subject_day_material_id = ${materialId ?? null})
@@ -225,7 +227,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
 
     if (sessionDate) {
       return await sql`
-        SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+        SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
         ORDER BY session_date ASC, order_index ASC, id ASC
@@ -233,7 +235,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
     }
 
     return await sql`
-      SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+      SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
       ORDER BY session_date ASC, order_index ASC, id ASC
@@ -244,7 +246,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
 async function selectAllEntries(subjectId: string) {
   try {
     return await sql`
-      SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+      SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
       ORDER BY week_number ASC, session_date ASC, is_featured DESC, order_index ASC, id ASC
@@ -253,7 +255,7 @@ async function selectAllEntries(subjectId: string) {
     if (!isMissingColumn(error)) throw error
 
     return await sql`
-      SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+      SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
       ORDER BY week_number ASC, session_date ASC, order_index ASC, id ASC
@@ -395,7 +397,7 @@ export async function POST(request: Request) {
           ${answerText || null},
           ${customTitle || null}
         )
-        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
       if (isForeignKeyViolation(error) && resolvedMaterialId != null) {
@@ -430,7 +432,7 @@ export async function POST(request: Request) {
             ${answerText || null},
             ${customTitle || null}
           )
-          RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
+          RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, is_featured, created_at, updated_at
         ` as EntryRow[]
       } else if (!isMissingColumn(error)) {
         throw error
@@ -464,7 +466,7 @@ export async function POST(request: Request) {
             '',
             ${answerText || null}
           )
-          RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+          RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
         ` as EntryRow[]
       }
     }

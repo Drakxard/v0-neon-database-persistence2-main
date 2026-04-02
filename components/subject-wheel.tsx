@@ -74,6 +74,8 @@ interface SubjectDayEntry {
   custom_title: string | null
   display_title: string
   practice_state: "erre" | null
+  pair_id: string | null
+  pair_role: "question" | "answer" | null
   is_featured: boolean
   external_links: SubjectDayEntryLink[]
   created_at: string
@@ -187,6 +189,21 @@ type ContinuePayload = {
   material: SubjectDayMaterial | null
   previousFeaturedEntry: SubjectDayEntry | null
 }
+
+type ContinuePairGroup = {
+  kind: "pair"
+  pairId: string
+  titleEntry: SubjectDayEntry
+  questionEntry: SubjectDayEntry
+  answerEntry: SubjectDayEntry
+}
+
+type ContinueSingleGroup = {
+  kind: "single"
+  entry: SubjectDayEntry
+}
+
+type ContinueGroup = ContinuePairGroup | ContinueSingleGroup
 
 type SubjectVisibilityState = {
   activeSubjects: Subject[]
@@ -359,6 +376,56 @@ function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "cu
   const displayTitle = entry.display_title?.trim()
   if (displayTitle) return displayTitle
   return `Duda ${entry.order_index + 1}`
+}
+
+function buildContinueGroups(entries: SubjectDayEntry[]) {
+  const groups: ContinueGroup[] = []
+  const consumedIds = new Set<number>()
+  const pairBuckets = new Map<string, SubjectDayEntry[]>()
+
+  for (const entry of entries) {
+    if (entry.pair_id) {
+      const bucket = pairBuckets.get(entry.pair_id) ?? []
+      bucket.push(entry)
+      pairBuckets.set(entry.pair_id, bucket)
+    }
+  }
+
+  for (const entry of entries) {
+    if (consumedIds.has(entry.id)) continue
+
+    if (!entry.pair_id) {
+      groups.push({ kind: "single", entry })
+      consumedIds.add(entry.id)
+      continue
+    }
+
+    const bucket = pairBuckets.get(entry.pair_id) ?? []
+    const questionEntry = bucket.find((item) => item.pair_role === "question") ?? null
+    const answerEntry = bucket.find((item) => item.pair_role === "answer") ?? null
+
+    if (!questionEntry || !answerEntry) {
+      groups.push({ kind: "single", entry })
+      consumedIds.add(entry.id)
+      continue
+    }
+
+    if (consumedIds.has(questionEntry.id) || consumedIds.has(answerEntry.id)) {
+      continue
+    }
+
+    groups.push({
+      kind: "pair",
+      pairId: entry.pair_id,
+      titleEntry: questionEntry,
+      questionEntry,
+      answerEntry,
+    })
+    consumedIds.add(questionEntry.id)
+    consumedIds.add(answerEntry.id)
+  }
+
+  return groups
 }
 
 function entryHasAudio(entry: Pick<SubjectDayEntry, "drive_file_id" | "drive_mime_type">) {
@@ -1610,6 +1677,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     setIsUploadingAudio(true)
     setEntriesError("")
+    const createdEntryIds: number[] = []
 
     try {
       const createdEntries: SubjectDayEntry[] = []
@@ -1618,7 +1686,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         const slot = draft.slots[role]
         if (!slot) continue
 
-        let createdEntry = await createPracticeAudioEntry<SubjectDayEntry>({
+        const createdEntry = await createPracticeAudioEntry<SubjectDayEntry>({
           subjectId: draft.target.subjectId,
           subjectName: draft.target.subjectName,
           sessionDate: draft.target.sessionDate,
@@ -1630,13 +1698,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           pairId: draft.pairId,
           pairRole: role,
         })
-
-        const patchResponse = await fetch(`/api/subject-day-entries/${createdEntry.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customTitle: role === "question" ? "Pregunta" : "Respuesta" }),
-        })
-        createdEntry = (await requireOkJson(patchResponse, "No se pudo etiquetar el audio.")) as SubjectDayEntry
+        if (createdEntry.pair_id !== draft.pairId || createdEntry.pair_role !== role) {
+          throw new Error("La dupla de audio se guardo con metadata inconsistente.")
+        }
+        createdEntryIds.push(createdEntry.id)
         createdEntries.push(createdEntry)
       }
 
@@ -1647,6 +1712,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       cancelAudioPairReview()
     } catch (error) {
       console.error("Failed to upload audio pair:", error)
+      for (const createdEntryId of createdEntryIds) {
+        try {
+          await fetch(`/api/subject-day-entries/${createdEntryId}`, { method: "DELETE" })
+        } catch (cleanupError) {
+          console.error("Failed to cleanup partial continue audio pair:", cleanupError)
+        }
+      }
       setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar la dupla de audio.")
     } finally {
       setIsUploadingAudio(false)
@@ -1657,6 +1729,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setManualEntryTarget(null)
     setManualQuestionDraft("")
     setManualAnswerDraft("")
+    if (entry.pair_id) {
+      const pairEntries = entries.filter((item) => item.pair_id === entry.pair_id)
+      const questionEntry = pairEntries.find((item) => item.pair_role === "question") ?? entry
+      const answerEntry = pairEntries.find((item) => item.pair_role === "answer") ?? null
+      setEditingAnswerId(questionEntry.id)
+      setQuestionDrafts((previous) => ({
+        ...previous,
+        [questionEntry.id]: previous[questionEntry.id] ?? questionEntry.transcript_text,
+      }))
+      if (answerEntry) {
+        setAnswerDrafts((previous) => ({
+          ...previous,
+          [answerEntry.id]: previous[answerEntry.id] ?? answerEntry.transcript_text,
+        }))
+      }
+      return
+    }
+
     setEditingAnswerId(entry.id)
     setAnswerDrafts((previous) => ({
       ...previous,
@@ -1683,25 +1773,69 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const saveAnswer = async (entry: SubjectDayEntry) => {
-    const draft = (answerDrafts[entry.id] ?? entry.answer_text ?? "").trim()
-    const questionDraft = (questionDrafts[entry.id] ?? entry.transcript_text).trim()
+    const pairEntries = entry.pair_id ? entries.filter((item) => item.pair_id === entry.pair_id) : []
+    const questionEntry = pairEntries.find((item) => item.pair_role === "question") ?? entry
+    const answerEntry = pairEntries.find((item) => item.pair_role === "answer") ?? null
+    const draft = answerEntry
+      ? (answerDrafts[answerEntry.id] ?? answerEntry.transcript_text).trim()
+      : (answerDrafts[entry.id] ?? entry.answer_text ?? "").trim()
+    const questionDraft = (questionDrafts[questionEntry.id] ?? questionEntry.transcript_text).trim()
     setIsSavingAnswerId(entry.id)
 
     try {
-      const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answerText: draft || null, transcriptText: questionDraft || entry.transcript_text }),
-      })
+      if (answerEntry) {
+        const [questionResponse, answerResponse] = await Promise.all([
+          fetch(`/api/subject-day-entries/${questionEntry.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcriptText: questionDraft || questionEntry.transcript_text }),
+          }),
+          fetch(`/api/subject-day-entries/${answerEntry.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ transcriptText: draft || answerEntry.transcript_text }),
+          }),
+        ])
 
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo guardar la respuesta."))
+        const questionPayload = await questionResponse.json()
+        const answerPayload = await answerResponse.json()
+        if (!questionResponse.ok) {
+          throw new Error(getErrorMessage(questionPayload, "No se pudo guardar la pregunta."))
+        }
+        if (!answerResponse.ok) {
+          throw new Error(getErrorMessage(answerPayload, "No se pudo guardar la respuesta."))
+        }
+
+        setEntries((previousEntries) =>
+          sortSubjectDayEntries(
+            previousEntries.map((item) => {
+              if (item.id === questionEntry.id) return questionPayload as SubjectDayEntry
+              if (item.id === answerEntry.id) return answerPayload as SubjectDayEntry
+              return item
+            })
+          )
+        )
+        setRevealedAnswers((previous) => ({
+          ...previous,
+          [questionEntry.id]: false,
+          [answerEntry.id]: false,
+        }))
+      } else {
+        const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answerText: draft || null, transcriptText: questionDraft || entry.transcript_text }),
+        })
+
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo guardar la respuesta."))
+        }
+
+        setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
+        setRevealedAnswers((previous) => ({ ...previous, [entry.id]: false }))
       }
-
-      setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
       closeAnswerDialog()
-      setRevealedAnswers((previous) => ({ ...previous, [entry.id]: false }))
     } catch (error) {
       console.error("Failed to save answer:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo guardar la respuesta.")
@@ -1766,10 +1900,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const startTitleEdit = (entry: SubjectDayEntry) => {
-    setEditingTitleId(entry.id)
+    const titleEntry =
+      entry.pair_id
+        ? entries.find((item) => item.pair_id === entry.pair_id && item.pair_role === "question") ?? entry
+        : entry
+    setEditingTitleId(titleEntry.id)
     setTitleDrafts((previous) => ({
       ...previous,
-      [entry.id]: previous[entry.id] ?? getEntryDisplayTitle(entry),
+      [titleEntry.id]: previous[titleEntry.id] ?? getEntryDisplayTitle(titleEntry),
     }))
   }
 
@@ -1778,18 +1916,45 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSavingTitleId(entry.id)
 
     try {
-      const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customTitle: draft || null }),
-      })
+      if (entry.pair_id) {
+        const pairEntries = entries.filter((item) => item.pair_id === entry.pair_id)
+        const results = await Promise.all(
+          pairEntries.map((pairEntry) =>
+            fetch(`/api/subject-day-entries/${pairEntry.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ customTitle: draft || null }),
+            }).then(async (response) => ({
+              ok: response.ok,
+              payload: await response.json(),
+              id: pairEntry.id,
+            }))
+          )
+        )
 
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo guardar el nombre de la duda."))
+        const failed = results.find((result) => !result.ok)
+        if (failed) {
+          throw new Error(getErrorMessage(failed.payload, "No se pudo guardar el nombre de la dupla."))
+        }
+
+        const byId = new Map(results.map((result) => [result.id, result.payload as SubjectDayEntry]))
+        setEntries((previousEntries) =>
+          sortSubjectDayEntries(previousEntries.map((item) => byId.get(item.id) ?? item))
+        )
+      } else {
+        const response = await fetch(`/api/subject-day-entries/${entry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customTitle: draft || null }),
+        })
+
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo guardar el nombre de la duda."))
+        }
+
+        setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
       }
-
-      setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => (item.id === entry.id ? (payload as SubjectDayEntry) : item))))
       setEditingTitleId(null)
     } catch (error) {
       console.error("Failed to save entry title:", error)
@@ -1832,8 +1997,36 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const copyContinueEntries = async () => {
+    if (continueGroups.length === 0 || isCopyingEntries) return
+
+    setIsCopyingEntries(true)
     setContinueError("")
-    await copyEntries(continueMaterialEntries, "Contenido copiado al portapapeles", setContinueError)
+    try {
+      const payload = continueGroups
+        .map((group) => {
+          if (group.kind === "pair") {
+            const title = getEntryDisplayTitle(group.titleEntry)
+            const question = group.questionEntry.transcript_text?.trim() || ""
+            const answer = group.answerEntry.transcript_text?.trim() || ""
+            return `${title}\nPregunta: ${question}\nRespuesta: ${answer}`
+          }
+
+          const title = getEntryDisplayTitle(group.entry)
+          const transcript = group.entry.transcript_text?.trim() || ""
+          const answer = group.entry.answer_text?.trim() || ""
+          return `${title}\nTranscripcion: ${transcript}\nRespuesta: ${answer}`
+        })
+        .join("\n\n")
+
+      await navigator.clipboard.writeText(payload)
+      toast({ title: "Copiado", description: "Contenido copiado al portapapeles" })
+    } catch (error) {
+      console.error("Failed to copy continue entries:", error)
+      setContinueError("No se pudieron copiar las dudas.")
+      toast({ title: "Error", description: "No se pudieron copiar las dudas.", variant: "destructive" })
+    } finally {
+      window.setTimeout(() => setIsCopyingEntries(false), 600)
+    }
   }
 
   const copyEntriesForMaterial = async (materialId: number) => {
@@ -1881,42 +2074,53 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         throw new Error(getErrorMessage(payload, "No se pudo borrar la duda."))
       }
 
+      const deletedIds = Array.isArray(payload?.ids) && payload.ids.length > 0 ? payload.ids : [entry.id]
+      const deletedIdSet = new Set<number>(deletedIds)
+
       setEntries((previousEntries) =>
-        sortSubjectDayEntries(previousEntries.filter((item) => item.id !== entry.id))
+        sortSubjectDayEntries(previousEntries.filter((item) => !deletedIdSet.has(item.id)))
       )
-      setPracticeEntries((previousEntries) => previousEntries.filter((item) => item.id !== entry.id))
-      setPracticeVisibleEntries((previousEntries) => previousEntries.filter((item) => item.id !== entry.id))
+      setPracticeEntries((previousEntries) => previousEntries.filter((item) => !deletedIdSet.has(item.id)))
+      setPracticeVisibleEntries((previousEntries) => previousEntries.filter((item) => !deletedIdSet.has(item.id)))
 
       setRevealedAnswers((previous) => {
         const next = { ...previous }
-        delete next[entry.id]
+        for (const deletedId of deletedIds) {
+          delete next[deletedId]
+        }
         return next
       })
       setAnswerDrafts((previous) => {
         const next = { ...previous }
-        delete next[entry.id]
+        for (const deletedId of deletedIds) {
+          delete next[deletedId]
+        }
         return next
       })
       setQuestionDrafts((previous) => {
         const next = { ...previous }
-        delete next[entry.id]
+        for (const deletedId of deletedIds) {
+          delete next[deletedId]
+        }
         return next
       })
       setTitleDrafts((previous) => {
         const next = { ...previous }
-        delete next[entry.id]
+        for (const deletedId of deletedIds) {
+          delete next[deletedId]
+        }
         return next
       })
 
-      if (editingAnswerId === entry.id) setEditingAnswerId(null)
-      if (editingTitleId === entry.id) setEditingTitleId(null)
-      if (expandedAudioEntryId === entry.id) {
-        audioElementRefs.current[entry.id]?.pause()
+      if (editingAnswerId != null && deletedIdSet.has(editingAnswerId)) setEditingAnswerId(null)
+      if (editingTitleId != null && deletedIdSet.has(editingTitleId)) setEditingTitleId(null)
+      if (expandedAudioEntryId != null && deletedIdSet.has(expandedAudioEntryId)) {
+        audioElementRefs.current[expandedAudioEntryId]?.pause()
         setExpandedAudioEntryId(null)
       }
 
       setContinuePayload((previous) =>
-        previous?.previousFeaturedEntry?.id === entry.id
+        previous?.previousFeaturedEntry?.id != null && deletedIdSet.has(previous.previousFeaturedEntry.id)
           ? { ...previous, previousFeaturedEntry: null }
           : previous
       )
@@ -2804,6 +3008,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         : [],
     [currentContinueMaterial, entries]
   )
+  const continueGroups = useMemo(
+    () => buildContinueGroups(continueMaterialEntries),
+    [continueMaterialEntries]
+  )
   useEffect(() => {
     if (selectedPracticeMaterialId == null) return
     if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
@@ -2974,6 +3182,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => entries.find((entry) => entry.id === editingAnswerId) ?? null,
     [editingAnswerId, entries]
   )
+  const editingPair = useMemo(() => {
+    if (!editingEntry?.pair_id) return null
+    const pairEntries = entries.filter((entry) => entry.pair_id === editingEntry.pair_id)
+    const questionEntry = pairEntries.find((entry) => entry.pair_role === "question") ?? null
+    const answerEntry = pairEntries.find((entry) => entry.pair_role === "answer") ?? null
+    return questionEntry && answerEntry ? { questionEntry, answerEntry } : null
+  }, [editingEntry, entries])
 
   if (isLoading) {
     return (
@@ -3997,16 +4212,123 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     )}
                   </div>
 
-                  {continueMaterialEntries.length > 0 ? (
+                  {continueGroups.length > 0 ? (
                     <div className="space-y-5">
-                      {continueMaterialEntries.map((entry) => {
+                      {continueGroups.map((group, index) => {
+                        if (group.kind === "pair") {
+                          const titleEntry = group.titleEntry
+                          const isEditingTitle = editingTitleId === titleEntry.id
+                          const questionExpandedAudio = expandedAudioEntryId === group.questionEntry.id
+                          const answerExpandedAudio = expandedAudioEntryId === group.answerEntry.id
+                          const questionAudioSrc = audioSourceUrls[group.questionEntry.id]
+                          const answerAudioSrc = audioSourceUrls[group.answerEntry.id]
+                          const isDeletingGroup =
+                            isDeletingEntryId === group.questionEntry.id || isDeletingEntryId === group.answerEntry.id
+
+                          return (
+                            <article key={group.pairId} className="relative space-y-5 border-t border-border pt-5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => void deleteEntry(group.questionEntry)}
+                                disabled={isDeletingGroup}
+                                className="absolute right-0 top-4 h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                                aria-label={`Borrar ${getEntryDisplayTitle(titleEntry)}`}
+                              >
+                                {isDeletingGroup ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                              </Button>
+
+                              {isEditingTitle ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Input
+                                    value={titleDrafts[titleEntry.id] ?? ""}
+                                    onChange={(event) =>
+                                      setTitleDrafts((previous) => ({
+                                        ...previous,
+                                        [titleEntry.id]: event.target.value,
+                                      }))
+                                    }
+                                    className="h-10 max-w-sm text-base"
+                                  />
+                                  <Button size="sm" onClick={() => void saveTitle(titleEntry)} disabled={isSavingTitleId === titleEntry.id}>
+                                    {isSavingTitleId === titleEntry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                  </Button>
+                                  <Button size="sm" variant="outline" onClick={() => setEditingTitleId(null)}>
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-2 pr-8 text-foreground">
+                                  <p className="text-lg font-medium">{getEntryDisplayTitle(titleEntry)}</p>
+                                  <Button size="icon" variant="ghost" onClick={() => startTitleEdit(titleEntry)} className="h-8 w-8">
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )}
+
+                              <div className="space-y-3 rounded-xl border border-border bg-background px-4 py-4">
+                                <p className="text-lg font-medium text-foreground">Pregunta:</p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {entryHasAudio(group.questionEntry) ? (
+                                    <Button variant="outline" onClick={() => void togglePlayback(group.questionEntry.id)} className="h-11 border-border px-4 text-base text-foreground">
+                                      {loadingAudioEntryId === group.questionEntry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                      audio
+                                    </Button>
+                                  ) : null}
+                                </div>
+                                {entryHasAudio(group.questionEntry) && questionExpandedAudio && questionAudioSrc ? (
+                                  <audio
+                                    ref={(element) => {
+                                      audioElementRefs.current[group.questionEntry.id] = element
+                                    }}
+                                    controls
+                                    src={questionAudioSrc}
+                                    preload="metadata"
+                                    className="h-12 w-full"
+                                  />
+                                ) : null}
+                                <p className="text-base leading-7 text-foreground">{group.questionEntry.transcript_text}</p>
+                              </div>
+
+                              <div className="space-y-3 rounded-xl border border-border bg-background px-4 py-4">
+                                <p className="text-lg font-medium text-foreground">Respuesta:</p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {entryHasAudio(group.answerEntry) ? (
+                                    <Button variant="outline" onClick={() => void togglePlayback(group.answerEntry.id)} className="h-11 border-border px-4 text-base text-foreground">
+                                      {loadingAudioEntryId === group.answerEntry.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                      audio
+                                    </Button>
+                                  ) : null}
+                                  <Button variant="outline" onClick={() => startAnswerEdit(group.questionEntry)} className="h-11 border-border px-4 text-base text-foreground">
+                                    Editar dupla
+                                  </Button>
+                                </div>
+                                {entryHasAudio(group.answerEntry) && answerExpandedAudio && answerAudioSrc ? (
+                                  <audio
+                                    ref={(element) => {
+                                      audioElementRefs.current[group.answerEntry.id] = element
+                                    }}
+                                    controls
+                                    src={answerAudioSrc}
+                                    preload="metadata"
+                                    className="h-12 w-full"
+                                  />
+                                ) : null}
+                                <p className="text-base leading-7 text-foreground">{group.answerEntry.transcript_text}</p>
+                              </div>
+                            </article>
+                          )
+                        }
+
+                        const entry = group.entry
                         const isExpandedAudio = expandedAudioEntryId === entry.id
                         const audioSrc = audioSourceUrls[entry.id]
                         const isEditingTitle = editingTitleId === entry.id
                         const isRevealed = revealedAnswers[entry.id]
 
                         return (
-                          <article key={entry.id} className="relative space-y-3 border-t border-border pt-5">
+                          <article key={`single-${entry.id}-${index}`} className="relative space-y-3 border-t border-border pt-5">
                             <Button
                               type="button"
                               variant="ghost"
@@ -4192,12 +4514,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Pregunta</p>
                 <Textarea
-                  value={editingEntry ? (questionDrafts[editingEntry.id] ?? editingEntry.transcript_text) : manualQuestionDraft}
+                  value={
+                    editingEntry
+                      ? editingPair
+                        ? (questionDrafts[editingPair.questionEntry.id] ?? editingPair.questionEntry.transcript_text)
+                        : (questionDrafts[editingEntry.id] ?? editingEntry.transcript_text)
+                      : manualQuestionDraft
+                  }
                   onChange={(event) => {
                     if (editingEntry) {
                       setQuestionDrafts((previous) => ({
                         ...previous,
-                        [editingEntry.id]: event.target.value,
+                        [editingPair?.questionEntry.id ?? editingEntry.id]: event.target.value,
                       }))
                       return
                     }
@@ -4211,12 +4539,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <div className="space-y-2">
                 <p className="text-sm font-medium text-foreground">Respuesta</p>
                 <Textarea
-                  value={editingEntry ? (answerDrafts[editingEntry.id] ?? "") : manualAnswerDraft}
+                  value={
+                    editingEntry
+                      ? editingPair
+                        ? (answerDrafts[editingPair.answerEntry.id] ?? editingPair.answerEntry.transcript_text)
+                        : (answerDrafts[editingEntry.id] ?? "")
+                      : manualAnswerDraft
+                  }
                   onChange={(event) => {
                     if (editingEntry) {
                       setAnswerDrafts((previous) => ({
                         ...previous,
-                        [editingEntry.id]: event.target.value,
+                        [editingPair?.answerEntry.id ?? editingEntry.id]: event.target.value,
                       }))
                       return
                     }

@@ -208,18 +208,22 @@ export async function POST(request: Request) {
       let pairRows: Array<{
         id: number
         subject_id: string
+        week_number: number
+        session_date: string
         subject_day_material_id: number | null
         pair_role: "question" | "answer" | null
       }>
       try {
         pairRows = await sql`
-          SELECT id, subject_id, subject_day_material_id, pair_role
+          SELECT id, subject_id, week_number, session_date, subject_day_material_id, pair_role
           FROM subject_day_entries
           WHERE pair_id = ${pairId}
           ORDER BY id ASC
         ` as Array<{
           id: number
           subject_id: string
+          week_number: number
+          session_date: string
           subject_day_material_id: number | null
           pair_role: "question" | "answer" | null
         }>
@@ -245,10 +249,14 @@ export async function POST(request: Request) {
       }
 
       const mismatchedContext = pairRows.some(
-        (row) => row.subject_id !== subjectId || (row.subject_day_material_id ?? null) !== (materialId ?? null)
+        (row) =>
+          row.subject_id !== subjectId ||
+          row.week_number !== weekNumber ||
+          normalizeSessionDateKey(row.session_date) !== sessionDate ||
+          (row.subject_day_material_id ?? null) !== (materialId ?? null)
       )
       if (mismatchedContext) {
-        return badRequest("Audio pair must belong to the same material")
+        return badRequest("Audio pair must belong to the same material and session")
       }
     }
 
