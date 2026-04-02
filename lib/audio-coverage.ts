@@ -47,27 +47,27 @@ type SubjectDayMaterialCoverageRow = {
   id: number
   subject_id: string
   week_number: number
-  session_date: string
+  session_date: string | Date
   file_name: string
   is_checkup_done: boolean
-  created_at: string
+  created_at: string | Date
 }
 
 type SubjectDayEntryCoverageRow = {
   id: number
   subject_id: string
   week_number: number
-  session_date: string
+  session_date: string | Date
   subject_day_material_id: number | null
   pair_id: string | null
   is_featured: boolean
-  updated_at: string
+  updated_at: string | Date
 }
 
 type MobileInteractionCoverageRow = {
   subject_id: string
   week_number: number
-  created_at: string
+  created_at: string | Date
   rating: "ok" | "doubt" | "fail" | null
 }
 
@@ -89,8 +89,16 @@ export function getBuenosAiresDateKey(date = new Date()) {
   return `${year}-${month}-${day}`
 }
 
-function timestampToBuenosAiresDateKey(value: string) {
-  return getBuenosAiresDateKey(new Date(value))
+function toDate(value: string | Date) {
+  return value instanceof Date ? value : new Date(value)
+}
+
+function toIsoTimestamp(value: string | Date) {
+  return toDate(value).toISOString()
+}
+
+function timestampToBuenosAiresDateKey(value: string | Date) {
+  return getBuenosAiresDateKey(toDate(value))
 }
 
 function addDaysToDateKey(dateKey: string, days: number) {
@@ -108,8 +116,16 @@ function diffDateKeys(startDateKey: string, endDateKey: string) {
   return Math.floor((end - start) / (1000 * 60 * 60 * 24))
 }
 
-function normalizeSessionDateKey(value: string) {
-  return value.includes("T") ? value.slice(0, 10) : value
+function normalizeSessionDateKey(value: string | Date) {
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10)
+  }
+
+  if (typeof value === "string") {
+    return value.includes("T") ? value.slice(0, 10) : value
+  }
+
+  return String(value).slice(0, 10)
 }
 
 function buildPracticeMaterialCoverage(
@@ -169,10 +185,10 @@ function buildSubjectVector(params: {
   const anchorEntry =
     [...entries]
       .filter((entry) => entry.is_featured)
-      .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null
+      .sort((left, right) => toIsoTimestamp(right.updated_at).localeCompare(toIsoTimestamp(left.updated_at)))[0] ?? null
 
   const lastInteraction =
-    [...interactions].sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null
+    [...interactions].sort((left, right) => toIsoTimestamp(right.created_at).localeCompare(toIsoTimestamp(left.created_at)))[0] ?? null
 
   const recentInteraction = lastInteraction
     ? diffDateKeys(timestampToBuenosAiresDateKey(lastInteraction.created_at), todayKey) <= 1
@@ -181,7 +197,7 @@ function buildSubjectVector(params: {
   const latestRatedInteraction =
     [...interactions]
       .filter((interaction) => interaction.rating === "ok" || interaction.rating === "doubt" || interaction.rating === "fail")
-      .sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null
+      .sort((left, right) => toIsoTimestamp(right.created_at).localeCompare(toIsoTimestamp(left.created_at)))[0] ?? null
 
   const isFragile = latestRatedInteraction?.rating === "doubt" || latestRatedInteraction?.rating === "fail"
 
@@ -237,7 +253,7 @@ function buildSubjectVector(params: {
     staleReason,
     severity,
     stateLabel,
-    lastInteractionAt: lastInteraction?.created_at ?? null,
+    lastInteractionAt: lastInteraction ? toIsoTimestamp(lastInteraction.created_at) : null,
     practiceMaterials,
   } satisfies SubjectSixDayVector
 }
