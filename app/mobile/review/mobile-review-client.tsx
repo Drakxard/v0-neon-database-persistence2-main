@@ -441,50 +441,44 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       : "No hay un par disponible para la franja actual."
   const slotsForSelectedDay = slots.filter((slot) => slot.weekdayIndex === scheduleDayIndex)
   const scheduleDayLabel = WEEKDAY_OPTIONS.find((option) => Number(option.value) === scheduleDayIndex)?.label || "Dia"
-  const viewportShellStyle = {
-    minHeight: "100vh",
-    height: "100dvh",
-  } as const
-  const viewportFrameStyle = {
-    minHeight: "calc(100vh - 1rem)",
-    height: "calc(100dvh - 1rem)",
-  } as const
 
   if (requiresAccess) {
     return (
-      <main style={viewportShellStyle} className="relative flex bg-[#f1e4a9] px-3 py-2 text-black">
-        <div aria-hidden="true" className="fixed inset-0 -z-10 bg-[#f1e4a9]" />
-        <div style={viewportFrameStyle} className="mx-auto flex w-full max-w-[320px] flex-1 flex-col self-stretch border-4 border-black bg-[#f1e4a9] px-4 py-6">
-          <div className="flex-1 space-y-5">
+      <main className="box-border h-full bg-[#f1e4a9] px-3 pt-2 text-black">
+        <div className="mx-auto flex h-full w-full max-w-[320px] box-border flex-col border-4 border-black bg-[#f1e4a9] px-4 py-5">
+          <div className="grid flex-1 grid-rows-[auto_1fr_auto] gap-5">
             <header className="text-center text-[2rem] leading-none">Repaso movil</header>
-            <p className="text-sm leading-relaxed">Escribe un nombre simple para este dispositivo y la web lo recordara para entrar sola la proxima vez.</p>
 
-            <label className="block space-y-2 text-sm">
-              <span>Dispositivo</span>
-              <input
-                type="text"
-                value={accessDeviceId}
-                onChange={(event) => setAccessDeviceId(event.target.value)}
-                placeholder="celu-rafa"
-                className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-2 text-base"
-                autoCapitalize="off"
-                autoCorrect="off"
-                autoComplete="off"
-              />
-            </label>
+            <div className="space-y-5">
+              <p className="text-sm leading-relaxed">Escribe un nombre simple para este dispositivo y la web lo recordara para entrar sola la proxima vez.</p>
 
-            {accessError ? <p className="text-sm text-red-700">{accessError}</p> : null}
-          </div>
+              <label className="block space-y-2 text-sm">
+                <span>Dispositivo</span>
+                <input
+                  type="text"
+                  value={accessDeviceId}
+                  onChange={(event) => setAccessDeviceId(event.target.value)}
+                  placeholder="celu-rafa"
+                  className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-2 text-base"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  autoComplete="off"
+                />
+              </label>
 
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => void submitAccess()}
-              disabled={isAccessLoading}
-              className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-3 text-left text-[1.4rem] leading-none disabled:opacity-60"
-            >
-              {isAccessLoading ? "Entrando..." : "Entrar"}
-            </button>
+              {accessError ? <p className="text-sm text-red-700">{accessError}</p> : null}
+            </div>
+
+            <div className="space-y-3 self-end">
+              <button
+                type="button"
+                onClick={() => void submitAccess()}
+                disabled={isAccessLoading}
+                className="w-full border-2 border-black bg-[#f7ecc0] px-3 py-3 text-left text-[1.4rem] leading-none disabled:opacity-60"
+              >
+                {isAccessLoading ? "Entrando..." : "Entrar"}
+              </button>
+            </div>
           </div>
         </div>
       </main>
@@ -492,54 +486,56 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   }
 
   return (
-    <main style={viewportShellStyle} className="relative flex bg-[#f1e4a9] px-3 py-2 text-black">
-      <div aria-hidden="true" className="fixed inset-0 -z-10 bg-[#f1e4a9]" />
-      <div style={viewportFrameStyle} className="mx-auto flex w-full max-w-[320px] flex-1 flex-col self-stretch border-4 border-black bg-[#f1e4a9] px-3 py-4">
-        <header className="relative pb-5">
-          <button
-            type="button"
-            onClick={() => void openSlotsModal()}
-            className="absolute right-0 top-0 grid h-10 w-10 place-items-center border-2 border-black bg-[#f7ecc0]"
-            aria-label="Configurar horarios"
-          >
-            <span className="relative block h-5 w-5 border-2 border-black">
-              <span className="absolute inset-x-0 top-0 h-1 border-b-2 border-black bg-black/15" />
-              <span className="absolute left-[3px] top-[-4px] h-2 w-[2px] bg-black" />
-              <span className="absolute right-[3px] top-[-4px] h-2 w-[2px] bg-black" />
-            </span>
-          </button>
-          <div className="px-10 text-center text-[2rem] leading-none text-black">{subjectTitle}</div>
-        </header>
+    <main className="box-border h-full bg-[#f1e4a9] px-3 pt-2 text-black">
+      <div className="mx-auto flex h-full w-full max-w-[320px] box-border flex-col border-4 border-black bg-[#f1e4a9] px-3 py-4">
+        <div className="grid flex-1 grid-rows-[auto_1fr_auto] gap-6">
+          <header className="grid grid-cols-[2.5rem_1fr_2.5rem] items-start gap-3">
+            <div aria-hidden="true" className="h-10 w-10" />
+            <div className="pt-1 text-center text-[2rem] leading-none text-black">{subjectTitle}</div>
+            <button
+              type="button"
+              onClick={() => void openSlotsModal()}
+              className="grid h-10 w-10 place-items-center border-2 border-black bg-[#f7ecc0]"
+              aria-label="Configurar horarios"
+            >
+              <span className="relative block h-5 w-5 border-2 border-black">
+                <span className="absolute inset-x-0 top-0 h-1 border-b-2 border-black bg-black/15" />
+                <span className="absolute left-[3px] top-[-4px] h-2 w-[2px] bg-black" />
+                <span className="absolute right-[3px] top-[-4px] h-2 w-[2px] bg-black" />
+              </span>
+            </button>
+          </header>
 
-        <div className="flex-1 space-y-10">
-          <AudioRow
-            label="Pregunta"
-            audioRef={questionAudioRef}
-            src={payload?.pair?.questionAudioUrl || ""}
-          />
+          <div className="flex min-h-0 flex-col justify-start gap-7">
+            <AudioRow
+              label="Pregunta"
+              audioRef={questionAudioRef}
+              src={payload?.pair?.questionAudioUrl || ""}
+            />
 
-          <AudioRow
-            label="Respuesta"
-            audioRef={answerAudioRef}
-            src={payload?.pair?.answerAudioUrl || ""}
-          />
+            <AudioRow
+              label="Respuesta"
+              audioRef={answerAudioRef}
+              src={payload?.pair?.answerAudioUrl || ""}
+            />
 
-          {error ? <p className="text-sm text-red-700">{error}</p> : null}
-          {!error && !payload?.pair ? (
-            <p className="text-sm text-black/80">{emptyStateMessage}</p>
-          ) : null}
-        </div>
+            {error ? <p className="text-sm text-red-700">{error}</p> : null}
+            {!error && !payload?.pair ? (
+              <p className="text-sm text-black/80">{emptyStateMessage}</p>
+            ) : null}
+          </div>
 
-        <div className="mt-6 flex items-end justify-between gap-4">
-          <button
-            type="button"
-            onClick={() => void loadNext()}
-            disabled={isLoading}
-            className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
-          >
-            {isLoading ? "Cargando..." : "Siguiente pregunta"}
-          </button>
-          <p className="text-base leading-none text-black/80">{pairCounter}</p>
+          <div className="grid grid-cols-[1fr_auto] items-end gap-4">
+            <button
+              type="button"
+              onClick={() => void loadNext()}
+              disabled={isLoading}
+              className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
+            >
+              {isLoading ? "Cargando..." : "Siguiente pregunta"}
+            </button>
+            <p className="text-base leading-none text-black/80">{pairCounter}</p>
+          </div>
         </div>
       </div>
 

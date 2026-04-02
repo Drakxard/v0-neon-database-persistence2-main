@@ -193,12 +193,13 @@
     @apply border-border outline-ring/50;
   }
   html {
-    min-height: 100%;
     @apply h-full bg-background text-foreground;
   }
   body {
-    min-height: 100%;
-    min-height: 100vh;
-    @apply h-full bg-background text-foreground transition-colors duration-300;
+    margin: 0;
+    @apply h-full min-h-full bg-background text-foreground transition-colors duration-300;
+  }
+  body > * {
+    @apply h-full min-h-full;
   }
 }
