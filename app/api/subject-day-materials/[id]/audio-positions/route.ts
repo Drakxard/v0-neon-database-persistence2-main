@@ -22,6 +22,8 @@ type PositionRow = {
   custom_title: string | null
   drive_file_name: string
   drive_mime_type: string
+  pair_id: string | null
+  pair_role: "question" | "answer" | null
 }
 
 function isMissingPositionsTable(error: unknown) {
@@ -35,6 +37,15 @@ function isMissingEntriesTable(error: unknown) {
   return error instanceof Error && error.message.includes("subject_day_entries")
 }
 
+function isMissingPairColumns(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "42703"
+  )
+}
+
 function normalizeRow(row: PositionRow) {
   return {
     entryId: row.entry_id,
@@ -46,6 +57,8 @@ function normalizeRow(row: PositionRow) {
     title: row.custom_title?.trim() || row.drive_file_name || "Audio",
     audioUrl: `/api/subject-day-entries/${row.entry_id}/audio`,
     mimeType: row.drive_mime_type || "audio/webm",
+    pairId: row.pair_id,
+    pairRole: row.pair_role,
   }
 }
 
@@ -74,23 +87,50 @@ export async function GET(_request: Request, context: RouteContext) {
     const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
     if (forbidden) return forbidden
 
-    const rows = await sql`
-      SELECT
-        positions.entry_id,
-        positions.subject_day_material_id,
-        positions.page_num,
-        positions.xp,
-        positions.yp,
-        entries.transcript_text,
-        entries.custom_title,
-        entries.drive_file_name,
-        entries.drive_mime_type
-      FROM subject_day_entry_pdf_positions AS positions
-      INNER JOIN subject_day_entries AS entries
-        ON entries.id = positions.entry_id
-      WHERE positions.subject_day_material_id = ${materialId}
-      ORDER BY entries.order_index ASC, entries.id ASC
-    ` as PositionRow[]
+    let rows: PositionRow[]
+    try {
+      rows = await sql`
+        SELECT
+          positions.entry_id,
+          positions.subject_day_material_id,
+          positions.page_num,
+          positions.xp,
+          positions.yp,
+          entries.transcript_text,
+          entries.custom_title,
+          entries.drive_file_name,
+          entries.drive_mime_type,
+          entries.pair_id,
+          entries.pair_role
+        FROM subject_day_entry_pdf_positions AS positions
+        INNER JOIN subject_day_entries AS entries
+          ON entries.id = positions.entry_id
+        WHERE positions.subject_day_material_id = ${materialId}
+        ORDER BY entries.order_index ASC, entries.id ASC
+      ` as PositionRow[]
+    } catch (error) {
+      if (!isMissingPairColumns(error)) throw error
+
+      rows = await sql`
+        SELECT
+          positions.entry_id,
+          positions.subject_day_material_id,
+          positions.page_num,
+          positions.xp,
+          positions.yp,
+          entries.transcript_text,
+          entries.custom_title,
+          entries.drive_file_name,
+          entries.drive_mime_type,
+          NULL::TEXT AS pair_id,
+          NULL::TEXT AS pair_role
+        FROM subject_day_entry_pdf_positions AS positions
+        INNER JOIN subject_day_entries AS entries
+          ON entries.id = positions.entry_id
+        WHERE positions.subject_day_material_id = ${materialId}
+        ORDER BY entries.order_index ASC, entries.id ASC
+      ` as PositionRow[]
+    }
 
     return NextResponse.json(rows.map(normalizeRow))
   } catch (error) {
@@ -182,23 +222,50 @@ export async function POST(request: Request, context: RouteContext) {
       RETURNING entry_id, subject_day_material_id, page_num, xp, yp
     ` as Array<{ entry_id: number; subject_day_material_id: number; page_num: number; xp: number; yp: number }>
 
-    const joinedRows = await sql`
-      SELECT
-        positions.entry_id,
-        positions.subject_day_material_id,
-        positions.page_num,
-        positions.xp,
-        positions.yp,
-        entries.transcript_text,
-        entries.custom_title,
-        entries.drive_file_name,
-        entries.drive_mime_type
-      FROM subject_day_entry_pdf_positions AS positions
-      INNER JOIN subject_day_entries AS entries
-        ON entries.id = positions.entry_id
-      WHERE positions.entry_id = ${rows[0].entry_id}
-      LIMIT 1
-    ` as PositionRow[]
+    let joinedRows: PositionRow[]
+    try {
+      joinedRows = await sql`
+        SELECT
+          positions.entry_id,
+          positions.subject_day_material_id,
+          positions.page_num,
+          positions.xp,
+          positions.yp,
+          entries.transcript_text,
+          entries.custom_title,
+          entries.drive_file_name,
+          entries.drive_mime_type,
+          entries.pair_id,
+          entries.pair_role
+        FROM subject_day_entry_pdf_positions AS positions
+        INNER JOIN subject_day_entries AS entries
+          ON entries.id = positions.entry_id
+        WHERE positions.entry_id = ${rows[0].entry_id}
+        LIMIT 1
+      ` as PositionRow[]
+    } catch (error) {
+      if (!isMissingPairColumns(error)) throw error
+
+      joinedRows = await sql`
+        SELECT
+          positions.entry_id,
+          positions.subject_day_material_id,
+          positions.page_num,
+          positions.xp,
+          positions.yp,
+          entries.transcript_text,
+          entries.custom_title,
+          entries.drive_file_name,
+          entries.drive_mime_type,
+          NULL::TEXT AS pair_id,
+          NULL::TEXT AS pair_role
+        FROM subject_day_entry_pdf_positions AS positions
+        INNER JOIN subject_day_entries AS entries
+          ON entries.id = positions.entry_id
+        WHERE positions.entry_id = ${rows[0].entry_id}
+        LIMIT 1
+      ` as PositionRow[]
+    }
 
     return NextResponse.json(normalizeRow(joinedRows[0]))
   } catch (error) {

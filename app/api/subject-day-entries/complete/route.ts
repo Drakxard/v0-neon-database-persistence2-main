@@ -27,6 +27,8 @@ type EntryRow = {
   answer_text: string | null
   custom_title: string | null
   practice_state: "erre" | null
+  pair_id: string | null
+  pair_role: "question" | "answer" | null
   is_featured: boolean
   created_at: string
   updated_at: string
@@ -52,6 +54,15 @@ function isMissingColumn(error: unknown) {
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
+}
+
+function isMissingPairColumns(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "42703"
+  )
 }
 
 function parseSessionDate(sessionDate: string) {
@@ -119,6 +130,8 @@ type CompletionPayload =
     materialId: number | null
     driveFileId: string
     fileName: string
+    pairId: string | null
+    pairRole: "question" | "answer" | null
   }
 
 async function parseCompletionPayload(request: Request): Promise<CompletionPayload> {
@@ -131,6 +144,8 @@ async function parseCompletionPayload(request: Request): Promise<CompletionPaylo
     materialId: Number.isNaN(rawMaterialId) ? null : rawMaterialId,
     driveFileId: String(payload?.driveFileId || "").trim(),
     fileName: String(payload?.fileName || "").trim(),
+    pairId: typeof payload?.pairId === "string" ? payload.pairId.trim() || null : null,
+    pairRole: payload?.pairRole === "question" || payload?.pairRole === "answer" ? payload.pairRole : null,
   }
 }
 
@@ -155,9 +170,15 @@ export async function POST(request: Request) {
     const requestedWeekNumber = payload.weekNumber
     const materialId = payload.materialId
     const uploadedFileName = payload.fileName
+    const pairId = payload.pairId
+    const pairRole = payload.pairRole
 
     if (!subjectId || !sessionDate || !parsedSessionDate || !payload.driveFileId) {
       return badRequest("Missing completion metadata")
+    }
+
+    if ((pairId && !pairRole) || (!pairId && pairRole)) {
+      return badRequest("Invalid audio pair metadata")
     }
 
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
@@ -182,6 +203,54 @@ export async function POST(request: Request) {
       sessionDate,
       materialId,
     })
+
+    if (pairId && pairRole) {
+      let pairRows: Array<{
+        id: number
+        subject_id: string
+        subject_day_material_id: number | null
+        pair_role: "question" | "answer" | null
+      }>
+      try {
+        pairRows = await sql`
+          SELECT id, subject_id, subject_day_material_id, pair_role
+          FROM subject_day_entries
+          WHERE pair_id = ${pairId}
+          ORDER BY id ASC
+        ` as Array<{
+          id: number
+          subject_id: string
+          subject_day_material_id: number | null
+          pair_role: "question" | "answer" | null
+        }>
+      } catch (error) {
+        if (!isMissingPairColumns(error)) throw error
+        return NextResponse.json(
+          {
+            error:
+              "No se puede guardar la dupla de audio porque falta aplicar scripts/016-add-subject-day-entry-audio-pairs.sql en Neon.",
+            code: "MISSING_AUDIO_PAIR_COLUMNS",
+          },
+          { status: 409 }
+        )
+      }
+
+      if (pairRows.length >= 2) {
+        return badRequest("Audio pair already completed")
+      }
+
+      const duplicateRole = pairRows.some((row) => row.pair_role === pairRole)
+      if (duplicateRole) {
+        return badRequest("Audio pair role already exists")
+      }
+
+      const mismatchedContext = pairRows.some(
+        (row) => row.subject_id !== subjectId || (row.subject_day_material_id ?? null) !== (materialId ?? null)
+      )
+      if (mismatchedContext) {
+        return badRequest("Audio pair must belong to the same material")
+      }
+    }
 
     let transcriptText = "Transcripcion pendiente."
     try {
@@ -215,7 +284,9 @@ export async function POST(request: Request) {
           drive_file_id,
           drive_file_name,
           drive_mime_type,
-          drive_web_view_link
+          drive_web_view_link,
+          pair_id,
+          pair_role
         )
         VALUES (
           ${subjectId},
@@ -228,11 +299,24 @@ export async function POST(request: Request) {
           ${driveFile.id},
           ${uploadedFileName || driveFile.name},
           ${driveFile.mimeType},
-          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
+          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""},
+          ${pairId},
+          ${pairRole}
         )
-        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, FALSE AS is_featured, created_at, updated_at
+        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     } catch (error) {
+      if (pairId && pairRole && isMissingPairColumns(error)) {
+        return NextResponse.json(
+          {
+            error:
+              "No se puede guardar la dupla de audio porque falta aplicar scripts/016-add-subject-day-entry-audio-pairs.sql en Neon.",
+            code: "MISSING_AUDIO_PAIR_COLUMNS",
+          },
+          { status: 409 }
+        )
+      }
+
       if (!isMissingColumn(error)) throw error
 
       rows = await sql`
@@ -260,7 +344,7 @@ export async function POST(request: Request) {
           ${driveFile.mimeType},
           ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
         )
-        RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, FALSE AS is_featured, created_at, updated_at
+        RETURNING id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       ` as EntryRow[]
     }
 

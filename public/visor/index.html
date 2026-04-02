@@ -554,6 +554,16 @@
       overflow: visible;
     }
     .audio-anchor-icon:hover { transform: translate(-50%, -50%) scale(1.08); box-shadow: 0 4px 12px rgba(0,0,0,0.35); }
+    .audio-anchor-icon.question {
+      border-color: #60a5fa;
+      background: rgba(219, 234, 254, 0.98);
+      color: #1e3a8a;
+    }
+    .audio-anchor-icon.answer {
+      border-color: #34d399;
+      background: rgba(209, 250, 229, 0.98);
+      color: #065f46;
+    }
     .audio-anchor-icon.playing {
       background: #fb923c;
       color: #111827;
@@ -1022,12 +1032,15 @@
             setAnchoredAudioPlaybackState(entryId, Boolean(e.data.playing));
           }
         } else if (e.data.type === 'anchoredAudioDeleted') {
-          const entryId = Number.parseInt(String(e.data.entryId || ''), 10);
-          if (Number.isInteger(entryId)) {
-            anchoredAudioPositions = anchoredAudioPositions.filter((position) => position.entryId !== entryId);
+          const deletedIds = Array.isArray(e.data.entryIds)
+            ? e.data.entryIds.map((value) => Number.parseInt(String(value || ''), 10)).filter((value) => Number.isInteger(value))
+            : [Number.parseInt(String(e.data.entryId || ''), 10)].filter((value) => Number.isInteger(value));
+          if (deletedIds.length > 0) {
+            const deletedSet = new Set(deletedIds);
+            anchoredAudioPositions = anchoredAudioPositions.filter((position) => !deletedSet.has(position.entryId));
             clearPendingAudioPreview();
             renderAnchoredAudioPositions();
-            showToast('Audio borrado', 'success');
+            showToast(deletedIds.length > 1 ? 'Dupla de audios borrada' : 'Audio borrado', 'success');
           }
         } else if (e.data.type === 'anchoredAudioDeleteFailed') {
           const message = typeof e.data.error === 'string' && e.data.error.trim()
@@ -3823,9 +3836,14 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
         icon.dataset.pageNum = String(position.pageNum);
         icon.dataset.xp = String(position.xp);
         icon.dataset.yp = String(position.yp);
+        icon.dataset.pairId = position.pairId || '';
+        icon.dataset.pairRole = position.pairRole || '';
         icon.dataset.title = position.title || 'Audio';
         icon.dataset.transcript = position.transcriptText || 'Sin transcripción disponible.';
-        icon.title = position.title || 'Audio';
+        if (position.pairRole) icon.classList.add(position.pairRole);
+        icon.title = position.pairRole
+          ? `${position.pairRole === 'question' ? 'Pregunta' : 'Respuesta'}: ${position.title || 'Audio'}`
+          : (position.title || 'Audio');
         icon.innerHTML = `<span class="audio-anchor-glyph">${activeAnchoredAudioId === position.entryId ? '❚❚' : '▶'}</span>`;
         icon.classList.toggle('playing', activeAnchoredAudioId === position.entryId);
         const pageWidth = layer.offsetWidth;

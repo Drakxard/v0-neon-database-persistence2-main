@@ -1,6 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+
+import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 
 type MaterialContext = {
@@ -22,6 +24,8 @@ type DraftViewerContext = {
   materialType: "practice"
 }
 
+type PairRole = "question" | "answer"
+
 type AudioPosition = {
   entryId: number
   materialId: number
@@ -32,12 +36,20 @@ type AudioPosition = {
   title: string
   audioUrl: string
   mimeType: string
+  pairId: string | null
+  pairRole: PairRole | null
 }
 
 type ReviewAudio = {
   blob: Blob
   url: string
   mimeType: string
+}
+
+type PairDraft = {
+  pairId: string
+  anchor: PendingAnchor
+  slots: Record<PairRole, ReviewAudio | null>
 }
 
 type PendingAnchor = {
@@ -59,6 +71,12 @@ type ViewerMessage =
   | { type: "viewerReady" }
   | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
+type DeleteEntriesResponse = {
+  ids?: number[]
+}
+
+const PAIR_ROLES: PairRole[] = ["question", "answer"]
+
 function getRecorderMimeType() {
   if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
 
@@ -71,6 +89,42 @@ function getErrorMessage(payload: unknown, fallback: string) {
     return payload.error
   }
   return fallback
+}
+
+function generatePairId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `pair-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getPairRoleLabel(role: PairRole) {
+  return role === "question" ? "Pregunta" : "Respuesta"
+}
+
+function buildInitialPairDraft(anchor: PendingAnchor): PairDraft {
+  return {
+    pairId: generatePairId(),
+    anchor,
+    slots: {
+      question: null,
+      answer: null,
+    },
+  }
+}
+
+function buildPairAnchors(anchor: PendingAnchor) {
+  const answerOffset = 0.04
+  const nextAnswerXp = anchor.xp >= 0.94 ? Math.max(0, anchor.xp - answerOffset) : Math.min(1, anchor.xp + answerOffset)
+
+  return {
+    question: anchor,
+    answer: {
+      pageNum: anchor.pageNum,
+      xp: nextAnswerXp,
+      yp: anchor.yp,
+    },
+  } satisfies Record<PairRole, PendingAnchor>
 }
 
 async function readResponsePayload(response: Response) {
@@ -155,39 +209,57 @@ export function PracticeViewerClient({
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const recordingChunksRef = useRef<Blob[]>([])
-  const reviewAudioRef = useRef<ReviewAudio | null>(null)
+  const pairDraftRef = useRef<PairDraft | null>(null)
+  const recordingRoleRef = useRef<PairRole | null>(null)
 
   const [positions, setPositions] = useState<AudioPosition[]>([])
   const [positionsError, setPositionsError] = useState("")
-  const [isRecorderOpen, setIsRecorderOpen] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [recordingError, setRecordingError] = useState("")
-  const [reviewAudio, setReviewAudio] = useState<ReviewAudio | null>(null)
-  const [pendingAnchor, setPendingAnchor] = useState<PendingAnchor | null>(null)
+  const [pairDraft, setPairDraft] = useState<PairDraft | null>(null)
+  const [recordingTarget, setRecordingTarget] = useState<PairRole | null>(null)
   const [activeEntryId, setActiveEntryId] = useState<number | null>(null)
+  const [previewPlayingRole, setPreviewPlayingRole] = useState<PairRole | null>(null)
+  const [draggedRole, setDraggedRole] = useState<PairRole | null>(null)
   const [uploadFeedback, setUploadFeedback] = useState("")
 
   const viewerSrc = useMemo(() => buildViewerSrc({ material, draftContext }), [draftContext, material])
   const activeContext = material ?? draftContext
   const hasMaterial = Boolean(material)
+  const isPairModalOpen = Boolean(material && pairDraft)
+  const isPairComplete = Boolean(pairDraft?.slots.question && pairDraft?.slots.answer)
 
   const postToViewer = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
   }, [])
 
-  const disposeReviewAudio = useCallback((nextReviewAudio?: ReviewAudio | null) => {
-    const currentReviewAudio = nextReviewAudio ?? reviewAudioRef.current
-    if (currentReviewAudio) {
-      URL.revokeObjectURL(currentReviewAudio.url)
-    }
-    if (!nextReviewAudio) {
-      reviewAudioRef.current = null
+  const disposeReviewAudio = useCallback((reviewAudio?: ReviewAudio | null) => {
+    if (reviewAudio) {
+      URL.revokeObjectURL(reviewAudio.url)
     }
   }, [])
+
+  const replacePairDraft = useCallback((updater: (previous: PairDraft | null) => PairDraft | null) => {
+    setPairDraft((previous) => {
+      const next = updater(previous)
+      pairDraftRef.current = next
+      return next
+    })
+  }, [])
+
+  const disposePairDraft = useCallback(
+    (draft?: PairDraft | null) => {
+      if (!draft) return
+      disposeReviewAudio(draft.slots.question)
+      disposeReviewAudio(draft.slots.answer)
+    },
+    [disposeReviewAudio]
+  )
 
   const syncPositionsToViewer = useCallback(
     (nextPositions: AudioPosition[]) => {
@@ -224,15 +296,19 @@ export function PracticeViewerClient({
     }
   }, [material, syncPositionsToViewer])
 
-  const resetRecorderState = useCallback(() => {
+  const resetPairState = useCallback(() => {
     setIsRecording(false)
     setIsUploading(false)
     setRecordingError("")
-    setPendingAnchor(null)
-    setIsRecorderOpen(false)
-    disposeReviewAudio()
-    setReviewAudio(null)
-  }, [disposeReviewAudio])
+    setRecordingTarget(null)
+    setPreviewPlayingRole(null)
+    setDraggedRole(null)
+    recordingRoleRef.current = null
+    replacePairDraft((previous) => {
+      disposePairDraft(previous)
+      return null
+    })
+  }, [disposePairDraft, replacePairDraft])
 
   const stopMediaTracks = useCallback(() => {
     mediaRecorderRef.current = null
@@ -242,73 +318,117 @@ export function PracticeViewerClient({
     }
   }, [])
 
-  const stopAndDiscardRecording = useCallback(() => {
+  const stopPreviewPlayback = useCallback(() => {
+    const previewAudio = previewAudioRef.current
+    if (!previewAudio) return
+    previewAudio.pause()
+    previewAudio.currentTime = 0
+    setPreviewPlayingRole(null)
+  }, [])
+
+  const discardRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.onstop = null
       mediaRecorderRef.current.stop()
     }
     stopMediaTracks()
     recordingChunksRef.current = []
+    recordingRoleRef.current = null
     setIsRecording(false)
+    setRecordingTarget(null)
   }, [stopMediaTracks])
 
   const closeRecorder = useCallback(() => {
-    stopAndDiscardRecording()
-    resetRecorderState()
+    discardRecording()
+    stopPreviewPlayback()
+    resetPairState()
     postToViewer({ type: "cancelAnchoredAudio" })
-  }, [postToViewer, resetRecorderState, stopAndDiscardRecording])
+  }, [discardRecording, postToViewer, resetPairState, stopPreviewPlayback])
 
-  const startRecording = useCallback(async () => {
-    setRecordingError("")
-    disposeReviewAudio()
-    setReviewAudio(null)
+  const startRecording = useCallback(
+    async (role: PairRole) => {
+      if (!pairDraftRef.current) return
 
-    try {
-      if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-        throw new Error("Tu navegador no soporta grabacion de audio.")
-      }
+      setRecordingError("")
+      stopPreviewPlayback()
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mimeType = getRecorderMimeType()
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
-
-      mediaStreamRef.current = stream
-      mediaRecorderRef.current = recorder
-      recordingChunksRef.current = []
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordingChunksRef.current.push(event.data)
+      try {
+        if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+          throw new Error("Tu navegador no soporta grabacion de audio.")
         }
-      }
 
-      recorder.onstop = () => {
-        setIsRecording(false)
-        mediaRecorderRef.current = null
-        const chunks = recordingChunksRef.current
+        if (mediaRecorderRef.current?.state && mediaRecorderRef.current.state !== "inactive") {
+          return
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const mimeType = getRecorderMimeType()
+        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+
+        mediaStreamRef.current = stream
+        mediaRecorderRef.current = recorder
         recordingChunksRef.current = []
-        stopMediaTracks()
-        if (!chunks.length) return
+        recordingRoleRef.current = role
+        setRecordingTarget(role)
 
-        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
-        const nextReviewAudio = {
-          blob,
-          mimeType: blob.type || "audio/webm",
-          url: URL.createObjectURL(blob),
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordingChunksRef.current.push(event.data)
+          }
         }
-        reviewAudioRef.current = nextReviewAudio
-        setReviewAudio(nextReviewAudio)
-      }
 
-      recorder.start()
-      setIsRecording(true)
-    } catch (error) {
-      stopMediaTracks()
-      console.error("Failed to start anchored recording:", error)
-      setRecordingError(error instanceof Error ? error.message : "No se pudo iniciar la grabacion.")
-      setIsRecording(false)
-    }
-  }, [disposeReviewAudio, stopMediaTracks])
+        recorder.onstop = () => {
+          const stoppedRole = recordingRoleRef.current
+          setIsRecording(false)
+          setRecordingTarget(null)
+          recordingRoleRef.current = null
+          mediaRecorderRef.current = null
+          const chunks = recordingChunksRef.current
+          recordingChunksRef.current = []
+          stopMediaTracks()
+          if (!chunks.length || !stoppedRole) return
+
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" })
+          const nextReviewAudio: ReviewAudio = {
+            blob,
+            mimeType: blob.type || "audio/webm",
+            url: URL.createObjectURL(blob),
+          }
+
+          replacePairDraft((previous) => {
+            if (!previous) {
+              disposeReviewAudio(nextReviewAudio)
+              return previous
+            }
+
+            const previousSlot = previous.slots[stoppedRole]
+            if (previousSlot) {
+              disposeReviewAudio(previousSlot)
+            }
+
+            return {
+              ...previous,
+              slots: {
+                ...previous.slots,
+                [stoppedRole]: nextReviewAudio,
+              },
+            }
+          })
+        }
+
+        recorder.start()
+        setIsRecording(true)
+      } catch (error) {
+        stopMediaTracks()
+        console.error("Failed to start anchored recording:", error)
+        setRecordingError(error instanceof Error ? error.message : "No se pudo iniciar la grabacion.")
+        setIsRecording(false)
+        setRecordingTarget(null)
+        recordingRoleRef.current = null
+      }
+    },
+    [disposeReviewAudio, replacePairDraft, stopMediaTracks, stopPreviewPlayback]
+  )
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
@@ -320,51 +440,114 @@ export function PracticeViewerClient({
     stopMediaTracks()
   }, [stopMediaTracks])
 
+  const playDraftAudio = useCallback(
+    (role: PairRole) => {
+      const nextAudio = pairDraftRef.current?.slots[role]
+      const previewAudio = previewAudioRef.current
+      if (!nextAudio || !previewAudio) return
+
+      if (previewPlayingRole === role && !previewAudio.paused) {
+        stopPreviewPlayback()
+        return
+      }
+
+      previewAudio.src = nextAudio.url
+      previewAudio.currentTime = 0
+      void previewAudio
+        .play()
+        .then(() => {
+          setPreviewPlayingRole(role)
+        })
+        .catch((error) => {
+          console.error("Failed to play draft audio:", error)
+          setRecordingError("No se pudo reproducir la previsualizacion.")
+          setPreviewPlayingRole(null)
+        })
+    },
+    [previewPlayingRole, stopPreviewPlayback]
+  )
+
+  const swapDraftRoles = useCallback(() => {
+    replacePairDraft((previous) => {
+      if (!previous) return previous
+      return {
+        ...previous,
+        slots: {
+          question: previous.slots.answer,
+          answer: previous.slots.question,
+        },
+      }
+    })
+  }, [replacePairDraft])
+
   const confirmRecording = useCallback(async () => {
-    if (!material || !pendingAnchor || !reviewAudio) return
+    if (!material || !pairDraftRef.current) return
+
+    const currentDraft = pairDraftRef.current
+    if (!currentDraft.slots.question || !currentDraft.slots.answer) return
 
     setIsUploading(true)
     setRecordingError("")
 
-    try {
-      const createdEntry = await createPracticeAudioEntry<{ id: number }>({
-        subjectId: material.subjectId,
-        subjectName: material.subjectName,
-        sessionDate: material.sessionDate,
-        weekNumber: material.weekNumber,
-        weekdayIndex: material.weekdayIndex,
-        materialId: material.id,
-        blob: reviewAudio.blob,
-        mimeType: reviewAudio.mimeType,
-      })
-      const positionResponse = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entryId: createdEntry.id,
-          pageNum: pendingAnchor.pageNum,
-          xp: pendingAnchor.xp,
-          yp: pendingAnchor.yp,
-        }),
-      })
-      const positionPayload = await requireOkJson(positionResponse, "No se pudo guardar la posicion del audio.")
+    const createdEntryIds: number[] = []
 
-      const createdPosition = positionPayload as AudioPosition
-      setPositions((previous) => {
-        const next = [...previous.filter((position) => position.entryId !== createdPosition.entryId), createdPosition]
-        next.sort((left, right) => left.entryId - right.entryId)
-        syncPositionsToViewer(next)
-        return next
-      })
-      postToViewer({ type: "anchoredAudioCreated", position: createdPosition })
+    try {
+      const anchors = buildPairAnchors(currentDraft.anchor)
+
+      for (const role of PAIR_ROLES) {
+        const slot = currentDraft.slots[role]
+        if (!slot) {
+          throw new Error("La dupla de audio debe incluir pregunta y respuesta.")
+        }
+
+        const createdEntry = await createPracticeAudioEntry<{ id: number }>({
+          subjectId: material.subjectId,
+          subjectName: material.subjectName,
+          sessionDate: material.sessionDate,
+          weekNumber: material.weekNumber,
+          weekdayIndex: material.weekdayIndex,
+          materialId: material.id,
+          blob: slot.blob,
+          mimeType: slot.mimeType,
+          pairId: currentDraft.pairId,
+          pairRole: role,
+        })
+        createdEntryIds.push(createdEntry.id)
+
+        const anchor = anchors[role]
+        const positionResponse = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entryId: createdEntry.id,
+            pageNum: anchor.pageNum,
+            xp: anchor.xp,
+            yp: anchor.yp,
+          }),
+        })
+        await requireOkJson(positionResponse, "No se pudo guardar la posicion del audio.")
+      }
+
+      await loadPositions()
       closeRecorder()
     } catch (error) {
-      console.error("Failed to confirm anchored audio:", error)
-      setRecordingError(error instanceof Error ? error.message : "No se pudo confirmar el audio.")
+      console.error("Failed to confirm anchored audio pair:", error)
+      const message = error instanceof Error ? error.message : "No se pudo confirmar la dupla de audio."
+      setRecordingError(message)
+
+      for (const createdEntryId of createdEntryIds) {
+        try {
+          await fetch(`/api/subject-day-entries/${createdEntryId}`, { method: "DELETE" })
+        } catch (cleanupError) {
+          console.error("Failed to cleanup partial audio pair:", cleanupError)
+        }
+      }
+
+      await loadPositions()
     } finally {
       setIsUploading(false)
     }
-  }, [closeRecorder, material, pendingAnchor, postToViewer, reviewAudio, syncPositionsToViewer])
+  }, [closeRecorder, loadPositions, material])
 
   const uploadPracticeFragment = useCallback(
     async (payload: FragmentUploadPayload) => {
@@ -469,9 +652,12 @@ export function PracticeViewerClient({
 
       if (event.data.type === "startAnchoredAudio") {
         if (!event.data.payload) return
+        const nextDraft = buildInitialPairDraft(event.data.payload)
         setRecordingError("")
-        setPendingAnchor(event.data.payload)
-        setIsRecorderOpen(true)
+        stopPreviewPlayback()
+        pairDraftRef.current = nextDraft
+        replacePairDraft(() => nextDraft)
+        void startRecording("question")
         return
       }
 
@@ -503,6 +689,7 @@ export function PracticeViewerClient({
             setActiveEntryId(null)
             postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: false })
           })
+        return
       }
 
       if (event.data.type === "deleteAnchoredAudio") {
@@ -514,21 +701,23 @@ export function PracticeViewerClient({
             const response = await fetch(`/api/subject-day-entries/${entryId}`, {
               method: "DELETE",
             })
-            const payload = await readResponsePayload(response)
+            const payload = (await readResponsePayload(response)) as DeleteEntriesResponse | null
             if (!response.ok) {
               throw new Error(getErrorMessage(payload, "No se pudo borrar el audio."))
             }
 
+            const deletedIds = Array.isArray(payload?.ids) && payload.ids.length > 0 ? payload.ids : [entryId]
             setPositions((previous) => {
-              const next = previous.filter((position) => position.entryId !== entryId)
+              const deleted = new Set(deletedIds)
+              const next = previous.filter((position) => !deleted.has(position.entryId))
               syncPositionsToViewer(next)
               return next
             })
-            if (activeEntryId === entryId) {
+            if (activeEntryId != null && deletedIds.includes(activeEntryId)) {
               audioRef.current?.pause()
               setActiveEntryId(null)
             }
-            postToViewer({ type: "anchoredAudioDeleted", entryId })
+            postToViewer({ type: "anchoredAudioDeleted", entryIds: deletedIds })
           } catch (error) {
             console.error("Failed to delete anchored audio:", error)
             const message = error instanceof Error ? error.message : "No se pudo borrar el audio."
@@ -539,7 +728,20 @@ export function PracticeViewerClient({
         })()
       }
     },
-    [activeEntryId, closeRecorder, hasMaterial, loadPositions, material, positions, postToViewer, syncPositionsToViewer, uploadPracticeFragment]
+    [
+      activeEntryId,
+      closeRecorder,
+      hasMaterial,
+      loadPositions,
+      material,
+      positions,
+      postToViewer,
+      replacePairDraft,
+      startRecording,
+      stopPreviewPlayback,
+      syncPositionsToViewer,
+      uploadPracticeFragment,
+    ]
   )
 
   useEffect(() => {
@@ -571,12 +773,30 @@ export function PracticeViewerClient({
   }, [activeEntryId, postToViewer])
 
   useEffect(() => {
+    const previewAudio = previewAudioRef.current
+    if (!previewAudio) return
+
+    const handlePreviewStop = () => setPreviewPlayingRole(null)
+    previewAudio.addEventListener("ended", handlePreviewStop)
+    previewAudio.addEventListener("pause", handlePreviewStop)
     return () => {
-      stopAndDiscardRecording()
-      stopMediaTracks()
-      disposeReviewAudio()
+      previewAudio.removeEventListener("ended", handlePreviewStop)
+      previewAudio.removeEventListener("pause", handlePreviewStop)
     }
-  }, [disposeReviewAudio, stopAndDiscardRecording, stopMediaTracks])
+  }, [])
+
+  useEffect(() => {
+    pairDraftRef.current = pairDraft
+  }, [pairDraft])
+
+  useEffect(() => {
+    return () => {
+      discardRecording()
+      stopMediaTracks()
+      stopPreviewPlayback()
+      disposePairDraft(pairDraftRef.current)
+    }
+  }, [discardRecording, disposePairDraft, stopMediaTracks, stopPreviewPlayback])
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -591,6 +811,7 @@ export function PracticeViewerClient({
       />
 
       <audio ref={audioRef} hidden preload="none" />
+      <audio ref={previewAudioRef} hidden preload="none" />
 
       {positionsError ? (
         <div className="fixed bottom-4 left-4 z-[1400] max-w-md rounded-xl border border-red-400/40 bg-red-950/90 px-4 py-3 text-sm text-red-100">
@@ -604,49 +825,105 @@ export function PracticeViewerClient({
         </div>
       ) : null}
 
-      {material && isRecorderOpen ? (
+      {material && isPairModalOpen && pairDraft ? (
         <div className="fixed inset-0 z-[1500] flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+          <div className="w-full max-w-xl rounded-3xl border border-amber-200/30 bg-[#efe2ad] p-6 text-slate-950 shadow-2xl">
             <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Audio anclado</p>
-              <h2 className="text-2xl font-semibold text-white">Grabar duda en el PDF</h2>
-              <p className="text-sm text-slate-300">
-                {material.subjectName} · {material.sessionDate} · pagina {pendingAnchor?.pageNum ?? "-"}
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-700">Audio anclado</p>
+              <h2 className="text-2xl font-semibold">Dupla pregunta / respuesta</h2>
+              <p className="text-sm text-slate-700">
+                {material.subjectName} - {material.sessionDate} - pagina {pairDraft.anchor.pageNum}
+              </p>
+              <p className="text-xs text-slate-600">
+                El primer audio entra como pregunta. Puedes arrastrar los bloques para intercambiar roles.
               </p>
             </div>
 
             <div className="mt-6 space-y-4">
-              {reviewAudio ? (
-                <audio controls src={reviewAudio.url} className="w-full" />
-              ) : (
-                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-sm text-slate-300">
-                  {isRecording ? "Grabando audio..." : "Pulsa grabar para registrar la duda en esta posicion."}
-                </div>
-              )}
+              {PAIR_ROLES.map((role) => {
+                const slot = pairDraft.slots[role]
+                const isThisRecording = isRecording && recordingTarget === role
+                const isPlayingPreview = previewPlayingRole === role
 
-              {recordingError ? <div className="text-sm text-red-300">{recordingError}</div> : null}
+                return (
+                  <div
+                    key={role}
+                    draggable={!isRecording && !isUploading}
+                    onDragStart={() => setDraggedRole(role)}
+                    onDragOver={(event) => {
+                      if (!draggedRole || draggedRole === role) return
+                      event.preventDefault()
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      if (!draggedRole || draggedRole === role) return
+                      swapDraftRoles()
+                      setDraggedRole(null)
+                    }}
+                    onDragEnd={() => setDraggedRole(null)}
+                    className="rounded-2xl border border-slate-950/15 bg-white/30 p-4 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-3xl font-semibold">{getPairRoleLabel(role)}</p>
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-600">
+                          {slot ? "Audio listo" : isThisRecording ? "Grabando..." : "Sin audio"}
+                        </p>
+                      </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => void startRecording(role)}
+                        disabled={isUploading || isRecording}
+                        className="rounded-full border border-slate-950/30 bg-white/40 px-4 py-2 text-sm font-medium transition hover:bg-white/70 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`Regrabar ${getPairRoleLabel(role)}`}
+                      >
+                        Regrabar
+                      </button>
+                    </div>
+
+                    <div className="mt-4 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => playDraftAudio(role)}
+                        disabled={!slot || isThisRecording}
+                        className="grid h-11 w-11 place-items-center rounded-full border border-slate-950/30 bg-white/60 text-xl transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={slot ? `Reproducir ${getPairRoleLabel(role)}` : `${getPairRoleLabel(role)} vacia`}
+                      >
+                        {isPlayingPreview ? "Stop" : "Play"}
+                      </button>
+
+                      <div className="h-1 flex-1 rounded-full bg-slate-950/20">
+                        <div className={`h-full rounded-full ${slot ? "w-full bg-slate-950/70" : "w-0 bg-slate-950/70"}`} />
+                      </div>
+                    </div>
+
+                    <div className="mt-3 min-h-5 text-sm text-slate-700">
+                      {isThisRecording
+                        ? "Grabando en curso. Pulsa detener para conservar este audio."
+                        : slot
+                          ? "Listo para confirmar o regrabar."
+                          : "Usa la flecha para grabar este slot."}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {recordingError ? <div className="text-sm text-red-700">{recordingError}</div> : null}
+              {draggedRole ? <div className="text-xs text-slate-700">Suelta sobre el otro bloque para intercambiar roles.</div> : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
                   onClick={closeRecorder}
                   disabled={isUploading}
-                  className="rounded-xl border border-white/15 px-4 py-2 text-sm text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+                  className="rounded-xl border border-slate-950/20 px-4 py-2 text-sm font-medium transition hover:bg-white/40 disabled:opacity-40"
                 >
                   Cancelar
                 </button>
 
                 <div className="flex flex-wrap items-center gap-3">
-                  {!isRecording ? (
-                    <button
-                      type="button"
-                      onClick={() => void startRecording()}
-                      disabled={isUploading}
-                      className="rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-400 disabled:opacity-40"
-                    >
-                      {reviewAudio ? "Regrabar" : "Grabar"}
-                    </button>
-                  ) : (
+                  {isRecording ? (
                     <button
                       type="button"
                       onClick={stopRecording}
@@ -655,12 +932,12 @@ export function PracticeViewerClient({
                     >
                       Detener
                     </button>
-                  )}
+                  ) : null}
 
                   <button
                     type="button"
                     onClick={() => void confirmRecording()}
-                    disabled={!reviewAudio || isUploading}
+                    disabled={!isPairComplete || isUploading || isRecording}
                     className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:opacity-40"
                   >
                     {isUploading ? "Guardando..." : "Confirmar"}

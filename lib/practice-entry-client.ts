@@ -14,6 +14,8 @@ type PracticeAudioEntryParams = PracticeEntryBaseParams & {
   subjectName: string
   blob: Blob
   mimeType?: string
+  pairId?: string | null
+  pairRole?: "question" | "answer" | null
 }
 
 type PracticeTextEntryParams = PracticeEntryBaseParams & {
@@ -67,6 +69,8 @@ export async function createPracticeAudioEntry<TEntry = unknown>({
   materialId,
   blob,
   mimeType,
+  pairId,
+  pairRole,
 }: PracticeAudioEntryParams) {
   const normalizedMimeType = mimeType || blob.type || "audio/webm"
   const audioFile = new File([blob], `${subjectId}-${sessionDate}.webm`, {
@@ -103,6 +107,8 @@ export async function createPracticeAudioEntry<TEntry = unknown>({
         materialId,
         driveFileId,
         fileName: audioFile.name,
+        pairId: pairId?.trim() || null,
+        pairRole: pairRole ?? null,
       }),
     }),
     "No se pudo confirmar el audio."

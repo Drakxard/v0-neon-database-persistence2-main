@@ -25,6 +25,8 @@ type EntryRow = {
   answer_text: string | null
   custom_title: string | null
   practice_state: "erre" | null
+  pair_id: string | null
+  pair_role: "question" | "answer" | null
   is_featured: boolean
   created_at: string
   updated_at: string
@@ -45,7 +47,11 @@ function isMissingColumn(error: unknown) {
       typeof error === "object" &&
       "code" in error &&
       error.code === "42703"
-  )
+    )
+}
+
+function isMissingPairColumn(error: unknown) {
+  return isMissingColumn(error)
 }
 
 function getDisplayTitle(entry: Pick<EntryRow, "custom_title" | "order_index">) {
@@ -288,11 +294,21 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
       return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
     }
 
-    const entries = await sql`
-      SELECT id, drive_file_id, subject_id
-      FROM subject_day_entries
-      WHERE id = ${entryId}
-    ` as Array<{ id: number; drive_file_id: string; subject_id: string }>
+    let entries: Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>
+    try {
+      entries = await sql`
+        SELECT id, drive_file_id, subject_id, pair_id
+        FROM subject_day_entries
+        WHERE id = ${entryId}
+      ` as Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>
+    } catch (error) {
+      if (!isMissingPairColumn(error)) throw error
+      entries = await sql`
+        SELECT id, drive_file_id, subject_id, NULL::TEXT AS pair_id
+        FROM subject_day_entries
+        WHERE id = ${entryId}
+      ` as Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>
+    }
 
     const entry = entries[0]
     if (!entry) {
@@ -302,21 +318,42 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
     if (forbidden) return forbidden
 
-    if (entry.drive_file_id) {
-      if (isR2ObjectKey(entry.drive_file_id)) {
-        await deleteR2Object(entry.drive_file_id)
-      } else {
-        await deleteDriveFile(entry.drive_file_id)
+    let pairRows = [{ id: entry.id, drive_file_id: entry.drive_file_id }]
+    if (entry.pair_id) {
+      try {
+        pairRows = await sql`
+          SELECT id, drive_file_id
+          FROM subject_day_entries
+          WHERE pair_id = ${entry.pair_id}
+          ORDER BY id ASC
+        ` as Array<{ id: number; drive_file_id: string }>
+      } catch (error) {
+        if (!isMissingPairColumn(error)) throw error
       }
     }
 
-    const rows = await sql`
-      DELETE FROM subject_day_entries
-      WHERE id = ${entryId}
-      RETURNING id
-    ` as Array<{ id: number }>
+    for (const pairEntry of pairRows) {
+      if (!pairEntry.drive_file_id) continue
+      if (isR2ObjectKey(pairEntry.drive_file_id)) {
+        await deleteR2Object(pairEntry.drive_file_id)
+      } else {
+        await deleteDriveFile(pairEntry.drive_file_id)
+      }
+    }
 
-    return NextResponse.json({ success: true, id: rows[0].id })
+    const rows = entry.pair_id
+      ? await sql`
+          DELETE FROM subject_day_entries
+          WHERE pair_id = ${entry.pair_id}
+          RETURNING id
+        ` as Array<{ id: number }>
+      : await sql`
+          DELETE FROM subject_day_entries
+          WHERE id = ${entryId}
+          RETURNING id
+        ` as Array<{ id: number }>
+
+    return NextResponse.json({ success: true, id: entryId, ids: rows.map((row) => row.id) })
   } catch (error) {
     console.error("DELETE /api/subject-day-entries/[id] error:", error)
     if (isMissingSubjectDayEntriesTable(error)) {
