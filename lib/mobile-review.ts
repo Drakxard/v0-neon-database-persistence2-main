@@ -3,9 +3,10 @@ import { neon } from "@neondatabase/serverless"
 import { downloadDriveFile } from "@/lib/google-drive"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { getSubjectById, isValidSubjectId } from "@/lib/subjects"
-import { getCurrentWeekNumber, getWeekdayIndexFromDateKey } from "@/lib/subject-utils"
+import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 const sql = neon(process.env.DATABASE_URL!)
+const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
 
 export type MobileReviewPair = {
   pairId: string
@@ -76,6 +77,37 @@ function padTime(value: number) {
 
 function getCurrentTimeKey(now = new Date()) {
   return `${padTime(now.getHours())}:${padTime(now.getMinutes())}`
+}
+
+function getTimeZonePart(now: Date, part: Intl.DateTimeFormatPartTypes) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: MOBILE_REVIEW_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+
+  return formatter.formatToParts(now).find((item) => item.type === part)?.value || ""
+}
+
+function getBuenosAiresDateKey(now = new Date()) {
+  const year = getTimeZonePart(now, "year")
+  const month = getTimeZonePart(now, "month")
+  const day = getTimeZonePart(now, "day")
+  return `${year}-${month}-${day}`
+}
+
+function getBuenosAiresTimeKey(now = new Date()) {
+  const hour = getTimeZonePart(now, "hour")
+  const minute = getTimeZonePart(now, "minute")
+  return `${hour}:${minute}`
+}
+
+function getBuenosAiresWeekNumber(now = new Date()) {
+  return getWeekNumberForDate(parseDateKey(getBuenosAiresDateKey(now)))
 }
 
 function isMissingTable(error: unknown) {
@@ -190,8 +222,8 @@ export async function getOrCreateMobileReviewState(deviceId: string) {
 }
 
 export async function getActiveMobileReviewSlot(now = new Date()) {
-  const weekdayIndex = getWeekdayIndexFromDateKey(normalizeSessionDateKey(now))
-  const timeKey = getCurrentTimeKey(now)
+  const weekdayIndex = getWeekdayIndexFromDateKey(getBuenosAiresDateKey(now))
+  const timeKey = getBuenosAiresTimeKey(now)
   const rows = await sql`
     SELECT id, subject_id, weekday_index, start_time, end_time, enabled, priority
     FROM mobile_review_slots
@@ -344,7 +376,7 @@ export async function resolveMobileReviewPair(params: {
     return { state, activeSlot: null, pair: null as MobileReviewPair | null }
   }
 
-  const weekNumber = getCurrentWeekNumber(now)
+  const weekNumber = getBuenosAiresWeekNumber(now)
 
   let selectedRow: PairRow | null = null
   if (!forceNext && state.current_pair_id && state.current_subject_id === activeSlot.subject_id && state.current_week_number === weekNumber) {
@@ -452,7 +484,7 @@ export async function canAccessMobileReviewEntry(deviceId: string, entryId: numb
 export async function getMobileReviewStatus(deviceId: string, now = new Date()) {
   const state = await getOrCreateMobileReviewState(deviceId)
   const activeSlot = await getActiveMobileReviewSlot(now)
-  const weekNumber = getCurrentWeekNumber(now)
+  const weekNumber = getBuenosAiresWeekNumber(now)
   const subject = activeSlot ? getSubjectById(activeSlot.subject_id) : null
 
   return {
