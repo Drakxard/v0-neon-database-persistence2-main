@@ -114,31 +114,21 @@ function AudioRow({
   label,
   audioRef,
   src,
-  onPlay,
 }: {
   label: string
   audioRef: React.RefObject<HTMLAudioElement | null>
   src: string
-  onPlay: () => void
 }) {
   return (
     <section className="space-y-2">
       <p className="text-[1.9rem] leading-none text-black">{label}</p>
-      <div className="flex items-center gap-4">
-        <button
-          type="button"
-          onClick={onPlay}
-          className="grid h-10 w-10 place-items-center rounded-full text-black transition hover:opacity-80"
-          aria-label={`Reproducir ${label}`}
-        >
-          <span
-            aria-hidden="true"
-            className="ml-1 block h-0 w-0 border-b-[10px] border-l-[16px] border-t-[10px] border-b-transparent border-l-black border-t-transparent"
-          />
-        </button>
-        <div className="h-1 flex-1 rounded-full bg-black/90" />
-      </div>
-      <audio ref={audioRef} src={src} preload="auto" className="hidden" />
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="auto"
+        controls
+        className="block w-full rounded-md border border-black/40 bg-[#f7ecc0]"
+      />
     </section>
   )
 }
@@ -190,11 +180,13 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const [isAccessLoading, setIsAccessLoading] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false)
   const [isSlotsLoading, setIsSlotsLoading] = useState(false)
   const [slotsError, setSlotsError] = useState("")
   const [slots, setSlots] = useState<MobileReviewSlot[]>([])
   const [slotForm, setSlotForm] = useState<SlotFormState>(createEmptySlotForm)
   const [isSavingSlot, setIsSavingSlot] = useState(false)
+  const [scheduleDayIndex, setScheduleDayIndex] = useState(0)
   const questionAudioRef = useRef<HTMLAudioElement | null>(null)
   const answerAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -287,22 +279,9 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
 
   const openSlotsModal = async () => {
     setIsModalOpen(true)
+    setIsScheduleModalOpen(false)
     setSlotForm(createEmptySlotForm())
     await loadSlots()
-  }
-
-  const playQuestion = () => {
-    const audio = questionAudioRef.current
-    if (!audio) return
-    audio.currentTime = 0
-    void audio.play().catch(() => {})
-  }
-
-  const playAnswer = () => {
-    const audio = answerAudioRef.current
-    if (!audio) return
-    audio.currentTime = 0
-    void audio.play().catch(() => {})
   }
 
   const loadNext = async () => {
@@ -340,6 +319,19 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       ...current,
       [field]: value,
     }))
+  }
+
+  const openScheduleModal = async () => {
+    setIsScheduleModalOpen(true)
+    setIsModalOpen(false)
+    await loadSlots()
+  }
+
+  const editSlotFromSchedule = (slot: MobileReviewSlot) => {
+    setSlotForm(mapSlotToForm(slot))
+    setScheduleDayIndex(slot.weekdayIndex)
+    setIsScheduleModalOpen(false)
+    setIsModalOpen(true)
   }
 
   const saveSlot = async () => {
@@ -447,6 +439,8 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     payload?.debugReason === "no_active_slot"
       ? "No hay una franja activa en este momento."
       : "No hay un par disponible para la franja actual."
+  const slotsForSelectedDay = slots.filter((slot) => slot.weekdayIndex === scheduleDayIndex)
+  const scheduleDayLabel = WEEKDAY_OPTIONS.find((option) => Number(option.value) === scheduleDayIndex)?.label || "Dia"
 
   if (requiresAccess) {
     return (
@@ -512,14 +506,12 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
             label="Pregunta"
             audioRef={questionAudioRef}
             src={payload?.pair?.questionAudioUrl || ""}
-            onPlay={playQuestion}
           />
 
           <AudioRow
             label="Respuesta"
             audioRef={answerAudioRef}
             src={payload?.pair?.answerAudioUrl || ""}
-            onPlay={playAnswer}
           />
 
           {error ? <p className="text-sm text-red-700">{error}</p> : null}
@@ -641,26 +633,67 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
                   >
                     Nueva
                   </button>
+                  <button type="button" onClick={() => void openScheduleModal()} className="border border-black px-3 py-1" disabled={isSavingSlot}>
+                    Ver horarios
+                  </button>
                 </div>
 
                 {slotsError ? <p className="text-sm text-red-700">{slotsError}</p> : null}
               </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-              <section className="space-y-3">
-                <h3 className="text-sm font-semibold">Franjas cargadas</h3>
-                {isSlotsLoading ? <p className="text-sm">Cargando horarios...</p> : null}
-                {!isSlotsLoading && slots.length === 0 ? <p className="text-sm">Todavia no hay franjas.</p> : null}
-                {slots.map((slot) => (
-                  <SlotRow
-                    key={slot.id}
-                    slot={slot}
-                    onEdit={(selectedSlot) => setSlotForm(mapSlotToForm(selectedSlot))}
-                    onToggle={(selectedSlot) => void toggleSlot(selectedSlot)}
-                    onDelete={(selectedSlot) => void deleteSlot(selectedSlot)}
-                    busy={isSavingSlot}
-                  />
-                ))}
-              </section>
+      {isScheduleModalOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/35 px-3 py-4">
+          <div className="flex max-h-full w-full max-w-[360px] flex-col border-4 border-black bg-[#f1e4a9]">
+            <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setScheduleDayIndex((current) => (current + 6) % 7)}
+                className="border border-black px-2 py-1 text-sm"
+              >
+                {"<"}
+              </button>
+              <h2 className="text-xl leading-none">{scheduleDayLabel}</h2>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScheduleDayIndex((current) => (current + 1) % 7)}
+                  className="border border-black px-2 py-1 text-sm"
+                >
+                  {">"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsScheduleModalOpen(false)
+                    setIsModalOpen(true)
+                  }}
+                  className="border border-black px-2 py-1 text-sm"
+                >
+                  Volver
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto px-4 py-4">
+              {isSlotsLoading ? <p className="text-sm">Cargando horarios...</p> : null}
+              {!isSlotsLoading && slotsForSelectedDay.length === 0 ? (
+                <p className="text-sm">No hay franjas para este dia.</p>
+              ) : null}
+              {slotsForSelectedDay.map((slot) => (
+                <SlotRow
+                  key={slot.id}
+                  slot={slot}
+                  onEdit={editSlotFromSchedule}
+                  onToggle={(selectedSlot) => void toggleSlot(selectedSlot)}
+                  onDelete={(selectedSlot) => void deleteSlot(selectedSlot)}
+                  busy={isSavingSlot}
+                />
+              ))}
+              {slotsError ? <p className="text-sm text-red-700">{slotsError}</p> : null}
             </div>
           </div>
         </div>
