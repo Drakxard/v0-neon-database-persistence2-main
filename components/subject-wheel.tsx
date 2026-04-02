@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
+import { BarChart3, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { useTheme } from "next-themes"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
@@ -693,6 +693,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [reviewEntries, setReviewEntries] = useState<SubjectDayEntry[]>([])
   const [isLoadingReview, setIsLoadingReview] = useState(false)
   const [reviewError, setReviewError] = useState("")
+  const [isAnalysisOpen, setIsAnalysisOpen] = useState(false)
   const [vectorOverviews, setVectorOverviews] = useState<VectorOverview[]>([])
   const [isVectorsLoading, setIsVectorsLoading] = useState(false)
   const [vectorsError, setVectorsError] = useState("")
@@ -766,6 +767,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [homeSelectedWeekNumber])
 
   useEffect(() => {
+    if (!isAnalysisOpen) return
+
     let cancelled = false
 
     const loadVectorOverviews = async () => {
@@ -798,7 +801,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     return () => {
       cancelled = true
     }
-  }, [homeSelectedWeekNumber])
+  }, [homeSelectedWeekNumber, isAnalysisOpen])
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -3125,6 +3128,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     currentSubject && dialogSelectedWeekNumber === homeSelectedWeekNumber
       ? vectorOverviewBySubjectId[currentSubject.id] ?? null
       : null
+  const activeVectorOverviews = useMemo(
+    () => vectorOverviews.filter((vector) => vector.isActive),
+    [vectorOverviews]
+  )
+  const analysisSummary = useMemo(() => {
+    const activeCount = activeVectorOverviews.length
+    const readyCount = activeVectorOverviews.filter((vector) => vector.severity === "green").length
+    const laggingCount = activeVectorOverviews.filter((vector) => vector.severity === "red").length
+    const coveredPdfCount = activeVectorOverviews.reduce((total, vector) => total + vector.coveredPracticeMaterialIds.length, 0)
+    const relevantPdfCount = activeVectorOverviews.reduce((total, vector) => total + vector.relevantPracticeMaterialIds.length, 0)
+
+    return {
+      activeCount,
+      readyCount,
+      laggingCount,
+      coveredPdfCount,
+      relevantPdfCount,
+    }
+  }, [activeVectorOverviews])
   const currentSubjectPracticeCoverage = useMemo(() => {
     const fallback = practiceMaterials
       .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
@@ -3480,6 +3502,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </DropdownMenuContent>
             </DropdownMenu>
             <button
+              onClick={() => setIsAnalysisOpen(true)}
+              className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              aria-label="Analisis"
+              title="Analisis"
+            >
+              <BarChart3 className="h-5 w-5" />
+            </button>
+            <button
               onClick={handleReset}
               className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
               aria-label="Reiniciar"
@@ -3490,70 +3520,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </div>
         </div>
       </header>
-
-      <section className="border-b border-border bg-card/70 px-4 py-4 sm:px-6">
-        <div className="mx-auto max-w-6xl space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Cobertura minima util</p>
-              <p className="text-sm text-foreground">Que materias estas dejando de lado hoy segun su vector propio de 6 dias.</p>
-            </div>
-            {isVectorsLoading ? <p className="text-xs text-muted-foreground">Actualizando...</p> : null}
-          </div>
-
-          {vectorsError ? <p className="text-sm text-red-700">{vectorsError}</p> : null}
-
-          {!vectorsError && vectorOverviews.filter((vector) => vector.isActive).length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-4 text-sm text-muted-foreground">
-              No hay vectores activos en esta semana.
-            </div>
-          ) : null}
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {vectorOverviews
-              .filter((vector) => vector.isActive)
-              .map((vector) => (
-                <article
-                  key={`${vector.subjectId}-${vector.weekNumber}`}
-                  className={`rounded-2xl border px-4 py-4 ${
-                    vector.severity === "red"
-                      ? "border-red-300 bg-red-50"
-                      : vector.severity === "yellow"
-                        ? "border-amber-300 bg-amber-50"
-                        : "border-emerald-300 bg-emerald-50"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-base font-medium text-foreground">{vector.subjectName}</p>
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                        {vector.currentDay ? `D${vector.currentDay}` : "Sin dia"} - {vector.stateLabel.replaceAll("_", " ")}
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-current px-2 py-1 text-xs">
-                      {vector.coveredPracticeMaterialIds.length}/{vector.relevantPracticeMaterialIds.length || 0} PDF
-                    </span>
-                  </div>
-
-                  <div className="mt-3 space-y-1 text-sm text-foreground">
-                    <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
-                    <p>Ultima interaccion movil: {formatLastInteractionLabel(vector.lastInteractionAt)}</p>
-                  </div>
-
-                  {vector.staleReason.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {vector.staleReason.map((reason) => (
-                        <span key={reason} className="rounded-full border border-current px-2 py-1 text-xs">
-                          {reason.replaceAll("_", " ")}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-          </div>
-        </div>
-      </section>
 
       {/* Main Content */}
       <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12 sm:py-14">
@@ -3706,6 +3672,108 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </Button>
             )}
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isAnalysisOpen} onOpenChange={setIsAnalysisOpen}>
+        <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden border border-border bg-card text-foreground">
+          <DialogHeader className="space-y-2 text-left">
+            <DialogTitle className="flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              Cobertura minima util
+            </DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">
+              Muestra que materias estas dejando atras segun su vector propio de 6 dias.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 overflow-y-auto pr-1">
+            {isVectorsLoading ? (
+              <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Cargando analisis...
+              </div>
+            ) : null}
+
+            {!isVectorsLoading ? (
+              <>
+                {vectorsError ? <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-sm text-red-700">{vectorsError}</div> : null}
+
+                {!vectorsError ? (
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Materias activas</p>
+                      <p className="mt-2 text-2xl font-semibold text-foreground">{analysisSummary.activeCount}</p>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Al dia</p>
+                      <p className="mt-2 text-2xl font-semibold text-emerald-800">{analysisSummary.readyCount}</p>
+                    </div>
+                    <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.16em] text-red-700">Rezagadas</p>
+                      <p className="mt-2 text-2xl font-semibold text-red-800">{analysisSummary.laggingCount}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">PDFs cubiertos</p>
+                      <p className="mt-2 text-2xl font-semibold text-foreground">
+                        {analysisSummary.coveredPdfCount}/{analysisSummary.relevantPdfCount}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {!vectorsError && activeVectorOverviews.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-6 text-sm text-muted-foreground">
+                    No hay vectores activos en esta semana.
+                  </div>
+                ) : null}
+
+                {!vectorsError ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {activeVectorOverviews.map((vector) => (
+                      <article
+                        key={`${vector.subjectId}-${vector.weekNumber}`}
+                        className={`rounded-2xl border px-4 py-4 ${
+                          vector.severity === "red"
+                            ? "border-red-300 bg-red-50"
+                            : vector.severity === "yellow"
+                              ? "border-amber-300 bg-amber-50"
+                              : "border-emerald-300 bg-emerald-50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-base font-medium text-foreground">{vector.subjectName}</p>
+                            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                              {vector.currentDay ? `D${vector.currentDay}` : "Sin dia"} - {vector.stateLabel.replaceAll("_", " ")}
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-current px-2 py-1 text-xs">
+                            {vector.coveredPracticeMaterialIds.length}/{vector.relevantPracticeMaterialIds.length || 0} PDF
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
+                          <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
+                          <p>Ultima interaccion: {formatLastInteractionLabel(vector.lastInteractionAt)}</p>
+                        </div>
+
+                        {vector.staleReason.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {vector.staleReason.map((reason) => (
+                              <span key={reason} className="rounded-full border border-current px-2 py-1 text-xs">
+                                {reason.replaceAll("_", " ")}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         </DialogContent>
       </Dialog>
 
