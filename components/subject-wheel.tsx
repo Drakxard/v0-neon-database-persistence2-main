@@ -144,6 +144,14 @@ interface ReviewAudio {
   mimeType: string
 }
 
+type PairRole = "question" | "answer"
+
+type AudioPairDraft = {
+  target: AudioUploadTarget
+  pairId: string
+  slots: Record<PairRole, ReviewAudio | null>
+}
+
 type AudioUploadTarget = {
   source: "subject-dialog" | "continue-practice" | "continue-context"
   subjectId: string
@@ -152,6 +160,14 @@ type AudioUploadTarget = {
   weekNumber: number
   weekdayIndex: number
   materialId?: number | null
+}
+
+function generatePairId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+
+  return `pair-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 type ManualEntryTarget = {
@@ -484,6 +500,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [reviewAudio, setReviewAudio] = useState<ReviewAudio | null>(null)
   const [recordingTarget, setRecordingTarget] = useState<AudioUploadTarget | null>(null)
   const [isReviewDialogOpen, setIsReviewDialogOpen] = useState(false)
+  const [audioPairDraft, setAudioPairDraft] = useState<AudioPairDraft | null>(null)
+  const [audioPairRecordingRole, setAudioPairRecordingRole] = useState<PairRole | null>(null)
   const [isUploadingAudio, setIsUploadingAudio] = useState(false)
   const [now, setNow] = useState(() => new Date())
   const [editingAnswerId, setEditingAnswerId] = useState<number | null>(null)
@@ -591,6 +609,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const recordingChunksRef = useRef<Blob[]>([])
+  const audioPairDraftRef = useRef<AudioPairDraft | null>(null)
+  const recordingPairRoleRef = useRef<PairRole | null>(null)
   const audioCacheRef = useRef<Map<number, string>>(new Map())
   const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
   const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
@@ -1026,6 +1046,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       if (reviewAudio) {
         URL.revokeObjectURL(reviewAudio.url)
       }
+      if (audioPairDraft) {
+        Object.values(audioPairDraft.slots).forEach((audio) => {
+          if (audio) URL.revokeObjectURL(audio.url)
+        })
+      }
 
       Object.values(audioElementRefs.current).forEach((audioElement) => {
         audioElement?.pause()
@@ -1038,13 +1063,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       clearPendingFeaturedSave()
       audioCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [reviewAudio])
+  }, [audioPairDraft, reviewAudio])
+
+  useEffect(() => {
+    audioPairDraftRef.current = audioPairDraft
+  }, [audioPairDraft])
 
   const disposeReviewAudio = (nextAudio?: ReviewAudio | null) => {
     if (reviewAudio && reviewAudio !== nextAudio) {
       URL.revokeObjectURL(reviewAudio.url)
     }
   }
+
+  const disposeAudioPairDraft = useCallback((draft?: AudioPairDraft | null) => {
+    if (!draft) return
+    Object.values(draft.slots).forEach((audio) => {
+      if (audio) URL.revokeObjectURL(audio.url)
+    })
+  }, [])
 
   const clearPendingFeaturedSave = () => {
     if (pendingFeaturedSaveTimerRef.current) {
@@ -1152,6 +1188,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
 
     recordingChunksRef.current = []
+    recordingPairRoleRef.current = null
+    setAudioPairRecordingRole(null)
     setIsRecording(false)
     setRecordingTarget(null)
   }
@@ -1217,6 +1255,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setRecordingTarget(null)
   }
 
+  const cancelAudioPairReview = useCallback(() => {
+    disposeAudioPairDraft(audioPairDraftRef.current)
+    audioPairDraftRef.current = null
+    recordingPairRoleRef.current = null
+    setAudioPairDraft(null)
+    setAudioPairRecordingRole(null)
+    setRecordingTarget(null)
+  }, [disposeAudioPairDraft])
+
   const closeSubjectDialog = async () => {
     await flushPendingFeaturedUpdate()
     stopAndDiscardRecording()
@@ -1226,6 +1273,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     })
     setIsRecording(false)
     cancelReview()
+    cancelAudioPairReview()
     setIsDialogOpen(false)
     setCurrentSubject(null)
     resetSubjectUiState()
@@ -1391,11 +1439,44 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           url: URL.createObjectURL(blob),
         }
 
+        if (target.source === "continue-practice") {
+          const activeRole = recordingPairRoleRef.current
+          if (audioPairDraftRef.current && activeRole) {
+            setAudioPairDraft((previous) => {
+              if (!previous) return previous
+              const previousAudio = previous.slots[activeRole]
+              if (previousAudio) URL.revokeObjectURL(previousAudio.url)
+              const nextDraft = {
+                ...previous,
+                slots: {
+                  ...previous.slots,
+                  [activeRole]: nextReviewAudio,
+                },
+              }
+              audioPairDraftRef.current = nextDraft
+              return nextDraft
+            })
+          } else {
+            const nextDraft: AudioPairDraft = {
+              target,
+              pairId: generatePairId(),
+              slots: {
+                question: nextReviewAudio,
+                answer: null,
+              },
+            }
+            audioPairDraftRef.current = nextDraft
+            setAudioPairDraft(nextDraft)
+          }
+          setAudioPairRecordingRole(null)
+          recordingPairRoleRef.current = null
+          setRecordingTarget(target)
+          return
+        }
+
         disposeReviewAudio(nextReviewAudio)
         setReviewAudio(nextReviewAudio)
-        setIsReviewDialogOpen(
-          target.source === "subject-dialog" || target.source === "continue-practice" || target.source === "continue-context"
-        )
+        setIsReviewDialogOpen(target.source === "subject-dialog" || target.source === "continue-context")
       }
 
       recorder.start()
@@ -1424,6 +1505,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop())
       mediaStreamRef.current = null
     }
+  }
+
+  const startAudioPairSlotRecording = async (role: PairRole) => {
+    const draft = audioPairDraftRef.current
+    if (!draft) return
+    recordingPairRoleRef.current = role
+    setAudioPairRecordingRole(role)
+    await startRecording(draft.target)
   }
 
   const confirmReview = async () => {
@@ -1510,6 +1599,55 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     } catch (error) {
       console.error("Failed to upload audio entry:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar el audio.")
+    } finally {
+      setIsUploadingAudio(false)
+    }
+  }
+
+  const confirmAudioPairReview = async () => {
+    const draft = audioPairDraftRef.current
+    if (!draft || !draft.slots.question || !draft.slots.answer) return
+
+    setIsUploadingAudio(true)
+    setEntriesError("")
+
+    try {
+      const createdEntries: SubjectDayEntry[] = []
+
+      for (const role of ["question", "answer"] as const) {
+        const slot = draft.slots[role]
+        if (!slot) continue
+
+        let createdEntry = await createPracticeAudioEntry<SubjectDayEntry>({
+          subjectId: draft.target.subjectId,
+          subjectName: draft.target.subjectName,
+          sessionDate: draft.target.sessionDate,
+          weekNumber: draft.target.weekNumber,
+          weekdayIndex: draft.target.weekdayIndex,
+          materialId: draft.target.materialId ?? null,
+          blob: slot.blob,
+          mimeType: slot.mimeType,
+          pairId: draft.pairId,
+          pairRole: role,
+        })
+
+        const patchResponse = await fetch(`/api/subject-day-entries/${createdEntry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customTitle: role === "question" ? "Pregunta" : "Respuesta" }),
+        })
+        createdEntry = (await requireOkJson(patchResponse, "No se pudo etiquetar el audio.")) as SubjectDayEntry
+        createdEntries.push(createdEntry)
+      }
+
+      if (currentSubject?.id === draft.target.subjectId && subjectDialogDateKey === draft.target.sessionDate) {
+        setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, ...createdEntries]))
+      }
+
+      cancelAudioPairReview()
+    } catch (error) {
+      console.error("Failed to upload audio pair:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo confirmar la dupla de audio.")
     } finally {
       setIsUploadingAudio(false)
     }
@@ -4151,6 +4289,93 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               Confirmar
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(audioPairDraft)} onOpenChange={(open) => (!open ? cancelAudioPairReview() : undefined)}>
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-2xl"
+          onPointerDownOutside={(event) => event.preventDefault()}
+          onInteractOutside={(event) => event.preventDefault()}
+          onEscapeKeyDown={(event) => event.preventDefault()}
+        >
+          <DialogHeader>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <DialogTitle>Dupla de audio</DialogTitle>
+                <DialogDescription>El audio grabado entra como pregunta. Regraba o completa la respuesta antes de confirmar.</DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <button
+                  type="button"
+                  className="flex h-14 w-14 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Cerrar modal"
+                >
+                  <X className="h-7 w-7" />
+                </button>
+              </DialogClose>
+            </div>
+          </DialogHeader>
+
+          {audioPairDraft ? (
+            <div className="space-y-4">
+              {(["question", "answer"] as const).map((role) => {
+                const slot = audioPairDraft.slots[role]
+                const isThisRecording = isRecording && audioPairRecordingRole === role
+                return (
+                  <div key={role} className="rounded-2xl border border-border bg-card/60 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-lg font-medium text-foreground">{role === "question" ? "Pregunta" : "Respuesta"}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {isThisRecording ? "Grabando..." : slot ? "Audio listo" : "Sin audio"}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void startAudioPairSlotRecording(role)}
+                        disabled={isUploadingAudio || isRecording}
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        {slot ? "Regrabar" : "Grabar"}
+                      </Button>
+                    </div>
+
+                    {slot ? (
+                      <audio controls src={slot.url} className="w-full" />
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+                        Usa grabar para completar este audio.
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {recordingError ? <p className="text-sm text-red-600">{recordingError}</p> : null}
+
+              <DialogFooter>
+                {isRecording ? (
+                  <Button variant="outline" onClick={stopRecording} disabled={isUploadingAudio}>
+                    <Square className="h-4 w-4" />
+                    Detener
+                  </Button>
+                ) : null}
+                <Button variant="outline" onClick={cancelAudioPairReview} disabled={isUploadingAudio}>
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={() => void confirmAudioPairReview()}
+                  disabled={!audioPairDraft.slots.question || !audioPairDraft.slots.answer || isUploadingAudio || isRecording}
+                >
+                  {isUploadingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Confirmar
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
 
