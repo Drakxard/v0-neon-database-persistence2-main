@@ -27,6 +27,9 @@ export async function GET(request: Request) {
       return NextResponse.json({
         pair: null,
         status: await getMobileReviewStatus(deviceId),
+        currentIndex: resolved.currentIndex,
+        totalPairs: resolved.totalPairs,
+        debugReason: resolved.debugReason,
       })
     }
 
@@ -34,6 +37,9 @@ export async function GET(request: Request) {
       return NextResponse.json({
         pair: null,
         status: await getMobileReviewStatus(deviceId),
+        currentIndex: resolved.currentIndex,
+        totalPairs: resolved.totalPairs,
+        debugReason: resolved.debugReason,
       })
     }
 
@@ -41,6 +47,9 @@ export async function GET(request: Request) {
     return NextResponse.json({
       pair: withSignedAudioUrls(resolved.pair, authQuery),
       status: await getMobileReviewStatus(deviceId),
+      currentIndex: resolved.currentIndex,
+      totalPairs: resolved.totalPairs,
+      debugReason: resolved.debugReason,
     })
   } catch (error) {
     console.error("GET /api/mobile/review/current error:", error)

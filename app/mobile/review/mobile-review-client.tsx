@@ -37,6 +37,9 @@ type MobileReviewStatus = {
 type MobileReviewPayload = {
   pair: MobileReviewPair | null
   status: MobileReviewStatus
+  currentIndex: number
+  totalPairs: number
+  debugReason?: "no_active_slot" | "no_valid_pairs" | "stored_pair_not_found"
 }
 
 type MobileReviewSlot = {
@@ -225,6 +228,9 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     setPayload({
       pair: nextPayload.pair,
       status: nextPayload.status,
+      currentIndex: nextPayload.currentIndex,
+      totalPairs: nextPayload.totalPairs,
+      debugReason: nextPayload.debugReason,
     })
   }
 
@@ -318,6 +324,9 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       setPayload({
         pair: nextPayload.pair,
         status: nextPayload.status,
+        currentIndex: nextPayload.currentIndex,
+        totalPairs: nextPayload.totalPairs,
+        debugReason: nextPayload.debugReason,
       })
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No se pudo cargar el siguiente audio.")
@@ -433,6 +442,11 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   }
 
   const subjectTitle = payload?.pair?.subjectName || payload?.status.subjectName || "Sin materia"
+  const pairCounter = `${payload?.currentIndex ?? 0}/${payload?.totalPairs ?? 0}`
+  const emptyStateMessage =
+    payload?.debugReason === "no_active_slot"
+      ? "No hay una franja activa en este momento."
+      : "No hay un par disponible para la franja actual."
 
   if (requiresAccess) {
     return (
@@ -510,18 +524,21 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
 
           {error ? <p className="text-sm text-red-700">{error}</p> : null}
           {!error && !payload?.pair ? (
-            <p className="text-sm text-black/80">No hay un par disponible para la franja actual.</p>
+            <p className="text-sm text-black/80">{emptyStateMessage}</p>
           ) : null}
         </div>
 
-        <button
-          type="button"
-          onClick={() => void loadNext()}
-          disabled={isLoading}
-          className="mt-6 text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
-        >
-          {isLoading ? "Cargando..." : "Siguiente pregunta"}
-        </button>
+        <div className="mt-6 flex items-end justify-between gap-4">
+          <button
+            type="button"
+            onClick={() => void loadNext()}
+            disabled={isLoading}
+            className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
+          >
+            {isLoading ? "Cargando..." : "Siguiente pregunta"}
+          </button>
+          <p className="text-base leading-none text-black/80">{pairCounter}</p>
+        </div>
       </div>
 
       {isModalOpen ? (

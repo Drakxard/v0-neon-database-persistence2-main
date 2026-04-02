@@ -32,6 +32,9 @@ export default async function MobileReviewPage({
     const initialPayload = {
       pair: resolved.pair ? withSignedAudioUrls(resolved.pair, authQuery) : null,
       status: await getMobileReviewStatus(deviceId),
+      currentIndex: resolved.currentIndex,
+      totalPairs: resolved.totalPairs,
+      debugReason: resolved.debugReason,
     }
 
     return (
@@ -65,6 +68,9 @@ export default async function MobileReviewPage({
             hasCurrentPair: false,
             currentPairId: null,
           })),
+          currentIndex: 0,
+          totalPairs: 0,
+          debugReason: "no_valid_pairs",
         }}
         initialError={message}
         requiresAccess={false}

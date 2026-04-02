@@ -1701,6 +1701,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         if (createdEntry.pair_id !== draft.pairId || createdEntry.pair_role !== role) {
           throw new Error("La dupla de audio se guardo con metadata inconsistente.")
         }
+        if (
+          createdEntry.subject_id !== draft.target.subjectId ||
+          createdEntry.week_number !== draft.target.weekNumber ||
+          createdEntry.session_date !== draft.target.sessionDate ||
+          (createdEntry.subject_day_material_id ?? null) !== (draft.target.materialId ?? null)
+        ) {
+          throw new Error("La dupla de audio se guardo en una sesion o material incorrecto.")
+        }
         createdEntryIds.push(createdEntry.id)
         createdEntries.push(createdEntry)
       }

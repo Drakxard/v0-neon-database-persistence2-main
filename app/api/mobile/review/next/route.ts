@@ -22,6 +22,9 @@ export async function POST(request: Request) {
       return NextResponse.json({
         pair: null,
         status: await getMobileReviewStatus(deviceId),
+        currentIndex: resolved.currentIndex,
+        totalPairs: resolved.totalPairs,
+        debugReason: resolved.debugReason,
       })
     }
 
@@ -29,6 +32,9 @@ export async function POST(request: Request) {
     return NextResponse.json({
       pair: withSignedAudioUrls(resolved.pair, authQuery),
       status: await getMobileReviewStatus(deviceId),
+      currentIndex: resolved.currentIndex,
+      totalPairs: resolved.totalPairs,
+      debugReason: resolved.debugReason,
     })
   } catch (error) {
     console.error("POST /api/mobile/review/next error:", error)

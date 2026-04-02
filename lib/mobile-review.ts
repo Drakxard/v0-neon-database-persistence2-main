@@ -22,6 +22,15 @@ export type MobileReviewPair = {
   answerLabel: string
 }
 
+export type MobileReviewResolveResult = {
+  state: MobileReviewStateRow
+  activeSlot: SlotRow | null
+  pair: MobileReviewPair | null
+  totalPairs: number
+  currentIndex: number
+  debugReason?: "no_active_slot" | "no_valid_pairs" | "stored_pair_not_found"
+}
+
 type MobileReviewStateRow = {
   device_id: string
   current_pair_id: string | null
@@ -65,6 +74,7 @@ type PairRow = {
   subject_id: string
   week_number: number
   session_date: string
+  material_id: number | null
   question_entry_id: number
   question_title: string | null
   answer_entry_id: number
@@ -306,16 +316,16 @@ export async function deleteMobileReviewSlot(slotId: number) {
 async function selectPairCandidate(params: {
   subjectId: string
   weekNumber: number
-  excludePairId?: string | null
 }) {
-  const { subjectId, weekNumber, excludePairId } = params
+  const { subjectId, weekNumber } = params
 
-  const preferredRows = await sql`
+  const rows = await sql`
     SELECT
       question.pair_id,
       question.subject_id,
       question.week_number,
       question.session_date,
+      question.subject_day_material_id AS material_id,
       question.id AS question_entry_id,
       question.custom_title AS question_title,
       answer.id AS answer_entry_id,
@@ -330,88 +340,59 @@ async function selectPairCandidate(params: {
       AND answer.subject_id = question.subject_id
       AND question.week_number = ${weekNumber}
       AND answer.week_number = question.week_number
-      AND question.pair_id <> ${excludePairId ?? ""}
-    ORDER BY RANDOM()
-    LIMIT 1
+      AND question.session_date = answer.session_date
+      AND (
+        (question.subject_day_material_id IS NULL AND answer.subject_day_material_id IS NULL)
+        OR question.subject_day_material_id = answer.subject_day_material_id
+      )
+    ORDER BY question.session_date ASC, question.pair_id ASC
   ` as PairRow[]
 
-  if (preferredRows[0]) return preferredRows[0]
-
-  const fallbackRows = await sql`
-    SELECT
-      question.pair_id,
-      question.subject_id,
-      question.week_number,
-      question.session_date,
-      question.id AS question_entry_id,
-      question.custom_title AS question_title,
-      answer.id AS answer_entry_id,
-      answer.custom_title AS answer_title
-    FROM subject_day_entries AS question
-    INNER JOIN subject_day_entries AS answer
-      ON answer.pair_id = question.pair_id
-    WHERE question.pair_id IS NOT NULL
-      AND question.pair_role = 'question'
-      AND answer.pair_role = 'answer'
-      AND question.subject_id = ${subjectId}
-      AND answer.subject_id = question.subject_id
-      AND question.week_number = ${weekNumber}
-      AND answer.week_number = question.week_number
-    ORDER BY RANDOM()
-    LIMIT 1
-  ` as PairRow[]
-
-  return fallbackRows[0] ?? null
+  return rows
 }
 
 export async function resolveMobileReviewPair(params: {
   deviceId: string
   forceNext?: boolean
   now?: Date
-}) {
+}): Promise<MobileReviewResolveResult> {
   const { deviceId, forceNext = false, now = new Date() } = params
   const state = await getOrCreateMobileReviewState(deviceId)
   const activeSlot = await getActiveMobileReviewSlot(now)
   if (!activeSlot) {
-    return { state, activeSlot: null, pair: null as MobileReviewPair | null }
+    return { state, activeSlot: null, pair: null, totalPairs: 0, currentIndex: 0, debugReason: "no_active_slot" }
   }
 
   const weekNumber = getBuenosAiresWeekNumber(now)
+  const validPairs = await selectPairCandidate({
+    subjectId: activeSlot.subject_id,
+    weekNumber,
+  })
 
-  let selectedRow: PairRow | null = null
-  if (!forceNext && state.current_pair_id && state.current_subject_id === activeSlot.subject_id && state.current_week_number === weekNumber) {
-    const existingRows = await sql`
-      SELECT
-        question.pair_id,
-        question.subject_id,
-        question.week_number,
-        question.session_date,
-        question.id AS question_entry_id,
-        question.custom_title AS question_title,
-        answer.id AS answer_entry_id,
-        answer.custom_title AS answer_title
-      FROM subject_day_entries AS question
-      INNER JOIN subject_day_entries AS answer
-        ON answer.pair_id = question.pair_id
-      WHERE question.pair_id = ${state.current_pair_id}
-        AND question.pair_role = 'question'
-        AND answer.pair_role = 'answer'
-      LIMIT 1
-    ` as PairRow[]
-    selectedRow = existingRows[0] ?? null
+  if (validPairs.length === 0) {
+    return { state, activeSlot, pair: null, totalPairs: 0, currentIndex: 0, debugReason: "no_valid_pairs" }
   }
 
-  if (!selectedRow) {
-    selectedRow = await selectPairCandidate({
-      subjectId: activeSlot.subject_id,
-      weekNumber,
-      excludePairId: forceNext ? state.current_pair_id : null,
-    })
+  const currentStoredIndex =
+    !forceNext && state.current_pair_id && state.current_subject_id === activeSlot.subject_id && state.current_week_number === weekNumber
+      ? validPairs.findIndex((row) => row.pair_id === state.current_pair_id)
+      : -1
+
+  let selectedIndex = currentStoredIndex
+  let debugReason: MobileReviewResolveResult["debugReason"] | undefined
+
+  if (currentStoredIndex === -1 && state.current_pair_id && !forceNext) {
+    debugReason = "stored_pair_not_found"
   }
 
-  if (!selectedRow) {
-    return { state, activeSlot, pair: null as MobileReviewPair | null }
+  if (forceNext) {
+    const baseIndex = currentStoredIndex >= 0 ? currentStoredIndex : -1
+    selectedIndex = (baseIndex + 1 + validPairs.length) % validPairs.length
+  } else if (selectedIndex < 0) {
+    selectedIndex = 0
   }
+
+  const selectedRow = validPairs[selectedIndex]
 
   const updatedRows = await sql`
     UPDATE mobile_review_state
@@ -428,6 +409,9 @@ export async function resolveMobileReviewPair(params: {
     state: updatedRows[0] ?? state,
     activeSlot,
     pair: mapPairRow(selectedRow),
+    totalPairs: validPairs.length,
+    currentIndex: selectedIndex + 1,
+    debugReason,
   }
 }
 
