@@ -6,7 +6,7 @@ import { useTheme } from "next-themes"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -131,6 +131,20 @@ type VectorOverview = {
     pairCount: number
     entryCount: number
   }>
+}
+
+type AnalysisSubjectCard = {
+  subjectId: string
+  subjectName: string
+  hasVector: boolean
+  currentDay: number | null
+  severity: "green" | "yellow" | "red" | "neutral"
+  stateLabel: string
+  anchorEntryId: number | null
+  coveredCount: number
+  relevantCount: number
+  lastInteractionAt: string | null
+  staleReason: string[]
 }
 
 type SubjectShortcutKey = "e_fich" | "figma"
@@ -3128,16 +3142,51 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     currentSubject && dialogSelectedWeekNumber === homeSelectedWeekNumber
       ? vectorOverviewBySubjectId[currentSubject.id] ?? null
       : null
-  const activeVectorOverviews = useMemo(
-    () => vectorOverviews.filter((vector) => vector.isActive),
-    [vectorOverviews]
-  )
+  const analysisSubjects = useMemo<AnalysisSubjectCard[]>(() => {
+    const trackedSubjectIds = ["calculo3", "fisica", "logica", "probabilidad"] as const
+
+    return trackedSubjectIds.map((subjectId) => {
+      const vector = vectorOverviewBySubjectId[subjectId] ?? null
+      const fallbackSubject = SUBJECTS.find((subject) => subject.id === subjectId)
+      const subjectName = fallbackSubject?.name.replace(/\n/g, " ") ?? subjectId
+
+      if (!vector) {
+        return {
+          subjectId,
+          subjectName,
+          hasVector: false,
+          currentDay: null,
+          severity: "neutral",
+          stateLabel: "sin_vector",
+          anchorEntryId: null,
+          coveredCount: 0,
+          relevantCount: 0,
+          lastInteractionAt: null,
+          staleReason: [],
+        }
+      }
+
+      return {
+        subjectId,
+        subjectName,
+        hasVector: true,
+        currentDay: vector.currentDay,
+        severity: vector.severity,
+        stateLabel: vector.stateLabel,
+        anchorEntryId: vector.anchorEntryId,
+        coveredCount: vector.coveredPracticeMaterialIds.length,
+        relevantCount: vector.relevantPracticeMaterialIds.length,
+        lastInteractionAt: vector.lastInteractionAt,
+        staleReason: vector.staleReason,
+      }
+    })
+  }, [vectorOverviewBySubjectId])
   const analysisSummary = useMemo(() => {
-    const activeCount = activeVectorOverviews.length
-    const readyCount = activeVectorOverviews.filter((vector) => vector.severity === "green").length
-    const laggingCount = activeVectorOverviews.filter((vector) => vector.severity === "red").length
-    const coveredPdfCount = activeVectorOverviews.reduce((total, vector) => total + vector.coveredPracticeMaterialIds.length, 0)
-    const relevantPdfCount = activeVectorOverviews.reduce((total, vector) => total + vector.relevantPracticeMaterialIds.length, 0)
+    const activeCount = analysisSubjects.filter((subject) => subject.hasVector).length
+    const readyCount = analysisSubjects.filter((subject) => subject.hasVector && subject.severity === "green").length
+    const laggingCount = analysisSubjects.filter((subject) => subject.hasVector && subject.severity === "red").length
+    const coveredPdfCount = analysisSubjects.reduce((total, subject) => total + subject.coveredCount, 0)
+    const relevantPdfCount = analysisSubjects.reduce((total, subject) => total + subject.relevantCount, 0)
 
     return {
       activeCount,
@@ -3146,7 +3195,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       coveredPdfCount,
       relevantPdfCount,
     }
-  }, [activeVectorOverviews])
+  }, [analysisSubjects])
   const currentSubjectPracticeCoverage = useMemo(() => {
     const fallback = practiceMaterials
       .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
@@ -3682,14 +3731,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         >
           <DialogHeader className="border-b border-border px-5 py-4 text-left sm:px-6">
             <div className="flex items-start justify-between gap-4">
-              <div className="space-y-2">
+              <div>
                 <DialogTitle className="flex items-center gap-2">
                   <BarChart3 className="h-4 w-4 text-muted-foreground" />
                   Cobertura minima util
                 </DialogTitle>
-                <DialogDescription className="max-w-3xl text-sm text-muted-foreground">
-                  Muestra que materias estas dejando atras segun su vector propio de 6 dias.
-                </DialogDescription>
               </div>
               <button
                 type="button"
@@ -3738,43 +3784,47 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                 ) : null}
 
-                {!vectorsError && activeVectorOverviews.length === 0 ? (
+                {!vectorsError && analysisSubjects.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-6 text-sm text-muted-foreground">
-                    No hay vectores activos en esta semana.
+                    No hay materias para mostrar.
                   </div>
                 ) : null}
 
                 {!vectorsError ? (
                   <div className="grid gap-4 xl:grid-cols-2">
-                    {activeVectorOverviews.map((vector) => (
+                    {analysisSubjects.map((vector) => (
                       <article
-                        key={`${vector.subjectId}-${vector.weekNumber}`}
+                        key={vector.subjectId}
                         className={`rounded-2xl border px-5 py-5 ${
                           vector.severity === "red"
                             ? "border-red-300 bg-red-50"
                             : vector.severity === "yellow"
                               ? "border-amber-300 bg-amber-50"
-                              : "border-emerald-300 bg-emerald-50"
+                              : vector.severity === "green"
+                                ? "border-emerald-300 bg-emerald-50"
+                                : "border-border bg-muted/30"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-base font-medium text-foreground">{vector.subjectName}</p>
                             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                              {vector.currentDay ? `D${vector.currentDay}` : "Sin dia"} - {vector.stateLabel.replaceAll("_", " ")}
+                              {vector.hasVector
+                                ? `D${vector.currentDay ?? "?"} - ${vector.stateLabel.replaceAll("_", " ")}`
+                                : "Sin vector"}
                             </p>
                           </div>
                           <span className="rounded-full border border-current px-2 py-1 text-xs">
-                            {vector.coveredPracticeMaterialIds.length}/{vector.relevantPracticeMaterialIds.length || 0} PDF
+                            {vector.coveredCount}/{vector.relevantCount} PDF
                           </span>
                         </div>
 
                         <div className="mt-4 grid gap-2 text-sm text-foreground md:grid-cols-2">
                           <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
-                          <p>Ultima interaccion: {formatLastInteractionLabel(vector.lastInteractionAt)}</p>
+                          <p>{vector.hasVector ? `Ultima interaccion: ${formatLastInteractionLabel(vector.lastInteractionAt)}` : "Sin practica subida"}</p>
                         </div>
 
-                        {vector.staleReason.length > 0 ? (
+                        {vector.hasVector && vector.staleReason.length > 0 ? (
                           <div className="mt-3 flex flex-wrap gap-2">
                             {vector.staleReason.map((reason) => (
                               <span key={reason} className="rounded-full border border-current px-2 py-1 text-xs">
