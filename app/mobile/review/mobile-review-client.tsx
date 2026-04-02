@@ -441,12 +441,20 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       : "No hay un par disponible para la franja actual."
   const slotsForSelectedDay = slots.filter((slot) => slot.weekdayIndex === scheduleDayIndex)
   const scheduleDayLabel = WEEKDAY_OPTIONS.find((option) => Number(option.value) === scheduleDayIndex)?.label || "Dia"
+  const viewportShellStyle = {
+    minHeight: "100vh",
+    height: "100dvh",
+  } as const
+  const viewportFrameStyle = {
+    minHeight: "calc(100vh - 1rem)",
+    height: "calc(100dvh - 1rem)",
+  } as const
 
   if (requiresAccess) {
     return (
-      <main className="relative min-h-screen min-h-[100dvh] bg-[#f1e4a9] px-3 py-2 text-black">
+      <main style={viewportShellStyle} className="relative flex bg-[#f1e4a9] px-3 py-2 text-black">
         <div aria-hidden="true" className="fixed inset-0 -z-10 bg-[#f1e4a9]" />
-        <div className="mx-auto flex min-h-[calc(100vh-1rem)] min-h-[calc(100dvh-1rem)] w-full max-w-[320px] flex-col border-4 border-black bg-[#f1e4a9] px-4 py-6">
+        <div style={viewportFrameStyle} className="mx-auto flex w-full max-w-[320px] flex-1 flex-col self-stretch border-4 border-black bg-[#f1e4a9] px-4 py-6">
           <div className="flex-1 space-y-5">
             <header className="text-center text-[2rem] leading-none">Repaso movil</header>
             <p className="text-sm leading-relaxed">Escribe un nombre simple para este dispositivo y la web lo recordara para entrar sola la proxima vez.</p>
@@ -484,9 +492,9 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   }
 
   return (
-    <main className="relative min-h-screen min-h-[100dvh] bg-[#f1e4a9] px-3 py-2 text-black">
+    <main style={viewportShellStyle} className="relative flex bg-[#f1e4a9] px-3 py-2 text-black">
       <div aria-hidden="true" className="fixed inset-0 -z-10 bg-[#f1e4a9]" />
-      <div className="mx-auto flex min-h-[calc(100vh-1rem)] min-h-[calc(100dvh-1rem)] w-full max-w-[320px] flex-col border-4 border-black bg-[#f1e4a9] px-3 py-4">
+      <div style={viewportFrameStyle} className="mx-auto flex w-full max-w-[320px] flex-1 flex-col self-stretch border-4 border-black bg-[#f1e4a9] px-3 py-4">
         <header className="relative pb-5">
           <button
             type="button"
