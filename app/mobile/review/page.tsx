@@ -1,6 +1,6 @@
 import { MobileReviewClient } from "@/app/mobile/review/mobile-review-client"
 import { buildMobileReviewSignedQuery, verifyMobileReviewSignature } from "@/lib/mobile-review-auth"
-import { getMobileReviewStatus, isMissingMobileReviewDependency, resolveMobileReviewPair, withSignedAudioUrls } from "@/lib/mobile-review"
+import { getMobileReviewStatus, isMissingMobileReviewDependency, resolveMobileReviewPair, withSignedTaskAudioUrls } from "@/lib/mobile-review"
 
 export const dynamic = "force-dynamic"
 
@@ -30,7 +30,7 @@ export default async function MobileReviewPage({
     const resolved = await resolveMobileReviewPair({ deviceId })
     const authQuery = buildMobileReviewSignedQuery(deviceId)
     const initialPayload = {
-      pair: resolved.pair ? withSignedAudioUrls(resolved.pair, authQuery) : null,
+      task: resolved.task ? withSignedTaskAudioUrls(resolved.task, authQuery) : null,
       status: await getMobileReviewStatus(deviceId),
       currentIndex: resolved.currentIndex,
       totalPairs: resolved.totalPairs,
@@ -58,7 +58,7 @@ export default async function MobileReviewPage({
         deviceId={deviceId}
         signature={signature}
         initialPayload={{
-          pair: null,
+          task: null,
           status: await getMobileReviewStatus(deviceId).catch(() => ({
             deviceId,
             activeSlot: null,

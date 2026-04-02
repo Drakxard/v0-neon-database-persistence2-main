@@ -187,6 +187,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const practiceState =
       body.practiceState === "erre" ? "erre" : body.practiceState === null ? null : undefined
     const isFeatured = typeof body.isFeatured === "boolean" ? body.isFeatured : undefined
+    const featuredScope = body.featuredScope === "subject_week" ? "subject_week" : "entry_scope"
 
     let rows: EntryRow[]
     try {
@@ -202,7 +203,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           WHERE ${isFeatured === true}
             AND (
               (
-                (SELECT subject_day_material_id FROM entry_scope LIMIT 1) IS NULL
+                ${featuredScope === "subject_week"} = TRUE
+                AND (subject_id, week_number) IN (
+                  SELECT subject_id, week_number
+                  FROM entry_scope
+                )
+              )
+              OR (
+                ${featuredScope !== "subject_week"} = TRUE
+                AND (SELECT subject_day_material_id FROM entry_scope LIMIT 1) IS NULL
                 AND (subject_id, week_number) IN (
                   SELECT subject_id, week_number
                   FROM entry_scope

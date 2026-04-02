@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { buildMobileReviewSignedQuery, verifyMobileReviewSignature } from "@/lib/mobile-review-auth"
-import { getMobileReviewStatus, isMissingMobileReviewDependency, resolveMobileReviewPair, withSignedAudioUrls } from "@/lib/mobile-review"
+import { getMobileReviewStatus, isMissingMobileReviewDependency, resolveMobileReviewPair, withSignedTaskAudioUrls } from "@/lib/mobile-review"
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -18,9 +18,9 @@ export async function POST(request: Request) {
     }
 
     const resolved = await resolveMobileReviewPair({ deviceId, forceNext: true })
-    if (!resolved.activeSlot || !resolved.pair) {
+    if (!resolved.activeSlot || !resolved.task) {
       return NextResponse.json({
-        pair: null,
+        task: null,
         status: await getMobileReviewStatus(deviceId),
         currentIndex: resolved.currentIndex,
         totalPairs: resolved.totalPairs,
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
     const authQuery = buildMobileReviewSignedQuery(deviceId)
     return NextResponse.json({
-      pair: withSignedAudioUrls(resolved.pair, authQuery),
+      task: withSignedTaskAudioUrls(resolved.task, authQuery),
       status: await getMobileReviewStatus(deviceId),
       currentIndex: resolved.currentIndex,
       totalPairs: resolved.totalPairs,

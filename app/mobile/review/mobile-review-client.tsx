@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 
 import { SUBJECTS } from "@/lib/subjects"
 
@@ -16,6 +16,33 @@ type MobileReviewPair = {
   answerEntryId: number
   answerAudioUrl: string
   answerLabel: string
+}
+
+type MobileReviewTaskKind = "material_pair" | "subject_anchor" | "coverage_gap"
+
+type MobileReviewTask = {
+  kind: MobileReviewTaskKind
+  subjectId: string
+  subjectName: string
+  weekNumber: number
+  vectorDay: number | null
+  instruction: string
+  staleReason: string[]
+  lastInteractionAt: string | null
+  coverageSnapshot: {
+    anchorEntryId: number | null
+    relevantPracticeMaterialIds: number[]
+    coveredPracticeMaterialIds: number[]
+  }
+  material: {
+    id: number
+    fileName: string
+    sessionDate: string
+    status: "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
+    isCheckupDone: boolean
+  } | null
+  pair: MobileReviewPair | null
+  fallbackPair: MobileReviewPair | null
 }
 
 type MobileReviewStatus = {
@@ -35,7 +62,7 @@ type MobileReviewStatus = {
 }
 
 type MobileReviewPayload = {
-  pair: MobileReviewPair | null
+  task: MobileReviewTask | null
   status: MobileReviewStatus
   currentIndex: number
   totalPairs: number
@@ -116,7 +143,7 @@ function AudioRow({
   src,
 }: {
   label: string
-  audioRef: React.RefObject<HTMLAudioElement | null>
+  audioRef: RefObject<HTMLAudioElement | null>
   src: string
 }) {
   return (
@@ -188,8 +215,25 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const [slotForm, setSlotForm] = useState<SlotFormState>(createEmptySlotForm)
   const [isSavingSlot, setIsSavingSlot] = useState(false)
   const [scheduleDayIndex, setScheduleDayIndex] = useState(0)
+  const [isAnswerVisible, setIsAnswerVisible] = useState(false)
+  const [isEventLoading, setIsEventLoading] = useState(false)
   const questionAudioRef = useRef<HTMLAudioElement | null>(null)
   const answerAudioRef = useRef<HTMLAudioElement | null>(null)
+  const shownTaskKeyRef = useRef("")
+  const revealedTaskKeyRef = useRef("")
+  const ratedTaskKeyRef = useRef("")
+
+  const activeTask = payload?.task ?? null
+  const activePair = activeTask?.pair ?? activeTask?.fallbackPair ?? null
+  const subjectTitle = activeTask?.subjectName || payload?.status.subjectName || "Sin materia"
+  const pairCounter = `${payload?.currentIndex ?? 0}/${payload?.totalPairs ?? 0}`
+  const activeTaskKey = activeTask
+    ? `${activeTask.kind}:${activeTask.subjectId}:${activeTask.material?.id ?? "none"}:${activeTask.pair?.pairId ?? activeTask.fallbackPair?.pairId ?? "none"}:${activeTask.vectorDay ?? 0}`
+    : ""
+  const emptyStateMessage =
+    payload?.debugReason === "no_active_slot"
+      ? "No hay una franja activa en este momento."
+      : activeTask?.instruction || "No hay una tarea util para la franja actual."
 
   useEffect(() => {
     if (!requiresAccess) return
@@ -204,13 +248,49 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     }
   }, [requiresAccess])
 
+  const postInteractionEvent = useCallback(
+    async (params: {
+      task: MobileReviewTask
+      eventType: "shown" | "revealed" | "rated" | "skipped"
+      rating?: "ok" | "doubt" | "fail" | null
+    }) => {
+      const { task, eventType, rating = null } = params
+      await fetch("/api/mobile/review/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: deviceId,
+          sig: signature,
+          subjectId: task.subjectId,
+          weekNumber: task.weekNumber,
+          materialId: task.material?.id ?? null,
+          pairId: task.pair?.pairId ?? task.fallbackPair?.pairId ?? null,
+          taskKind: task.kind,
+          eventType,
+          rating,
+        }),
+      }).catch(() => {})
+    },
+    [deviceId, signature]
+  )
+
   useEffect(() => {
-    if (!payload?.pair) return
+    if (!activePair) return
     const questionAudio = questionAudioRef.current
     if (!questionAudio) return
     questionAudio.currentTime = 0
     void questionAudio.play().catch(() => {})
-  }, [payload?.pair?.pairId])
+  }, [activePair?.pairId])
+
+  useEffect(() => {
+    setIsAnswerVisible(false)
+    revealedTaskKeyRef.current = ""
+    ratedTaskKeyRef.current = ""
+
+    if (!activeTask || !activeTaskKey || shownTaskKeyRef.current === activeTaskKey) return
+    shownTaskKeyRef.current = activeTaskKey
+    void postInteractionEvent({ task: activeTask, eventType: "shown" })
+  }, [activeTask, activeTaskKey, postInteractionEvent])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -253,13 +333,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     if (!response.ok) {
       throw new Error(nextPayload.error || "No se pudo actualizar el repaso.")
     }
-    setPayload({
-      pair: nextPayload.pair,
-      status: nextPayload.status,
-      currentIndex: nextPayload.currentIndex,
-      totalPairs: nextPayload.totalPairs,
-      debugReason: nextPayload.debugReason,
-    })
+    setPayload(nextPayload)
   }
 
   const submitAccess = async (deviceValue?: string, silent = false) => {
@@ -323,6 +397,9 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const loadNext = async () => {
     setIsLoading(true)
     setError("")
+    if (activeTask && !ratedTaskKeyRef.current) {
+      void postInteractionEvent({ task: activeTask, eventType: "skipped" })
+    }
     try {
       const response = await fetch("/api/mobile/review/next", {
         method: "POST",
@@ -336,17 +413,38 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       if (!response.ok) {
         throw new Error(nextPayload.error || "No se pudo cargar el siguiente audio.")
       }
-      setPayload({
-        pair: nextPayload.pair,
-        status: nextPayload.status,
-        currentIndex: nextPayload.currentIndex,
-        totalPairs: nextPayload.totalPairs,
-        debugReason: nextPayload.debugReason,
-      })
+      setPayload(nextPayload)
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No se pudo cargar el siguiente audio.")
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const revealAnswer = async () => {
+    if (!activeTask || !activePair) return
+    setIsAnswerVisible(true)
+    if (revealedTaskKeyRef.current === activeTaskKey) return
+    revealedTaskKeyRef.current = activeTaskKey
+    await postInteractionEvent({ task: activeTask, eventType: "revealed" })
+    const answerAudio = answerAudioRef.current
+    if (!answerAudio) return
+    answerAudio.currentTime = 0
+    void answerAudio.play().catch(() => {})
+  }
+
+  const rateTask = async (rating: "ok" | "doubt" | "fail") => {
+    if (!activeTask || isEventLoading) return
+    setIsEventLoading(true)
+    setError("")
+    try {
+      await postInteractionEvent({ task: activeTask, eventType: "rated", rating })
+      ratedTaskKeyRef.current = activeTaskKey
+      await loadNext()
+    } catch {
+      setError("No se pudo guardar la valoracion.")
+    } finally {
+      setIsEventLoading(false)
     }
   }
 
@@ -469,12 +567,6 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     }
   }
 
-  const subjectTitle = payload?.pair?.subjectName || payload?.status.subjectName || "Sin materia"
-  const pairCounter = `${payload?.currentIndex ?? 0}/${payload?.totalPairs ?? 0}`
-  const emptyStateMessage =
-    payload?.debugReason === "no_active_slot"
-      ? "No hay una franja activa en este momento."
-      : "No hay un par disponible para la franja actual."
   const slotsForSelectedDay = slots.filter((slot) => slot.weekdayIndex === scheduleDayIndex)
   const scheduleDayLabel = WEEKDAY_OPTIONS.find((option) => Number(option.value) === scheduleDayIndex)?.label || "Dia"
   const viewportStyle =
@@ -547,33 +639,113 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
           </header>
 
           <div className="flex min-h-0 flex-col justify-start gap-7 overflow-hidden">
-            <AudioRow
-              label="Pregunta"
-              audioRef={questionAudioRef}
-              src={payload?.pair?.questionAudioUrl || ""}
-            />
+            {activeTask ? (
+              <section className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 text-[0.78rem] uppercase tracking-[0.16em]">
+                  <span className="border border-black px-2 py-1">
+                    {activeTask.kind === "material_pair"
+                      ? "PDF"
+                      : activeTask.kind === "subject_anchor"
+                        ? "Ancla"
+                        : "Cobertura"}
+                  </span>
+                  {activeTask.vectorDay ? <span className="border border-black px-2 py-1">{`D${activeTask.vectorDay}`}</span> : null}
+                  {activeTask.material ? (
+                    <span className="max-w-[11rem] truncate border border-black px-2 py-1">{activeTask.material.fileName}</span>
+                  ) : null}
+                </div>
+                <p className="text-sm leading-relaxed text-black/80">{activeTask.instruction}</p>
+              </section>
+            ) : null}
 
-            <AudioRow
-              label="Respuesta"
-              audioRef={answerAudioRef}
-              src={payload?.pair?.answerAudioUrl || ""}
-            />
+            {activePair ? (
+              <>
+                <AudioRow
+                  label={activeTask?.kind === "subject_anchor" ? "Ancla" : "Pregunta"}
+                  audioRef={questionAudioRef}
+                  src={activePair.questionAudioUrl}
+                />
+
+                {isAnswerVisible ? (
+                  <AudioRow
+                    label="Respuesta"
+                    audioRef={answerAudioRef}
+                    src={activePair.answerAudioUrl}
+                  />
+                ) : (
+                  <section className="space-y-2">
+                    <p className="text-[1.9rem] leading-none text-black">Respuesta</p>
+                    <button
+                      type="button"
+                      onClick={() => void revealAnswer()}
+                      disabled={isEventLoading}
+                      className="block w-full border-2 border-black bg-[#f7ecc0] px-4 py-4 text-left text-[1.4rem] leading-none disabled:opacity-60"
+                    >
+                      Revelar respuesta
+                    </button>
+                  </section>
+                )}
+              </>
+            ) : null}
 
             {error ? <p className="text-sm text-red-700">{error}</p> : null}
-            {!error && !payload?.pair ? (
+            {!error && !activePair ? (
               <p className="text-sm text-black/80">{emptyStateMessage}</p>
+            ) : null}
+
+            {activeTask?.staleReason?.length ? (
+              <section className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.16em] text-black/70">Deuda visible</p>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {activeTask.staleReason.map((reason) => (
+                    <span key={reason} className="border border-black/60 px-2 py-1">
+                      {reason.replaceAll("_", " ")}
+                    </span>
+                  ))}
+                </div>
+              </section>
             ) : null}
           </div>
 
           <div className="grid grid-cols-[1fr_auto] items-end gap-4">
-            <button
-              type="button"
-              onClick={() => void loadNext()}
-              disabled={isLoading}
-              className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
-            >
-              {isLoading ? "Cargando..." : "Siguiente pregunta"}
-            </button>
+            <div className="space-y-3">
+              {activePair && isAnswerVisible ? (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void rateTask("ok")}
+                    disabled={isLoading || isEventLoading}
+                    className="border-2 border-black bg-[#f7ecc0] px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    Salio
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void rateTask("doubt")}
+                    disabled={isLoading || isEventLoading}
+                    className="border-2 border-black bg-[#f7ecc0] px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    Dude
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void rateTask("fail")}
+                    disabled={isLoading || isEventLoading}
+                    className="border-2 border-black bg-[#f7ecc0] px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    Falle
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void loadNext()}
+                disabled={isLoading}
+                className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
+              >
+                {isLoading ? "Cargando..." : "Siguiente pregunta"}
+              </button>
+            </div>
             <p className="text-base leading-none text-black/80">{pairCounter}</p>
           </div>
         </div>

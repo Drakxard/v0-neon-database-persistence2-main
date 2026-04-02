@@ -139,7 +139,6 @@ export async function GET(request: Request) {
         FROM subject_day_entries
         WHERE subject_id = ${subjectId}
           AND week_number = ${weekNumber}
-          AND subject_day_material_id IS NULL
           AND is_featured = TRUE
         ORDER BY updated_at DESC, session_date DESC, id DESC
         LIMIT 1

@@ -105,6 +105,34 @@ interface PendingSubjectDayMaterial extends SubjectDayMaterial {
   is_pending_upload: true
 }
 
+type PracticeCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
+
+type VectorOverview = {
+  subjectId: string
+  subjectName: string
+  weekNumber: number
+  startDate: string | null
+  currentDay: number | null
+  endDate: string | null
+  isActive: boolean
+  anchorEntryId: number | null
+  relevantPracticeMaterialIds: number[]
+  coveredPracticeMaterialIds: number[]
+  staleReason: string[]
+  severity: "green" | "yellow" | "red"
+  stateLabel: string
+  lastInteractionAt: string | null
+  practiceMaterials: Array<{
+    id: number
+    fileName: string
+    sessionDate: string
+    status: PracticeCoverageStatus
+    isCheckupDone: boolean
+    pairCount: number
+    entryCount: number
+  }>
+}
+
 type SubjectShortcutKey = "e_fich" | "figma"
 
 type SubjectShortcuts = {
@@ -172,6 +200,18 @@ function generatePairId() {
   return `pair-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+function formatLastInteractionLabel(value: string | null) {
+  if (!value) return "Nunca"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "Sin dato"
+  return new Intl.DateTimeFormat("es-AR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
+}
+
 type ManualEntryTarget = {
   subjectId: string
   sessionDate: string
@@ -183,6 +223,7 @@ type ManualEntryTarget = {
 type PendingFeaturedUpdate = {
   entryId: number
   isFeatured: boolean
+  featuredScope?: "entry_scope" | "subject_week"
 }
 
 type ContinuePayload = {
@@ -652,6 +693,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [reviewEntries, setReviewEntries] = useState<SubjectDayEntry[]>([])
   const [isLoadingReview, setIsLoadingReview] = useState(false)
   const [reviewError, setReviewError] = useState("")
+  const [vectorOverviews, setVectorOverviews] = useState<VectorOverview[]>([])
+  const [isVectorsLoading, setIsVectorsLoading] = useState(false)
+  const [vectorsError, setVectorsError] = useState("")
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
   const activeShortcutSubject = isDialogOpen && currentSubject
@@ -719,6 +763,41 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   useEffect(() => {
     homeSelectedWeekNumberRef.current = homeSelectedWeekNumber
+  }, [homeSelectedWeekNumber])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadVectorOverviews = async () => {
+      setIsVectorsLoading(true)
+      setVectorsError("")
+
+      try {
+        const response = await fetch(`/api/mobile/review/overview?weekNumber=${homeSelectedWeekNumber}&includeInactive=true`)
+        const payload = (await response.json()) as { vectors?: VectorOverview[]; error?: string }
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo cargar la cobertura semanal."))
+        }
+        if (!cancelled) {
+          setVectorOverviews(Array.isArray(payload.vectors) ? payload.vectors : [])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setVectorsError(error instanceof Error ? error.message : "No se pudo cargar la cobertura semanal.")
+          setVectorOverviews([])
+        }
+      } finally {
+        if (!cancelled) {
+          setIsVectorsLoading(false)
+        }
+      }
+    }
+
+    void loadVectorOverviews()
+
+    return () => {
+      cancelled = true
+    }
   }, [homeSelectedWeekNumber])
 
   useEffect(() => {
@@ -1156,11 +1235,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const persistFeaturedEntry = useCallback(async (entryId: number, isFeatured: boolean) => {
+  const persistFeaturedEntry = useCallback(async (entryId: number, isFeatured: boolean, featuredScope: "entry_scope" | "subject_week" = "entry_scope") => {
     const response = await fetch(`/api/subject-day-entries/${entryId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isFeatured }),
+      body: JSON.stringify({ isFeatured, featuredScope }),
     })
 
     const payload = await response.json()
@@ -1181,6 +1260,23 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             updatedEntry.is_featured
           ) {
             return { ...item, is_featured: false }
+          }
+          return item.id === updatedEntry.id ? updatedEntry : item
+        })
+      )
+    )
+  }, [])
+
+  const applySubjectWeekFeaturedEntryLocally = useCallback((updatedEntry: SubjectDayEntry) => {
+    setEntries((previousEntries) =>
+      sortSubjectDayEntries(
+        previousEntries.map((item) => {
+          if (
+            item.subject_id === updatedEntry.subject_id &&
+            item.week_number === updatedEntry.week_number &&
+            updatedEntry.is_featured
+          ) {
+            return { ...item, is_featured: item.id === updatedEntry.id }
           }
           return item.id === updatedEntry.id ? updatedEntry : item
         })
@@ -1227,8 +1323,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     pendingFeaturedUpdateRef.current = null
 
     try {
-      const updatedEntry = await persistFeaturedEntry(pendingUpdate.entryId, pendingUpdate.isFeatured)
-      applyFeaturedEntryLocally(updatedEntry)
+      const updatedEntry = await persistFeaturedEntry(
+        pendingUpdate.entryId,
+        pendingUpdate.isFeatured,
+        pendingUpdate.featuredScope ?? "entry_scope"
+      )
+      if (pendingUpdate.featuredScope === "subject_week") {
+        applySubjectWeekFeaturedEntryLocally(updatedEntry)
+      } else {
+        applyFeaturedEntryLocally(updatedEntry)
+      }
     } catch (error) {
       console.error("Failed to persist featured entry:", error)
       setEntriesError(error instanceof Error ? error.message : "No se pudo actualizar el destacado.")
@@ -2064,6 +2168,19 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       )
     )
     scheduleFeaturedSave()
+  }
+
+  const promoteEntryToSubjectAnchor = async (entry: SubjectDayEntry) => {
+    setEntriesError("")
+    try {
+      const updatedEntry = await persistFeaturedEntry(entry.id, true, "subject_week")
+      applySubjectWeekFeaturedEntryLocally(updatedEntry)
+      toast({ title: "Ancla actualizada", description: "La dupla ahora cuenta como ancla abstracta de la materia." })
+    } catch (error) {
+      console.error("Failed to promote entry to subject anchor:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo promover la dupla a ancla.")
+      toast({ title: "Error", description: "No se pudo promover la dupla a ancla.", variant: "destructive" })
+    }
   }
 
   const deleteEntry = async (entry: SubjectDayEntry) => {
@@ -2996,6 +3113,73 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       return accumulator
     }, {})
   }, [entries])
+  const vectorOverviewBySubjectId = useMemo(
+    () =>
+      vectorOverviews.reduce<Record<string, VectorOverview>>((accumulator, vector) => {
+        accumulator[vector.subjectId] = vector
+        return accumulator
+      }, {}),
+    [vectorOverviews]
+  )
+  const currentSubjectOverview =
+    currentSubject && dialogSelectedWeekNumber === homeSelectedWeekNumber
+      ? vectorOverviewBySubjectId[currentSubject.id] ?? null
+      : null
+  const currentSubjectPracticeCoverage = useMemo(() => {
+    const fallback = practiceMaterials
+      .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
+      .map((material) => {
+      const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
+      const pairCount = new Set(materialEntries.map((entry) => entry.pair_id).filter(Boolean)).size
+      const status: PracticeCoverageStatus =
+        pairCount > 0 ? "cubierto_minimo" : materialEntries.length > 0 ? "tocado_sin_dupla" : "sin_tocar"
+
+      return {
+        id: material.id,
+        fileName: material.file_name,
+        sessionDate: material.session_date,
+        status,
+        isCheckupDone: material.is_checkup_done,
+        pairCount,
+        entryCount: materialEntries.length,
+      }
+    })
+
+    if (!currentSubjectOverview) return fallback
+
+    const statusById = new Map(currentSubjectOverview.practiceMaterials.map((material) => [material.id, material]))
+    return fallback.map((material) => statusById.get(material.id) ?? material)
+  }, [currentSubjectOverview, practiceEntriesByMaterialId, practiceMaterials])
+  const currentSubjectVectorSummary = useMemo(() => {
+    const relevantCount = currentSubjectPracticeCoverage.filter((material) => !material.isCheckupDone || material.entryCount > 0).length
+    const coveredCount = currentSubjectPracticeCoverage.filter((material) => material.status === "cubierto_minimo").length
+    const startDate = currentSubjectPracticeCoverage[0]?.sessionDate ?? null
+    const currentDay =
+      startDate != null
+        ? Math.max(
+            1,
+            Math.floor((parseDateKey(subjectDialogDateKey).getTime() - parseDateKey(startDate).getTime()) / 86400000) + 1
+          )
+        : null
+
+    const fragileConcepts = entries.filter((entry) => entry.practice_state === "erre")
+    const hasAnchor =
+      currentSubjectOverview?.anchorEntryId != null ||
+      entries.some((entry) => entry.is_featured && entry.week_number === dialogSelectedWeekNumber)
+
+    return {
+      startDate: currentSubjectOverview?.startDate ?? startDate,
+      currentDay: currentSubjectOverview?.currentDay ?? currentDay,
+      relevantCount: currentSubjectOverview?.relevantPracticeMaterialIds.length ?? relevantCount,
+      coveredCount: currentSubjectOverview?.coveredPracticeMaterialIds.length ?? coveredCount,
+      hasAnchor,
+      stateLabel: currentSubjectOverview?.stateLabel ?? (hasAnchor ? "parcial" : "sin_ancla"),
+      severity: currentSubjectOverview?.severity ?? (hasAnchor && coveredCount >= relevantCount ? "green" : coveredCount > 0 ? "yellow" : "red"),
+      staleReason: currentSubjectOverview?.staleReason ?? [],
+      lastInteractionAt: currentSubjectOverview?.lastInteractionAt ?? null,
+      fragileConcepts,
+    }
+  }, [currentSubjectOverview, currentSubjectPracticeCoverage, dialogSelectedWeekNumber, entries, subjectDialogDateKey])
   const selectedPracticeMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -3031,8 +3215,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         (entry) =>
           entry.subject_id === currentSubject?.id &&
           entry.week_number === dialogSelectedWeekNumber &&
-          entry.is_featured &&
-          entry.subject_day_material_id == null
+          entry.is_featured
       ) ?? null,
     [currentSubject?.id, dialogSelectedWeekNumber, entries]
   )
@@ -3307,6 +3490,70 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </div>
         </div>
       </header>
+
+      <section className="border-b border-border bg-card/70 px-4 py-4 sm:px-6">
+        <div className="mx-auto max-w-6xl space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Cobertura minima util</p>
+              <p className="text-sm text-foreground">Que materias estas dejando de lado hoy segun su vector propio de 6 dias.</p>
+            </div>
+            {isVectorsLoading ? <p className="text-xs text-muted-foreground">Actualizando...</p> : null}
+          </div>
+
+          {vectorsError ? <p className="text-sm text-red-700">{vectorsError}</p> : null}
+
+          {!vectorsError && vectorOverviews.filter((vector) => vector.isActive).length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-4 text-sm text-muted-foreground">
+              No hay vectores activos en esta semana.
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {vectorOverviews
+              .filter((vector) => vector.isActive)
+              .map((vector) => (
+                <article
+                  key={`${vector.subjectId}-${vector.weekNumber}`}
+                  className={`rounded-2xl border px-4 py-4 ${
+                    vector.severity === "red"
+                      ? "border-red-300 bg-red-50"
+                      : vector.severity === "yellow"
+                        ? "border-amber-300 bg-amber-50"
+                        : "border-emerald-300 bg-emerald-50"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-base font-medium text-foreground">{vector.subjectName}</p>
+                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+                        {vector.currentDay ? `D${vector.currentDay}` : "Sin dia"} - {vector.stateLabel.replaceAll("_", " ")}
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-current px-2 py-1 text-xs">
+                      {vector.coveredPracticeMaterialIds.length}/{vector.relevantPracticeMaterialIds.length || 0} PDF
+                    </span>
+                  </div>
+
+                  <div className="mt-3 space-y-1 text-sm text-foreground">
+                    <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
+                    <p>Ultima interaccion movil: {formatLastInteractionLabel(vector.lastInteractionAt)}</p>
+                  </div>
+
+                  {vector.staleReason.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {vector.staleReason.map((reason) => (
+                        <span key={reason} className="rounded-full border border-current px-2 py-1 text-xs">
+                          {reason.replaceAll("_", " ")}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+          </div>
+        </div>
+      </section>
 
       {/* Main Content */}
       <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12 sm:py-14">
@@ -3635,6 +3882,62 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </div>
               ) : null}
 
+              {currentSubject ? (
+                <section className="mb-4 rounded-2xl border border-border bg-muted/40 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Vector de 6 dias</p>
+                      <p className="text-sm text-foreground">
+                        {currentSubjectVectorSummary.startDate
+                          ? `Inicio ${currentSubjectVectorSummary.startDate}`
+                          : "Se activa cuando subes el primer PDF de practica."}
+                      </p>
+                    </div>
+                    <div
+                      className={`rounded-full border px-3 py-1 text-xs ${
+                        currentSubjectVectorSummary.severity === "red"
+                          ? "border-red-300 bg-red-50 text-red-700"
+                          : currentSubjectVectorSummary.severity === "yellow"
+                            ? "border-amber-300 bg-amber-50 text-amber-700"
+                            : "border-emerald-300 bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {currentSubjectVectorSummary.currentDay ? `D${currentSubjectVectorSummary.currentDay}` : "Sin vector"} - {currentSubjectVectorSummary.stateLabel.replaceAll("_", " ")}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
+                    <p>Ancla abstracto: {currentSubjectVectorSummary.hasAnchor ? "si" : "no"}</p>
+                    <p>PDFs cubiertos: {currentSubjectVectorSummary.coveredCount}/{currentSubjectVectorSummary.relevantCount}</p>
+                    <p>Ultima interaccion movil: {formatLastInteractionLabel(currentSubjectVectorSummary.lastInteractionAt)}</p>
+                    <p>Conceptos fragiles: {currentSubjectVectorSummary.fragileConcepts.length}</p>
+                  </div>
+
+                  {currentSubjectVectorSummary.fragileConcepts.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Fragiles ahora</p>
+                      <div className="flex flex-wrap gap-2">
+                        {currentSubjectVectorSummary.fragileConcepts.slice(0, 4).map((entry) => (
+                          <span key={entry.id} className="rounded-full border border-border bg-card px-2 py-1 text-xs text-foreground">
+                            {entry.display_title}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {currentSubjectVectorSummary.staleReason.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {currentSubjectVectorSummary.staleReason.map((reason) => (
+                        <span key={reason} className="rounded-full border border-border bg-card px-2 py-1 text-xs text-foreground">
+                          {reason.replaceAll("_", " ")}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
               {practiceSectionView === "theory" ? (
                 <div className="mb-2" />
               ) : (
@@ -3706,6 +4009,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Practica</p>
+                        <p className="text-sm text-muted-foreground">No busques exhaustividad: una dupla fuerte por subtema critico ya cuenta como cobertura minima util.</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button
@@ -3772,6 +4076,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               </>
                             ) : (
                               <>
+                                {(() => {
+                                  const coverage = currentSubjectPracticeCoverage.find((item) => item.id === material.id)
+                                  const coverageLabel =
+                                    coverage?.status === "cubierto_minimo"
+                                      ? "Cubierto minimo"
+                                      : coverage?.status === "tocado_sin_dupla"
+                                        ? "Tocado sin dupla"
+                                        : "Sin tocar"
+                                  const coverageClassName =
+                                    coverage?.status === "cubierto_minimo"
+                                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                      : coverage?.status === "tocado_sin_dupla"
+                                        ? "border-amber-300 bg-amber-50 text-amber-700"
+                                        : "border-red-300 bg-red-50 text-red-700"
+
+                                  return (
+                                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${coverageClassName}`}>
+                                      {coverageLabel}
+                                    </span>
+                                  )
+                                })()}
                                 <Checkbox
                                   checked={material.is_checkup_done}
                                   onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
@@ -4269,6 +4594,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               ) : (
                                 <div className="flex flex-wrap items-center gap-2 pr-8 text-foreground">
                                   <p className="text-lg font-medium">{getEntryDisplayTitle(titleEntry)}</p>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void promoteEntryToSubjectAnchor(titleEntry)}
+                                    className="h-8 border-border px-3 text-xs text-foreground"
+                                  >
+                                    Promover a ancla
+                                  </Button>
                                   <Button size="icon" variant="ghost" onClick={() => startTitleEdit(titleEntry)} className="h-8 w-8">
                                     <Pencil className="h-4 w-4" />
                                   </Button>
