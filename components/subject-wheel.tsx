@@ -250,7 +250,7 @@ function getCoverageReasonLabel(reason: string) {
 
 function getVectorDayLabel(currentDay: number | null, hasVector: boolean) {
   if (!hasVector || currentDay == null) return "Sin teoria"
-  if (currentDay === 0) return "Teoria hoy"
+  if (currentDay === 0) return "Inicio"
   return `Dia ${currentDay}`
 }
 
@@ -265,6 +265,16 @@ function getVectorDayTone(currentDay: number | null, hasVector: boolean) {
     return "border-amber-300 bg-amber-50 text-amber-700"
   }
   return "border-emerald-300 bg-emerald-50 text-emerald-700"
+}
+
+function getCurrentSubjectVectorBadgeLabel(summary: {
+  currentDay: number | null
+  hasVector: boolean
+  hasTheory: boolean
+}) {
+  if (summary.hasVector) return getVectorDayLabel(summary.currentDay, true)
+  if (summary.hasTheory) return "Teoria cargada"
+  return "Sin teoria"
 }
 
 type ManualEntryTarget = {
@@ -749,6 +759,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isLoadingReview, setIsLoadingReview] = useState(false)
   const [reviewError, setReviewError] = useState("")
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false)
+  const [currentSubjectDialogVectorOverview, setCurrentSubjectDialogVectorOverview] = useState<VectorOverview | null>(null)
   const [vectorOverviews, setVectorOverviews] = useState<VectorOverview[]>([])
   const [isVectorsLoading, setIsVectorsLoading] = useState(false)
   const [vectorsError, setVectorsError] = useState("")
@@ -857,6 +868,46 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       cancelled = true
     }
   }, [currentDateKey, homeSelectedWeekNumber, isAnalysisOpen])
+
+  useEffect(() => {
+    if (!isDialogOpen || !currentSubject) {
+      setCurrentSubjectDialogVectorOverview(null)
+      return
+    }
+
+    let cancelled = false
+    setCurrentSubjectDialogVectorOverview(null)
+
+    const loadCurrentSubjectVectorOverview = async () => {
+      try {
+        const response = await fetch(
+          `/api/mobile/review/overview?weekNumber=${dialogSelectedWeekNumber}&date=${subjectDialogDateKey}&includeInactive=true`
+        )
+        const payload = (await response.json()) as { vectors?: VectorOverview[]; error?: string }
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo cargar el vector de teoria."))
+        }
+
+        if (!cancelled) {
+          const matchedVector = Array.isArray(payload.vectors)
+            ? payload.vectors.find((vector) => vector.subjectId === currentSubject.id) ?? null
+            : null
+          setCurrentSubjectDialogVectorOverview(matchedVector)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load current subject vector overview:", error)
+          setCurrentSubjectDialogVectorOverview(null)
+        }
+      }
+    }
+
+    void loadCurrentSubjectVectorOverview()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, subjectDialogDateKey])
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -3287,10 +3338,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }, {}),
     [vectorOverviews]
   )
-  const currentSubjectOverview =
-    currentSubject && dialogSelectedWeekNumber === homeSelectedWeekNumber
-      ? vectorOverviewBySubjectId[currentSubject.id] ?? null
-      : null
+  const currentSubjectOverview = currentSubjectDialogVectorOverview
   const analysisSubjects = useMemo<AnalysisSubjectCard[]>(() => {
     const trackedSubjectIds = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -3346,61 +3394,53 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }, [analysisSubjects])
   const currentSubjectPracticeCoverage = useMemo(() => {
-    const fallback = practiceMaterials
+    return practiceMaterials
       .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
       .map((material) => {
-      const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
-      const pairCount = new Set(materialEntries.map((entry) => entry.pair_id).filter(Boolean)).size
-      const status: PracticeCoverageStatus =
-        pairCount > 0 ? "cubierto_minimo" : materialEntries.length > 0 ? "tocado_sin_dupla" : "sin_tocar"
+        const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
+        const pairCount = new Set(materialEntries.map((entry) => entry.pair_id).filter(Boolean)).size
+        const status: PracticeCoverageStatus =
+          pairCount > 0 ? "cubierto_minimo" : materialEntries.length > 0 ? "tocado_sin_dupla" : "sin_tocar"
 
-      return {
-        id: material.id,
-        fileName: material.file_name,
-        sessionDate: material.session_date,
-        status,
-        isCheckupDone: material.is_checkup_done,
-        pairCount,
-        entryCount: materialEntries.length,
-      }
-    })
-
-    if (!currentSubjectOverview) return fallback
-
-    const statusById = new Map(currentSubjectOverview.practiceMaterials.map((material) => [material.id, material]))
-    return fallback.map((material) => statusById.get(material.id) ?? material)
-  }, [currentSubjectOverview, practiceEntriesByMaterialId, practiceMaterials])
+        return {
+          id: material.id,
+          fileName: material.file_name,
+          sessionDate: material.session_date,
+          status,
+          isCheckupDone: material.is_checkup_done,
+          pairCount,
+          entryCount: materialEntries.length,
+        }
+      })
+  }, [practiceEntriesByMaterialId, practiceMaterials])
   const currentSubjectVectorSummary = useMemo(() => {
     const fragileConcepts = entries.filter((entry) => entry.practice_state === "erre")
-
-    if (!currentSubjectOverview) {
-      return {
-        startDate: null,
-        currentDay: null,
-        relevantCount: 0,
-        coveredCount: 0,
-        totalCount: currentSubjectPracticeCoverage.length,
-        stateLabel: "sin_teoria",
-        severity: "yellow" as const,
-        staleReason: [],
-        lastInteractionAt: null,
-        fragileConcepts,
-      }
-    }
+    const firstTheoryMaterial = theoryMaterials[0] ?? null
+    const hasTheory = Boolean(currentSubjectOverview?.startDate || firstTheoryMaterial)
+    const relevantPracticeCoverage = currentSubjectOverview
+      ? currentSubjectPracticeCoverage.filter((material) =>
+          currentSubjectOverview.relevantPracticeMaterialIds.includes(material.id)
+        )
+      : currentSubjectPracticeCoverage
+    const coveredCount = relevantPracticeCoverage.filter((material) => material.status === "cubierto_minimo").length
 
     return {
-      startDate: currentSubjectOverview.startDate,
-      currentDay: currentSubjectOverview.currentDay,
-      relevantCount: currentSubjectOverview.relevantPracticeMaterialIds.length,
-      coveredCount: currentSubjectOverview.coveredPracticeMaterialIds.length,
-      totalCount: currentSubjectOverview.totalPracticeMaterialIds.length,
-      stateLabel: currentSubjectOverview.stateLabel,
-      severity: currentSubjectOverview.severity,
-      staleReason: currentSubjectOverview.staleReason,
-      lastInteractionAt: currentSubjectOverview.lastInteractionAt,
+      hasVector: Boolean(currentSubjectOverview),
+      hasTheory,
+      startDate: currentSubjectOverview?.startDate ?? firstTheoryMaterial?.session_date ?? null,
+      currentDay: currentSubjectOverview?.currentDay ?? null,
+      relevantCount: currentSubjectOverview
+        ? currentSubjectOverview.relevantPracticeMaterialIds.length
+        : relevantPracticeCoverage.length,
+      coveredCount,
+      totalCount: currentSubjectOverview?.totalPracticeMaterialIds.length ?? currentSubjectPracticeCoverage.length,
+      stateLabel: currentSubjectOverview?.stateLabel ?? (hasTheory ? "parcial" : "sin_teoria"),
+      severity: currentSubjectOverview?.severity ?? ("yellow" as const),
+      staleReason: currentSubjectOverview?.staleReason ?? [],
+      lastInteractionAt: currentSubjectOverview?.lastInteractionAt ?? null,
       fragileConcepts,
     }
-  }, [currentSubjectOverview, currentSubjectPracticeCoverage.length, entries])
+  }, [currentSubjectOverview, currentSubjectPracticeCoverage, entries, theoryMaterials])
   const selectedPracticeMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -4178,17 +4218,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       </p>
                     </div>
                     <div
-                      className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.currentDay != null)}`}
+                      className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.hasVector)}`}
                     >
-                      {getVectorDayLabel(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.currentDay != null)}
+                      {getCurrentSubjectVectorBadgeLabel(currentSubjectVectorSummary)}
                     </div>
                   </div>
 
                   <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
                     <p>PDFs cubiertos: {currentSubjectVectorSummary.coveredCount}/{currentSubjectVectorSummary.relevantCount}</p>
                     <p>PDFs practica: {currentSubjectVectorSummary.relevantCount}</p>
-                    <p>Ultima interaccion movil: {formatLastInteractionLabel(currentSubjectVectorSummary.lastInteractionAt)}</p>
-                    <p>Conceptos fragiles: {currentSubjectVectorSummary.fragileConcepts.length}</p>
                   </div>
 
                   {currentSubjectVectorSummary.fragileConcepts.length > 0 ? (
@@ -4700,11 +4738,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         >
           <div className="relative min-h-full bg-background px-5 py-5 text-foreground sm:px-8 sm:py-6">
             <DialogHeader className="mb-6 border-b border-border pb-4">
-                <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start justify-between gap-4">
                 <div>
                   <DialogTitle className="text-left text-[2rem] font-normal leading-none text-foreground sm:text-[2.5rem]">
                     Continuar
                   </DialogTitle>
+                  <DialogDescription className="sr-only">
+                    Continua la practica con el PDF actual, el audio destacado previo y el resumen de teoria de la materia.
+                  </DialogDescription>
                 </div>
                 <DialogClose asChild>
                   <button
@@ -5265,6 +5306,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
                 <DialogTitle>Confirmar dupla</DialogTitle>
+                <DialogDescription className="sr-only">
+                  Revisa la pregunta y la respuesta antes de confirmar o invertir el sentido de la dupla.
+                </DialogDescription>
               </div>
               <DialogClose asChild>
                 <button

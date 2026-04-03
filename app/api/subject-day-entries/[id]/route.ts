@@ -54,6 +54,15 @@ function isMissingPairColumn(error: unknown) {
   return isMissingColumn(error)
 }
 
+function isUniqueViolation(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "23505"
+  )
+}
+
 function getDisplayTitle(entry: Pick<EntryRow, "custom_title" | "order_index">) {
   const customTitle = entry.custom_title?.trim()
   return customTitle && customTitle.length > 0 ? customTitle : `Duda ${entry.order_index + 1}`
@@ -204,6 +213,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         if (!pairScope?.pair_id) {
           return NextResponse.json({ error: "Solo se puede cambiar el sentido dentro de una dupla." }, { status: 400 })
         }
+        if (!pairScope.pair_role) {
+          return NextResponse.json(
+            {
+              error: "La dupla tiene metadata inconsistente y no se puede invertir hasta corregirla.",
+              code: "INVALID_AUDIO_PAIR_STATE",
+            },
+            { status: 409 }
+          )
+        }
 
         if (pairScope.pair_role === pairRole) {
           rows = await sql`
@@ -221,23 +239,37 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           ` as Array<{ id: number; pair_role: "question" | "answer" | null }>
 
           const conflictingSibling = siblingRows.find((row) => row.pair_role === pairRole) ?? null
-          rows = await sql`
-            UPDATE subject_day_entries
-            SET
-              pair_role = CASE
-                WHEN id = ${entryId} THEN ${pairRole}
-                WHEN ${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null} THEN ${pairScope.pair_role}
-                ELSE pair_role
-              END,
-              updated_at = CASE
-                WHEN id = ${entryId} THEN NOW()
-                WHEN ${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null} THEN NOW()
-                ELSE updated_at
-              END
-            WHERE id = ${entryId}
-              OR (${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null})
-            RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
-          ` as EntryRow[]
+          if (conflictingSibling) {
+            const temporaryPairId = `${pairScope.pair_id}::swap::${entryId}::${Date.now()}`
+            rows = await sql`
+              WITH moved_target AS (
+                UPDATE subject_day_entries
+                SET pair_id = ${temporaryPairId}, updated_at = NOW()
+                WHERE id = ${entryId}
+                RETURNING id
+              ),
+              updated_sibling AS (
+                UPDATE subject_day_entries
+                SET pair_role = ${pairScope.pair_role}, updated_at = NOW()
+                WHERE id = ${conflictingSibling.id}
+                RETURNING id
+              )
+              UPDATE subject_day_entries
+              SET
+                pair_id = ${pairScope.pair_id},
+                pair_role = ${pairRole},
+                updated_at = NOW()
+              WHERE id = ${entryId}
+              RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+            ` as EntryRow[]
+          } else {
+            rows = await sql`
+              UPDATE subject_day_entries
+              SET pair_role = ${pairRole}, updated_at = NOW()
+              WHERE id = ${entryId}
+              RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+            ` as EntryRow[]
+          }
 
           const updatedTarget = rows.find((row) => row.id === entryId)
           if (updatedTarget) {
@@ -306,6 +338,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             error:
               "No se puede cambiar el sentido de la dupla porque faltan las columnas de audio pairs en Neon (scripts/016).",
             code: "MISSING_AUDIO_PAIR_COLUMNS",
+          },
+          { status: 409 }
+        )
+      }
+      if (isUniqueViolation(error) && pairRole !== undefined) {
+        return NextResponse.json(
+          {
+            error: "No se pudo invertir la dupla porque los roles quedaron en conflicto. Reintenta o regraba la dupla.",
+            code: "AUDIO_PAIR_ROLE_CONFLICT",
           },
           { status: 409 }
         )
