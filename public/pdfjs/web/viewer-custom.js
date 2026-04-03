@@ -29,6 +29,7 @@
       sessionDate: String(params.get("sessionDate") || "").trim(),
       weekNumber: Number.parseInt(params.get("weekNumber") || "", 10),
       weekdayIndex: Number.parseInt(params.get("weekdayIndex") || "", 10),
+      materialType: String(params.get("materialType") || "practice").trim() || "practice",
       fileName: String(params.get("fileName") || "").trim(),
       key: String(params.get("key") || "").trim(),
     };
@@ -63,7 +64,7 @@
       backdrop.innerHTML = [
         '<div class="pdfjs-custom-modal" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-modal-title">',
         '<h2 id="pdfjs-custom-modal-title">Crear PDF fragmentado</h2>',
-        "<p>Se generara un nuevo PDF con las selecciones activas y se subira como material de practica.</p>",
+        "<p>Se generara un nuevo PDF con las selecciones activas y se subira al material actual.</p>",
         '<label for="pdfjs-custom-modal-input">Nombre del archivo</label>',
         '<input id="pdfjs-custom-modal-input" type="text" autocomplete="off" />',
         '<div class="pdfjs-custom-modal-actions">',
@@ -628,7 +629,7 @@
     return { driveFileId };
   }
 
-  function notifyPracticeMaterialsRefresh() {
+  function notifySubjectDayMaterialsRefresh() {
     const payload = {
       subjectId: state.query.subjectId,
       sessionDate: state.query.sessionDate,
@@ -637,13 +638,13 @@
     };
 
     try {
-      const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null;
+      const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("subject-day-materials") : null;
       channel?.postMessage(payload);
       channel?.close();
     } catch {}
 
     try {
-      window.localStorage.setItem("practice-materials:refresh", JSON.stringify(payload));
+      window.localStorage.setItem("subject-day-materials:refresh", JSON.stringify(payload));
     } catch {}
   }
 
@@ -695,7 +696,7 @@
             subjectName: state.query.subjectName,
             sessionDate: state.query.sessionDate,
             weekNumber: state.query.weekNumber,
-            materialType: "practice",
+            materialType: state.query.materialType || "practice",
             mimeType: "application/pdf",
             fileName: pdfData.fileName,
           }),
@@ -715,7 +716,7 @@
             subjectId: state.query.subjectId,
             sessionDate: state.query.sessionDate,
             weekNumber: state.query.weekNumber,
-            materialType: "practice",
+            materialType: state.query.materialType || "practice",
             driveFileId: uploadResult.driveFileId,
             fileName: pdfData.fileName,
           }),
@@ -723,7 +724,7 @@
         "No se pudo confirmar el PDF fragmentado."
       );
 
-      notifyPracticeMaterialsRefresh();
+      notifySubjectDayMaterialsRefresh();
       clearSelections();
       leaveSelectionMode();
       showToast(`PDF creado: ${pdfData.fileName}`, "success", 3200);

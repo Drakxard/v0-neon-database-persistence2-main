@@ -38,7 +38,7 @@ type DraftViewerContext = {
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
-  materialType: "practice"
+  materialType: "practice" | "theory"
 }
 
 type MaterialContext = {
@@ -95,7 +95,10 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const parsedSessionDate = parseDateKey(sessionDate)
   const weekNumber = Number.parseInt(params.weekNumber || "", 10)
   const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
-  const materialType = params.materialType === "practice" ? "practice" : null
+  const materialType =
+    params.materialType === "practice" || params.materialType === "theory"
+      ? params.materialType
+      : null
 
   const resolvedSubjectName =
     subjectNameParam ||
@@ -110,7 +113,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     !Number.isNaN(parsedSessionDate.getTime()) &&
     Number.isInteger(weekNumber) &&
     Number.isInteger(weekdayIndex) &&
-    materialType === "practice"
+    Boolean(materialType)
 
   if (!Number.isInteger(materialId) && hasDraftContext) {
     if (!canAccessSubject(session, subjectId)) {

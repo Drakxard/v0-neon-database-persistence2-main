@@ -155,12 +155,13 @@ type SubjectShortcuts = {
   figma: string | null
 }
 
-function buildPracticeDraftViewerHref(params: {
+function buildMaterialDraftViewerHref(params: {
   subjectId: string
   subjectName: string
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
+  materialType: SubjectDayMaterialType
 }) {
   const searchParams = new URLSearchParams({
     subjectId: params.subjectId,
@@ -168,13 +169,26 @@ function buildPracticeDraftViewerHref(params: {
     sessionDate: params.sessionDate,
     weekNumber: String(params.weekNumber),
     weekdayIndex: String(params.weekdayIndex),
-    materialType: "practice",
+    materialType: params.materialType,
   })
 
   return `/practice/viewer?${searchParams.toString()}`
 }
 
-function buildPracticeMaterialViewerHref(materialId: number) {
+function buildPracticeDraftViewerHref(params: {
+  subjectId: string
+  subjectName: string
+  sessionDate: string
+  weekNumber: number
+  weekdayIndex: number
+}) {
+  return buildMaterialDraftViewerHref({
+    ...params,
+    materialType: "practice",
+  })
+}
+
+function buildMaterialViewerHref(materialId: number) {
   const searchParams = new URLSearchParams({
     materialId: String(materialId),
   })
@@ -291,7 +305,12 @@ type PendingFeaturedUpdate = {
   featuredScope?: "entry_scope" | "subject_week"
 }
 
+type ContinueMode = "practice" | "theory"
+
+type SubjectDialogEntryMode = "default" | "theory_continue"
+
 type ContinuePayload = {
+  mode: ContinueMode
   material: SubjectDayMaterial | null
   previousFeaturedEntry: SubjectDayEntry | null
 }
@@ -597,13 +616,15 @@ function sortSubjectDayMaterials(materials: SubjectDayMaterial[]) {
   })
 }
 
-function getNextUncheckedPracticeMaterial(
+function getNextUncheckedMaterial(
   materials: SubjectDayMaterial[],
   {
+    mode,
     subjectId,
     sessionDate,
     weekNumber,
   }: {
+    mode: ContinueMode
     subjectId: string
     sessionDate: string
     weekNumber: number
@@ -612,10 +633,10 @@ function getNextUncheckedPracticeMaterial(
   return sortSubjectDayMaterials(
     materials.filter(
       (material) =>
-        material.material_type === "practice" &&
+        material.material_type === mode &&
         material.subject_id === subjectId &&
-        material.session_date === sessionDate &&
         material.week_number === weekNumber &&
+        (mode === "theory" || material.session_date === sessionDate) &&
         !material.is_checkup_done
     )
   )[0] ?? null
@@ -630,6 +651,30 @@ function resolveContinueMaterial(
   }
 
   return materials.find((material) => !material.is_checkup_done) ?? materials[0] ?? null
+}
+
+function buildMaterialCoverage(
+  materials: SubjectDayMaterial[],
+  entriesByMaterialId: Record<number, SubjectDayEntry[]>
+) {
+  return materials
+    .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
+    .map((material) => {
+      const materialEntries = entriesByMaterialId[material.id] ?? []
+      const pairCount = new Set(materialEntries.map((entry) => entry.pair_id).filter(Boolean)).size
+      const status: PracticeCoverageStatus =
+        pairCount > 0 ? "cubierto_minimo" : materialEntries.length > 0 ? "tocado_sin_dupla" : "sin_tocar"
+
+      return {
+        id: material.id,
+        fileName: material.file_name,
+        sessionDate: material.session_date,
+        status,
+        isCheckupDone: material.is_checkup_done,
+        pairCount,
+        entryCount: materialEntries.length,
+      }
+    })
 }
 
 export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
@@ -658,6 +703,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
   const [currentSubject, setCurrentSubject] = useState<Subject | null>(null)
+  const [subjectDialogEntryMode, setSubjectDialogEntryMode] = useState<SubjectDialogEntryMode>("default")
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
   const [showAllSubjectsForDay, setShowAllSubjectsForDay] = useState(false)
   const [allCompletedSubjectIds, setAllCompletedSubjectIds] = useState<string[]>([])
@@ -715,6 +761,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
+  const [continueMode, setContinueMode] = useState<ContinueMode>("practice")
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1261,7 +1308,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   useEffect(() => {
     if (typeof window === "undefined") return
 
-    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("subject-day-materials") : null
     const handleRefreshPayload = (payload: unknown) => {
       if (!payload || typeof payload !== "object" || !currentSubject || !isDialogOpen) return
       if (!("subjectId" in payload) || !("sessionDate" in payload) || !("weekNumber" in payload)) return
@@ -1276,7 +1323,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
 
     const handleStorage = (event: StorageEvent) => {
-      if (event.key !== "practice-materials:refresh" || !event.newValue) return
+      if (event.key !== "subject-day-materials:refresh" || !event.newValue) return
       try {
         handleRefreshPayload(JSON.parse(event.newValue))
       } catch {}
@@ -1513,6 +1560,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSavingShortcut(false)
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
+    setSubjectDialogEntryMode("default")
     setSubjectViewDateOverride(null)
     setDialogShowAllSubjectsForDay(showAllSubjectsForDay)
     setSelectedPracticeMaterialId(null)
@@ -1523,6 +1571,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSavingLink(false)
     setIsContinueOpen(false)
     setIsContinueLoading(false)
+    setContinueMode("practice")
     setContinueError("")
     setContinuePayload(null)
     setStackedDayViewReturnState(null)
@@ -1563,6 +1612,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setCurrentSubject(subject)
     setDialogDateKey(currentDateKey)
     resetSubjectUiState()
+    setSubjectDialogEntryMode("theory_continue")
+    setPracticeSectionView("exercises")
+    setExerciseWeeklyScopeEnabled(true)
     setIsDialogOpen(true)
   }
 
@@ -2794,9 +2846,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const loadContinuePayload = async ({ silent = false }: { silent?: boolean } = {}) => {
+  const loadContinuePayload = async (
+    mode: ContinueMode = continueMode,
+    { silent = false }: { silent?: boolean } = {}
+  ) => {
     if (!currentSubject) return
-    const localPayload = buildLocalContinuePayload()
+    const localPayload = buildLocalContinuePayload(mode)
 
     if (!silent && !localPayload) {
       setIsContinueLoading(true)
@@ -2810,13 +2865,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         weekNumber: String(dialogSelectedWeekNumber),
       })
 
-      const response = await fetch(`/api/subject-day-materials/next-practice?${params.toString()}`)
+      const response = await fetch(`/api/subject-day-materials/next-${mode}?${params.toString()}`)
       const payload = await response.json()
       if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo cargar el siguiente PDF de practica."))
+        throw new Error(getErrorMessage(payload, `No se pudo cargar el siguiente PDF de ${getContinueModeLabel(mode)}.`))
       }
 
-      const serverPayload = payload as ContinuePayload
+      const serverPayload = {
+        mode,
+        ...(payload as Omit<ContinuePayload, "mode">),
+      }
 
       setContinuePayload((previous) => {
         const resolvedMaterial = localPayload?.material ?? previous?.material ?? serverPayload.material
@@ -2833,9 +2891,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         }
       })
     } catch (error) {
-      console.error("Failed to load next practice material:", error)
+      console.error(`Failed to load next ${mode} material:`, error)
       setContinuePayload((previous) => previous ?? localPayload)
-      setContinueError(error instanceof Error ? error.message : "No se pudo cargar el siguiente PDF de practica.")
+      setContinueError(error instanceof Error ? error.message : `No se pudo cargar el siguiente PDF de ${getContinueModeLabel(mode)}.`)
     } finally {
       if (!silent && !localPayload) {
         setIsContinueLoading(false)
@@ -2843,16 +2901,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const openContinueModal = async (materialId?: number) => {
-    const resolvedVisiblePracticeMaterials = practiceMaterials.filter(
-      (material): material is SubjectDayMaterial => !("is_pending_upload" in material)
-    )
-    const selectedMaterial = resolveContinueMaterial(resolvedVisiblePracticeMaterials, materialId)
+  const openContinueModal = async (mode: ContinueMode = continueMode, materialId?: number) => {
+    const availableMaterials = getVisibleMaterialsForMode(mode)
+    const selectedMaterial = resolveContinueMaterial(availableMaterials, materialId)
 
+    setContinueMode(mode)
     setSelectedPracticeMaterialId(selectedMaterial?.id ?? null)
 
     const localPayload: ContinuePayload | null = currentSubject
       ? {
+          mode,
           material: selectedMaterial,
           previousFeaturedEntry: getLocalContinueFeaturedEntry() ?? continuePayload?.previousFeaturedEntry ?? null,
         }
@@ -2861,27 +2919,29 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setContinuePayload(localPayload)
     setIsContinueOpen(true)
     setContinueError(
-      resolvedVisiblePracticeMaterials.length === 0
+      availableMaterials.length === 0
         ? ""
         : selectedMaterial
           ? ""
-          : "No se pudo resolver un PDF de practica para Continuar."
+          : `No se pudo resolver un PDF de ${getContinueModeLabel(mode)} para continuar.`
     )
 
-    void loadContinuePayload({ silent: Boolean(localPayload) })
+    void loadContinuePayload(mode, { silent: Boolean(localPayload) })
   }
 
   const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
+    const mode: ContinueMode = materialToUpdate.material_type === "theory" ? "theory" : "practice"
     const isCurrentContinueMaterial = currentContinueMaterial?.id === materialToUpdate.id
     const previousPayload = continuePayload
     const optimisticMaterial = { ...materialToUpdate, is_checkup_done: checked }
     const nextMaterials = sortSubjectDayMaterials(
-      materials.map((material) => (material.id === optimisticMaterial.id ? optimisticMaterial : material))
+      getVisibleMaterialsForMode(mode).map((material) => (material.id === optimisticMaterial.id ? optimisticMaterial : material))
     )
     const existingTimer = pendingMaterialCheckupTimersRef.current.get(materialToUpdate.id)
     const nextContinueMaterial =
       currentSubject && isCurrentContinueMaterial
-        ? getNextUncheckedPracticeMaterial(nextMaterials, {
+        ? getNextUncheckedMaterial(nextMaterials, {
+            mode,
             subjectId: currentSubject.id,
             sessionDate: subjectDialogDateKey,
             weekNumber: dialogSelectedWeekNumber,
@@ -2895,16 +2955,22 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     setContinueError("")
     if (isCurrentContinueMaterial) {
+      setSelectedPracticeMaterialId(checked ? nextContinueMaterial?.id ?? null : optimisticMaterial.id)
       setContinuePayload((previous) =>
         previous
           ? {
               ...previous,
+              mode,
               material: checked ? nextContinueMaterial : optimisticMaterial,
             }
           : previous
       )
     }
-    setMaterials(nextMaterials)
+    setMaterials((previousMaterials) =>
+      sortSubjectDayMaterials(
+        previousMaterials.map((material) => (material.id === optimisticMaterial.id ? optimisticMaterial : material))
+      )
+    )
 
     const timerId = window.setTimeout(async () => {
       pendingMaterialCheckupTimersRef.current.delete(materialToUpdate.id)
@@ -2928,11 +2994,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         )
 
         if (!checked && isCurrentContinueMaterial) {
+          setSelectedPracticeMaterialId(updatedMaterial.id)
           setContinuePayload((previous) => (previous ? { ...previous, material: updatedMaterial } : previous))
         }
       } catch (error) {
-        console.error("Failed to update practice material checkup:", error)
+        console.error(`Failed to update ${mode} material checkup:`, error)
         if (isCurrentContinueMaterial) {
+          setSelectedPracticeMaterialId(materialToUpdate.id)
           setContinuePayload(previousPayload)
         }
         setMaterials((previousMaterials) =>
@@ -2952,6 +3020,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const deleteMaterial = async (materialToDelete: SubjectDayMaterial) => {
     if (isDeletingMaterialId === materialToDelete.id) return
 
+    const mode: ContinueMode = materialToDelete.material_type === "theory" ? "theory" : "practice"
     const existingTimer = pendingMaterialCheckupTimersRef.current.get(materialToDelete.id)
     if (existingTimer) {
       window.clearTimeout(existingTimer)
@@ -2980,19 +3049,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       )
 
       if (currentContinueMaterial?.id === materialToDelete.id && currentSubject) {
-        const remainingMaterials = materials.filter((material) => material.id !== materialToDelete.id)
+        const remainingMaterials = getVisibleMaterialsForMode(mode).filter((material) => material.id !== materialToDelete.id)
+        const nextMaterial = getNextUncheckedMaterial(remainingMaterials, {
+          mode,
+          subjectId: currentSubject.id,
+          sessionDate: subjectDialogDateKey,
+          weekNumber: dialogSelectedWeekNumber,
+        })
+        setSelectedPracticeMaterialId(nextMaterial?.id ?? null)
         setContinuePayload((previous) =>
           previous
             ? {
                 ...previous,
-                material: getNextUncheckedPracticeMaterial(remainingMaterials, {
-                  subjectId: currentSubject.id,
-                  sessionDate: subjectDialogDateKey,
-                  weekNumber: dialogSelectedWeekNumber,
-                }),
+                mode,
+                material: nextMaterial,
               }
             : previous
         )
+      } else if (selectedPracticeMaterialId === materialToDelete.id) {
+        setSelectedPracticeMaterialId(null)
       }
     } catch (error) {
       console.error("Failed to delete material:", error)
@@ -3082,6 +3157,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setCurrentSubject(subject)
     setDialogDateKey(currentDateKey)
     resetSubjectUiState()
+    setSubjectDialogEntryMode("default")
     setExerciseWeeklyScopeEnabled(true)
     setPracticeSectionView("exercises")
     setIsDialogOpen(true)
@@ -3311,6 +3387,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         : entries.filter((entry) => entry.session_date === subjectDialogDateKey),
     [dialogSelectedWeekNumber, entries, isWeeklyExercisesScope, subjectDialogDateKey]
   )
+  const isTheoryContinueMode = subjectDialogEntryMode === "theory_continue"
   const theoryDayEntries = useMemo(
     () =>
       activeDayEntries.filter(
@@ -3394,25 +3471,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }, [analysisSubjects])
   const currentSubjectPracticeCoverage = useMemo(() => {
-    return practiceMaterials
-      .filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material))
-      .map((material) => {
-        const materialEntries = practiceEntriesByMaterialId[material.id] ?? []
-        const pairCount = new Set(materialEntries.map((entry) => entry.pair_id).filter(Boolean)).size
-        const status: PracticeCoverageStatus =
-          pairCount > 0 ? "cubierto_minimo" : materialEntries.length > 0 ? "tocado_sin_dupla" : "sin_tocar"
-
-        return {
-          id: material.id,
-          fileName: material.file_name,
-          sessionDate: material.session_date,
-          status,
-          isCheckupDone: material.is_checkup_done,
-          pairCount,
-          entryCount: materialEntries.length,
-        }
-      })
+    return buildMaterialCoverage(practiceMaterials, practiceEntriesByMaterialId)
   }, [practiceEntriesByMaterialId, practiceMaterials])
+  const currentSubjectTheoryCoverage = useMemo(
+    () => buildMaterialCoverage(theoryMaterials, practiceEntriesByMaterialId),
+    [practiceEntriesByMaterialId, theoryMaterials]
+  )
   const currentSubjectVectorSummary = useMemo(() => {
     const fragileConcepts = entries.filter((entry) => entry.practice_state === "erre")
     const firstTheoryMaterial = theoryMaterials[0] ?? null
@@ -3441,7 +3505,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       fragileConcepts,
     }
   }, [currentSubjectOverview, currentSubjectPracticeCoverage, entries, theoryMaterials])
-  const selectedPracticeMaterialEntries = useMemo(
+  const selectedContinueMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
   )
@@ -3449,10 +3513,22 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => practiceMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
     [practiceMaterials, selectedPracticeMaterialId]
   )
-  const currentContinueMaterial = selectedPracticeMaterial ?? continuePayload?.material ?? null
+  const selectedTheoryMaterial = useMemo(
+    () => theoryMaterials.find((material) => !("is_pending_upload" in material) && material.id === selectedPracticeMaterialId) ?? null,
+    [selectedPracticeMaterialId, theoryMaterials]
+  )
+  const selectedContinueMaterial = continueMode === "theory" ? selectedTheoryMaterial : selectedPracticeMaterial
+  const currentContinueMaterial =
+    continueMode === "theory"
+      ? selectedTheoryMaterial ?? continuePayload?.material ?? null
+      : selectedPracticeMaterial ?? continuePayload?.material ?? null
   const visiblePracticeMaterials = useMemo(
     () => practiceMaterials.filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material)),
     [practiceMaterials]
+  )
+  const visibleTheoryMaterials = useMemo(
+    () => theoryMaterials.filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material)),
+    [theoryMaterials]
   )
   const continueMaterialEntries = useMemo(
     () =>
@@ -3467,9 +3543,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   )
   useEffect(() => {
     if (selectedPracticeMaterialId == null) return
-    if (selectedPracticeMaterial || selectedPracticeMaterialEntries.length > 0) return
+    if (selectedContinueMaterial || selectedContinueMaterialEntries.length > 0) return
     setSelectedPracticeMaterialId(null)
-  }, [selectedPracticeMaterial, selectedPracticeMaterialEntries.length, selectedPracticeMaterialId])
+  }, [selectedContinueMaterial, selectedContinueMaterialEntries.length, selectedPracticeMaterialId])
+  const getVisibleMaterialsForMode = useCallback(
+    (mode: ContinueMode) => (mode === "theory" ? visibleTheoryMaterials : visiblePracticeMaterials),
+    [visiblePracticeMaterials, visibleTheoryMaterials]
+  )
+  const getCoverageForMode = useCallback(
+    (mode: ContinueMode) => (mode === "theory" ? currentSubjectTheoryCoverage : currentSubjectPracticeCoverage),
+    [currentSubjectPracticeCoverage, currentSubjectTheoryCoverage]
+  )
+  const getContinueModeLabel = useCallback((mode: ContinueMode) => (mode === "theory" ? "teoria" : "practica"), [])
   const getLocalContinueFeaturedEntry = useCallback(
     () =>
       entries.find(
@@ -3497,12 +3582,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [activeDayEntries])
   const isSubjectDayRefreshing = (isEntriesLoading || isMaterialsLoading) && hasResolvedSubjectDayData
   const shouldShowInitialSubjectDayLoading = (isEntriesLoading || isMaterialsLoading) && !hasResolvedSubjectDayData
-  const buildLocalContinuePayload = useCallback((): ContinuePayload | null => {
+  const buildLocalContinuePayload = useCallback((mode: ContinueMode = continueMode): ContinuePayload | null => {
     if (!currentSubject) return null
 
+    const selectedMaterial = mode === "theory" ? selectedTheoryMaterial : selectedPracticeMaterial
+    const availableMaterials = getVisibleMaterialsForMode(mode)
     const material =
-      selectedPracticeMaterial ??
-      getNextUncheckedPracticeMaterial(materials, {
+      selectedMaterial ??
+      getNextUncheckedMaterial(availableMaterials, {
+        mode,
         subjectId: currentSubject.id,
         sessionDate: subjectDialogDateKey,
         weekNumber: dialogSelectedWeekNumber,
@@ -3514,10 +3602,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       null
 
     return {
+      mode,
       material,
       previousFeaturedEntry,
     }
-  }, [continuePayload?.previousFeaturedEntry, currentSubject, dialogSelectedWeekNumber, getLocalContinueFeaturedEntry, materials, selectedPracticeMaterial, subjectDialogDateKey])
+  }, [
+    continueMode,
+    continuePayload?.previousFeaturedEntry,
+    currentSubject,
+    dialogSelectedWeekNumber,
+    getLocalContinueFeaturedEntry,
+    getVisibleMaterialsForMode,
+    selectedPracticeMaterial,
+    selectedTheoryMaterial,
+    subjectDialogDateKey,
+  ])
   const reviewEntriesByWeek = useMemo(() => {
     return reviewEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       const current = accumulator[entry.week_number] ?? []
@@ -3530,6 +3629,164 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => String(index)),
     [currentCalendarWeek]
   )
+  const renderMaterialManagerSection = (mode: ContinueMode) => {
+    const isTheorySection = mode === "theory"
+    const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
+    const coverageItems = getCoverageForMode(mode)
+    const title = isTheorySection ? "Teoria" : "Practica"
+    const description = isTheorySection
+      ? "Trabaja los PDFs teoricos con la misma logica de audio dupla y seguimiento semanal."
+      : "No busques exhaustividad: una dupla fuerte por subtema critico ya cuenta como cobertura minima util."
+    const fileInputRef = isTheorySection ? theoryFileInputRef : practiceFileInputRef
+    const emptyLabel = isWeeklyExercisesScope
+      ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
+      : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
+
+    return (
+      <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
+            <p className="text-sm text-muted-foreground">{description}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (!currentSubject) return
+                window.open(
+                  buildMaterialDraftViewerHref({
+                    subjectId: currentSubject.id,
+                    subjectName: getSubjectDisplayName(currentSubject),
+                    sessionDate: subjectDialogDateKey,
+                    weekNumber: dialogSelectedWeekNumber,
+                    weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+                    materialType: mode,
+                  }),
+                  "_blank",
+                  "noopener,noreferrer"
+                )
+              }}
+              disabled={isUploadingMaterialType !== null || !currentSubject}
+              className="border-border text-foreground"
+              aria-label={`Abrir visor para fragmentar un PDF de ${getContinueModeLabel(mode)}`}
+            >
+              <ExternalLink className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploadingMaterialType !== null}
+              className="border-border text-foreground"
+            >
+              {isUploadingMaterialType === mode ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void openContinueModal(mode)}
+              className="bg-primary text-primary-foreground"
+            >
+              Continuar
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {materialsForMode.length > 0 ? (
+            materialsForMode.map((material) => (
+              <div key={material.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
+                {"is_pending_upload" in material ? (
+                  <>
+                    <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-muted-foreground">
+                      <Checkbox checked={false} disabled />
+                      <span className="truncate">{material.file_name}</span>
+                    </span>
+                    {isWeeklyExercisesScope ? (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {getWeekdayLabel(material.session_date)} {material.session_date}
+                      </span>
+                    ) : null}
+                    <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Subiendo...
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {(() => {
+                      const coverage = coverageItems.find((item) => item.id === material.id)
+                      const coverageLabel =
+                        coverage?.status === "cubierto_minimo"
+                          ? "Cubierto minimo"
+                          : coverage?.status === "tocado_sin_dupla"
+                            ? "Tocado sin dupla"
+                            : "Sin tocar"
+                      const coverageClassName =
+                        coverage?.status === "cubierto_minimo"
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                          : coverage?.status === "tocado_sin_dupla"
+                            ? "border-amber-300 bg-amber-50 text-amber-700"
+                            : "border-red-300 bg-red-50 text-red-700"
+
+                      return (
+                        <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${coverageClassName}`}>
+                          {coverageLabel}
+                        </span>
+                      )
+                    })()}
+                    <Checkbox
+                      checked={material.is_checkup_done}
+                      onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
+                    />
+                    <a
+                      href={buildMaterialViewerHref(material.id)}
+                      className="min-w-0 flex-1 truncate pr-7 text-sm text-foreground hover:underline"
+                    >
+                      {material.file_name}
+                    </a>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void openContinueModal(mode, material.id)}
+                      className="h-8 border-border px-3 text-xs text-foreground"
+                    >
+                      Ver
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void copyEntriesForMaterial(material.id)}
+                      disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
+                      className="h-8 border-border px-3 text-xs text-foreground"
+                    >
+                      Copiar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void deleteMaterial(material)}
+                      disabled={isDeletingMaterialId === material.id}
+                      className="h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      aria-label={`Borrar ${material.file_name}`}
+                    >
+                      {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                    </Button>
+                  </>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
+              {emptyLabel}
+            </p>
+          )}
+        </div>
+      </section>
+    )
+  }
 
   const handleReset = async () => {
     try {
@@ -4086,7 +4343,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="flex items-start justify-between gap-3">
-                {practiceSectionView === "theory" ? (
+                {practiceSectionView === "theory" || isTheoryContinueMode ? (
                   <DialogTitle className="min-w-0 text-left text-[clamp(1.35rem,4.2vw,2rem)] font-normal leading-tight text-foreground">
                     {getSubjectDisplayName(currentSubject)}
                   </DialogTitle>
@@ -4167,6 +4424,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ) : null}
                 </div>
               </div>
+              <DialogDescription className="sr-only">
+                {isTheoryContinueMode
+                  ? "Gestiona la teoria semanal de la materia, abre PDFs, sube archivos y continua con audio dupla."
+                  : "Gestiona la materia actual con sus audios, PDFs y navegacion semanal."}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
@@ -4254,217 +4516,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </section>
               ) : null}
 
-              {practiceSectionView === "theory" ? (
+              {practiceSectionView === "theory" && !isTheoryContinueMode ? (
                 <div className="mb-2" />
               ) : (
                 <>
                 <div className="mb-6 space-y-4">
-                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Teoria</p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => theoryFileInputRef.current?.click()}
-                        disabled={isUploadingMaterialType !== null}
-                        className="border-border text-foreground"
-                      >
-                        {isUploadingMaterialType === "theory" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                      </Button>
-                    </div>
+                  {renderMaterialManagerSection("theory")}
 
-                    <div className="space-y-2">
-                      {theoryMaterials.length > 0 ? (
-                        theoryMaterials.map((material) => (
-                          "is_pending_upload" in material ? (
-                            <div
-                              key={material.id}
-                              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground"
-                            >
-                              <span className="truncate">{material.file_name}</span>
-                              <span className="inline-flex items-center gap-2 text-xs">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                Subiendo...
-                              </span>
-                            </div>
-                          ) : (
-                            <div key={material.id} className="relative flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground hover:bg-accent">
-                                <a
-                                  href={buildPracticeMaterialViewerHref(material.id)}
-                                  className="min-w-0 flex-1 truncate pr-7"
-                                >
-                                  <span className="truncate">{material.file_name}</span>
-                                </a>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => void deleteMaterial(material)}
-                                disabled={isDeletingMaterialId === material.id}
-                                className="absolute right-1.5 top-1.5 h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                                aria-label={`Borrar ${material.file_name}`}
-                              >
-                                {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                              </Button>
-                            </div>
-                          )
-                        ))
-                      ) : (
-                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-                          {isWeeklyExercisesScope
-                            ? "Todavia no hay PDFs de teoria para esta semana."
-                            : "Todavia no hay PDFs de teoria para este dia."}
-                        </p>
-                      )}
-                    </div>
-                  </section>
+                  {isTheoryContinueMode ? null : renderMaterialManagerSection("practice")}
 
-                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Practica</p>
-                        <p className="text-sm text-muted-foreground">No busques exhaustividad: una dupla fuerte por subtema critico ya cuenta como cobertura minima util.</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            if (!currentSubject) return
-                            window.open(
-                              buildPracticeDraftViewerHref({
-                                subjectId: currentSubject.id,
-                                subjectName: getSubjectDisplayName(currentSubject),
-                                sessionDate: subjectDialogDateKey,
-                                weekNumber: dialogSelectedWeekNumber,
-                                weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
-                              }),
-                              "_blank",
-                              "noopener,noreferrer"
-                            )
-                          }}
-                          disabled={isUploadingMaterialType !== null || !currentSubject}
-                          className="border-border text-foreground"
-                          aria-label="Abrir visor para fragmentar un libro"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => practiceFileInputRef.current?.click()}
-                          disabled={isUploadingMaterialType !== null}
-                          className="border-border text-foreground"
-                        >
-                          {isUploadingMaterialType === "practice" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          type="button"
-                          onClick={() => void openContinueModal()}
-                          className="bg-primary text-primary-foreground"
-                        >
-                          Continuar
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      {practiceMaterials.length > 0 ? (
-                        practiceMaterials.map((material) => (
-                          <div key={material.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
-                            {"is_pending_upload" in material ? (
-                              <>
-                                <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-muted-foreground">
-                                  <Checkbox checked={false} disabled />
-                                  <span className="truncate">{material.file_name}</span>
-                                </span>
-                                {isWeeklyExercisesScope ? (
-                                  <span className="shrink-0 text-xs text-muted-foreground">
-                                    {getWeekdayLabel(material.session_date)} {material.session_date}
-                                  </span>
-                                ) : null}
-                                <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  Subiendo...
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                {(() => {
-                                  const coverage = currentSubjectPracticeCoverage.find((item) => item.id === material.id)
-                                  const coverageLabel =
-                                    coverage?.status === "cubierto_minimo"
-                                      ? "Cubierto minimo"
-                                      : coverage?.status === "tocado_sin_dupla"
-                                        ? "Tocado sin dupla"
-                                        : "Sin tocar"
-                                  const coverageClassName =
-                                    coverage?.status === "cubierto_minimo"
-                                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                                      : coverage?.status === "tocado_sin_dupla"
-                                        ? "border-amber-300 bg-amber-50 text-amber-700"
-                                        : "border-red-300 bg-red-50 text-red-700"
-
-                                  return (
-                                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${coverageClassName}`}>
-                                      {coverageLabel}
-                                    </span>
-                                  )
-                                })()}
-                                <Checkbox
-                                  checked={material.is_checkup_done}
-                                  onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
-                                />
-                                  <a
-                                    href={buildPracticeMaterialViewerHref(material.id)}
-                                    className="min-w-0 flex-1 truncate pr-7 text-sm text-foreground hover:underline"
-                                  >
-                                    {material.file_name}
-                                  </a>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={() => void openContinueModal(material.id)}
-                                  className="h-8 border-border px-3 text-xs text-foreground"
-                                >
-                                  Ver
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={() => void copyEntriesForMaterial(material.id)}
-                                  disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
-                                  className="h-8 border-border px-3 text-xs text-foreground"
-                                >
-                                  Copiar
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => void deleteMaterial(material)}
-                                  disabled={isDeletingMaterialId === material.id}
-                                  className="h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                                  aria-label={`Borrar ${material.file_name}`}
-                                >
-                                  {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-                          {isWeeklyExercisesScope
-                            ? "Todavia no hay PDFs de practica para esta semana."
-                            : "Todavia no hay PDFs de practica para este dia."}
-                        </p>
-                      )}
-                    </div>
-                  </section>
-
+                  {isTheoryContinueMode ? null : (
                   <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -4505,6 +4566,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       )}
                     </div>
                   </section>
+                  )}
                 </div>
                 </>
               )}
@@ -4741,10 +4803,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <DialogTitle className="text-left text-[2rem] font-normal leading-none text-foreground sm:text-[2.5rem]">
-                    Continuar
+                    {continueMode === "theory" ? "Continuar teoria" : "Continuar"}
                   </DialogTitle>
                   <DialogDescription className="sr-only">
-                    Continua la practica con el PDF actual, el audio destacado previo y el resumen de teoria de la materia.
+                    {continueMode === "theory"
+                      ? "Continua la teoria con el PDF actual, el audio destacado previo y el resumen de la materia."
+                      : "Continua la practica con el PDF actual, el audio destacado previo y el resumen de teoria de la materia."}
                   </DialogDescription>
                 </div>
                 <DialogClose asChild>
@@ -4838,7 +4902,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                           <a
-                            href={buildPracticeMaterialViewerHref(currentContinueMaterial.id)}
+                            href={buildMaterialViewerHref(currentContinueMaterial.id)}
                             className="font-medium underline-offset-2 hover:underline"
                           >
                             {currentContinueMaterial.file_name}
@@ -4857,9 +4921,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       </div>
                     ) : (
                       <p className="text-base text-muted-foreground">
-                        {visiblePracticeMaterials.length === 0
-                          ? "No hay archivos de practica cargados."
-                          : "No se pudo resolver un PDF de practica para continuar."}
+                        {getVisibleMaterialsForMode(continueMode).length === 0
+                          ? `No hay archivos de ${getContinueModeLabel(continueMode)} cargados.`
+                          : `No se pudo resolver un PDF de ${getContinueModeLabel(continueMode)} para continuar.`}
                       </p>
                     )}
                   </div>

@@ -21,7 +21,7 @@ type DraftViewerContext = {
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
-  materialType: "practice"
+  materialType: "practice" | "theory"
 }
 
 type PairRole = "question" | "answer"
@@ -186,17 +186,17 @@ function buildViewerSrc({
   return `/visor/index.html?${params.toString()}`
 }
 
-function notifyPracticeMaterialsRefresh(payload: { subjectId: string; sessionDate: string; weekNumber: number }) {
+function notifySubjectDayMaterialsRefresh(payload: { subjectId: string; sessionDate: string; weekNumber: number }) {
   if (typeof window === "undefined") return
 
   try {
-    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("practice-materials") : null
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("subject-day-materials") : null
     channel?.postMessage(payload)
     channel?.close()
   } catch {}
 
   try {
-    window.localStorage.setItem("practice-materials:refresh", JSON.stringify({ ...payload, timestamp: Date.now() }))
+    window.localStorage.setItem("subject-day-materials:refresh", JSON.stringify({ ...payload, timestamp: Date.now() }))
   } catch {}
 }
 
@@ -552,6 +552,7 @@ export function PracticeViewerClient({
   const uploadPracticeFragment = useCallback(
     async (payload: FragmentUploadPayload) => {
       if (!activeContext) return
+      const draftMaterialType = draftContext?.materialType ?? "practice"
 
       setUploadFeedback("Subiendo PDF fragmentado...")
       postToViewer({ type: "practiceFragmentUploadState", status: "uploading" })
@@ -569,7 +570,7 @@ export function PracticeViewerClient({
             subjectName: activeContext.subjectName,
             sessionDate: activeContext.sessionDate,
             weekNumber: activeContext.weekNumber,
-            materialType: "practice",
+            materialType: draftMaterialType,
             mimeType: "application/pdf",
             fileName,
           }),
@@ -590,7 +591,7 @@ export function PracticeViewerClient({
               subjectId: activeContext.subjectId,
               sessionDate: activeContext.sessionDate,
               weekNumber: activeContext.weekNumber,
-              materialType: "practice",
+              materialType: draftMaterialType,
               driveFileId,
               fileName: persistedFileName,
             }),
@@ -604,7 +605,7 @@ export function PracticeViewerClient({
           status: "success",
           fileName,
         })
-        notifyPracticeMaterialsRefresh({
+        notifySubjectDayMaterialsRefresh({
           subjectId: activeContext.subjectId,
           sessionDate: activeContext.sessionDate,
           weekNumber: activeContext.weekNumber,
@@ -620,7 +621,7 @@ export function PracticeViewerClient({
         })
       }
     },
-    [activeContext, postToViewer]
+    [activeContext, draftContext?.materialType, postToViewer]
   )
 
   const handleViewerMessage = useCallback(

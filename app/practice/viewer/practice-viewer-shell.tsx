@@ -18,7 +18,7 @@ type DraftViewerContext = {
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
-  materialType: "practice"
+  materialType: "practice" | "theory"
 }
 
 function buildPracticePdfJsViewerHref({
