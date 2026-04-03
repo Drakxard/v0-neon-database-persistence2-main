@@ -4,6 +4,12 @@ import { getSubjectById } from "@/lib/subjects"
 
 const sql = neon(process.env.DATABASE_URL!)
 const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
+const SUBJECT_THEORY_WEEKDAY: Partial<Record<string, number>> = {
+  calculo3: 0,
+  fisica: 0,
+  probabilidad: 1,
+  logica: 4,
+}
 
 export type PracticeMaterialCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
 export type SubjectVectorSeverity = "green" | "yellow" | "red"
@@ -115,6 +121,15 @@ function diffDateKeys(startDateKey: string, endDateKey: string) {
   return Math.floor((end - start) / (1000 * 60 * 60 * 24))
 }
 
+function getMostRecentWeekdayDateKey(dateKey: string, weekdayIndex: number) {
+  const [year, month, day] = dateKey.split("-").map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const currentWeekday = (date.getUTCDay() + 6) % 7
+  const diff = (currentWeekday - weekdayIndex + 7) % 7
+  date.setUTCDate(date.getUTCDate() - diff)
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`
+}
+
 function normalizeSessionDateKey(value: string | Date) {
   if (value instanceof Date) {
     return value.toISOString().slice(0, 10)
@@ -168,15 +183,27 @@ function buildSubjectVector(params: {
       return toIsoTimestamp(left.created_at).localeCompare(toIsoTimestamp(right.created_at))
     })
 
+  if (theoryMaterials.length === 0) {
+    return null
+  }
+
+  const scheduledWeekday = SUBJECT_THEORY_WEEKDAY[subjectId]
+  const firstTheoryDate = normalizeSessionDateKey(theoryMaterials[0].session_date)
   const latestTheory = [...theoryMaterials]
     .reverse()
     .find((material) => normalizeSessionDateKey(material.session_date) <= todayKey) ?? null
 
-  if (!latestTheory) {
+  const startDate =
+    typeof scheduledWeekday === "number"
+      ? getMostRecentWeekdayDateKey(todayKey, scheduledWeekday)
+      : latestTheory
+        ? normalizeSessionDateKey(latestTheory.session_date)
+        : null
+
+  if (!startDate || startDate < firstTheoryDate) {
     return null
   }
 
-  const startDate = normalizeSessionDateKey(latestTheory.session_date)
   const endDate = addDaysToDateKey(startDate, 6)
   const currentDay = diffDateKeys(startDate, todayKey)
   const isActive = currentDay >= 0 && currentDay <= 6

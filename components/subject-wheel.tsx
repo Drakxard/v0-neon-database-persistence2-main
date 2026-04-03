@@ -235,6 +235,38 @@ function formatLastInteractionLabel(value: string | null) {
   }).format(date)
 }
 
+function getCoverageReasonLabel(reason: string) {
+  switch (reason) {
+    case "sin_dupla_en_pdf_relevante":
+      return "practica pendiente"
+    case "sin_interaccion_movil_reciente":
+      return "sin repaso movil"
+    case "fragil":
+      return "fragil"
+    default:
+      return reason.replaceAll("_", " ")
+  }
+}
+
+function getVectorDayLabel(currentDay: number | null, hasVector: boolean) {
+  if (!hasVector || currentDay == null) return "Sin teoria"
+  if (currentDay === 0) return "Teoria hoy"
+  return `Dia ${currentDay}`
+}
+
+function getVectorDayTone(currentDay: number | null, hasVector: boolean) {
+  if (!hasVector || currentDay == null) {
+    return "border-border bg-muted/30 text-muted-foreground"
+  }
+  if (currentDay >= 5) {
+    return "border-red-300 bg-red-50 text-red-700"
+  }
+  if (currentDay >= 3) {
+    return "border-amber-300 bg-amber-50 text-amber-700"
+  }
+  return "border-emerald-300 bg-emerald-50 text-emerald-700"
+}
+
 type ManualEntryTarget = {
   subjectId: string
   sessionDate: string
@@ -3299,20 +3331,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     })
   }, [vectorOverviewBySubjectId])
   const analysisSummary = useMemo(() => {
-    const activeCount = analysisSubjects.filter((subject) => subject.hasVector).length
-    const readyCount = analysisSubjects.filter((subject) => subject.hasVector && subject.severity === "green").length
-    const laggingCount = analysisSubjects.filter((subject) => subject.hasVector && subject.severity === "red").length
+    const totalSubjectsCount = analysisSubjects.length
+    const readyCount = analysisSubjects.filter((subject) => subject.severity === "green").length
+    const notReadyCount = totalSubjectsCount - readyCount
     const coveredPdfCount = analysisSubjects.reduce((total, subject) => total + subject.coveredCount, 0)
     const relevantPdfCount = analysisSubjects.reduce((total, subject) => total + subject.relevantCount, 0)
-    const totalPdfCount = analysisSubjects.reduce((total, subject) => total + subject.totalCount, 0)
 
     return {
-      activeCount,
+      totalSubjectsCount,
       readyCount,
-      laggingCount,
+      notReadyCount,
       coveredPdfCount,
       relevantPdfCount,
-      totalPdfCount,
     }
   }, [analysisSubjects])
   const currentSubjectPracticeCoverage = useMemo(() => {
@@ -3882,28 +3912,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 {vectorsError ? <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-sm text-red-700">{vectorsError}</div> : null}
 
                 {!vectorsError ? (
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Materias activas</p>
-                      <p className="mt-2 text-2xl font-semibold text-foreground">{analysisSummary.activeCount}</p>
-                    </div>
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <div className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-4">
                       <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Al dia</p>
                       <p className="mt-2 text-2xl font-semibold text-emerald-800">{analysisSummary.readyCount}</p>
                     </div>
                     <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4">
-                      <p className="text-xs uppercase tracking-[0.16em] text-red-700">Rezagadas</p>
-                      <p className="mt-2 text-2xl font-semibold text-red-800">{analysisSummary.laggingCount}</p>
+                      <p className="text-xs uppercase tracking-[0.16em] text-red-700">No al dia</p>
+                      <p className="mt-2 text-2xl font-semibold text-red-800">{analysisSummary.notReadyCount}</p>
                     </div>
                     <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
                       <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">PDFs cubiertos</p>
                       <p className="mt-2 text-2xl font-semibold text-foreground">
                         {analysisSummary.coveredPdfCount}/{analysisSummary.relevantPdfCount}
                       </p>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
-                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">PDFs totales</p>
-                      <p className="mt-2 text-2xl font-semibold text-foreground">{analysisSummary.totalPdfCount}</p>
                     </div>
                   </div>
                 ) : null}
@@ -3932,27 +3954,31 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-base font-medium text-foreground">{vector.subjectName}</p>
-                            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                              {vector.hasVector
-                                ? `D${vector.currentDay ?? "?"} - ${vector.stateLabel.replaceAll("_", " ")}`
-                                : "Sin teoria"}
-                            </p>
                           </div>
+                          <span className={`rounded-full border px-2 py-1 text-xs ${getVectorDayTone(vector.currentDay, vector.hasVector)}`}>
+                            {getVectorDayLabel(vector.currentDay, vector.hasVector)}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                          <p className="text-sm text-foreground">
+                            {vector.coveredCount}/{vector.relevantCount} cubiertos
+                          </p>
                           <span className="rounded-full border border-current px-2 py-1 text-xs">
-                            {vector.coveredCount}/{vector.relevantCount}/{vector.totalCount} PDF
+                            {vector.relevantCount} PDF
                           </span>
                         </div>
 
                         <div className="mt-4 grid gap-2 text-sm text-foreground md:grid-cols-2">
                           <p>{vector.hasVector ? `Ultima interaccion: ${formatLastInteractionLabel(vector.lastInteractionAt)}` : "Sin teoria"}</p>
-                          <p>PDFs del periodo: {vector.totalCount}</p>
+                          <p>PDFs practica: {vector.relevantCount}</p>
                         </div>
 
                         {vector.hasVector && vector.staleReason.length > 0 ? (
                           <div className="mt-3 flex flex-wrap gap-2">
                             {vector.staleReason.map((reason) => (
                               <span key={reason} className="rounded-full border border-current px-2 py-1 text-xs">
-                                {reason.replaceAll("_", " ")}
+                                {getCoverageReasonLabel(reason)}
                               </span>
                             ))}
                           </div>
@@ -4152,21 +4178,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       </p>
                     </div>
                     <div
-                      className={`rounded-full border px-3 py-1 text-xs ${
-                        currentSubjectVectorSummary.severity === "red"
-                          ? "border-red-300 bg-red-50 text-red-700"
-                          : currentSubjectVectorSummary.severity === "yellow"
-                            ? "border-amber-300 bg-amber-50 text-amber-700"
-                            : "border-emerald-300 bg-emerald-50 text-emerald-700"
-                      }`}
+                      className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.currentDay != null)}`}
                     >
-                      {currentSubjectVectorSummary.currentDay != null ? `D${currentSubjectVectorSummary.currentDay}` : "Sin teoria"} - {currentSubjectVectorSummary.stateLabel.replaceAll("_", " ")}
+                      {getVectorDayLabel(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.currentDay != null)}
                     </div>
                   </div>
 
                   <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
                     <p>PDFs cubiertos: {currentSubjectVectorSummary.coveredCount}/{currentSubjectVectorSummary.relevantCount}</p>
-                    <p>PDFs totales: {currentSubjectVectorSummary.totalCount}</p>
+                    <p>PDFs practica: {currentSubjectVectorSummary.relevantCount}</p>
                     <p>Ultima interaccion movil: {formatLastInteractionLabel(currentSubjectVectorSummary.lastInteractionAt)}</p>
                     <p>Conceptos fragiles: {currentSubjectVectorSummary.fragileConcepts.length}</p>
                   </div>
