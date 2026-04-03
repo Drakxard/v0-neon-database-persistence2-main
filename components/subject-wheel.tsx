@@ -3478,33 +3478,47 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     [practiceEntriesByMaterialId, theoryMaterials]
   )
   const currentSubjectVectorSummary = useMemo(() => {
-    const fragileConcepts = entries.filter((entry) => entry.practice_state === "erre")
     const firstTheoryMaterial = theoryMaterials[0] ?? null
     const hasTheory = Boolean(currentSubjectOverview?.startDate || firstTheoryMaterial)
-    const relevantPracticeCoverage = currentSubjectOverview
-      ? currentSubjectPracticeCoverage.filter((material) =>
-          currentSubjectOverview.relevantPracticeMaterialIds.includes(material.id)
-        )
-      : currentSubjectPracticeCoverage
-    const coveredCount = relevantPracticeCoverage.filter((material) => material.status === "cubierto_minimo").length
+    const relevantCoverage = isTheoryContinueMode
+      ? currentSubjectTheoryCoverage
+      : currentSubjectOverview
+        ? currentSubjectPracticeCoverage.filter((material) =>
+            currentSubjectOverview.relevantPracticeMaterialIds.includes(material.id)
+          )
+        : currentSubjectPracticeCoverage
+    const coveredCount = relevantCoverage.filter((material) => material.status === "cubierto_minimo").length
 
     return {
       hasVector: Boolean(currentSubjectOverview),
       hasTheory,
       startDate: currentSubjectOverview?.startDate ?? firstTheoryMaterial?.session_date ?? null,
       currentDay: currentSubjectOverview?.currentDay ?? null,
-      relevantCount: currentSubjectOverview
-        ? currentSubjectOverview.relevantPracticeMaterialIds.length
-        : relevantPracticeCoverage.length,
+      relevantCount: isTheoryContinueMode
+        ? relevantCoverage.length
+        : currentSubjectOverview
+          ? currentSubjectOverview.relevantPracticeMaterialIds.length
+          : relevantCoverage.length,
       coveredCount,
-      totalCount: currentSubjectOverview?.totalPracticeMaterialIds.length ?? currentSubjectPracticeCoverage.length,
+      totalCount: isTheoryContinueMode
+        ? currentSubjectTheoryCoverage.length
+        : currentSubjectOverview?.totalPracticeMaterialIds.length ?? currentSubjectPracticeCoverage.length,
       stateLabel: currentSubjectOverview?.stateLabel ?? (hasTheory ? "parcial" : "sin_teoria"),
       severity: currentSubjectOverview?.severity ?? ("yellow" as const),
-      staleReason: currentSubjectOverview?.staleReason ?? [],
+      staleReason: isTheoryContinueMode ? [] : currentSubjectOverview?.staleReason ?? [],
       lastInteractionAt: currentSubjectOverview?.lastInteractionAt ?? null,
-      fragileConcepts,
+      fragileConcepts: isTheoryContinueMode
+        ? []
+        : entries.filter((entry) => entry.practice_state === "erre"),
     }
-  }, [currentSubjectOverview, currentSubjectPracticeCoverage, entries, theoryMaterials])
+  }, [
+    currentSubjectOverview,
+    currentSubjectPracticeCoverage,
+    currentSubjectTheoryCoverage,
+    entries,
+    isTheoryContinueMode,
+    theoryMaterials,
+  ])
   const selectedContinueMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -3633,9 +3647,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const isTheorySection = mode === "theory"
     const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
     const coverageItems = getCoverageForMode(mode)
-    const title = isTheorySection ? "Teoria" : "Practica"
+    const title = isTheorySection ? "Archivos teoricos" : "Practica"
     const description = isTheorySection
-      ? "Trabaja los PDFs teoricos con la misma logica de audio dupla y seguimiento semanal."
+      ? null
       : "No busques exhaustividad: una dupla fuerte por subtema critico ya cuenta como cobertura minima util."
     const fileInputRef = isTheorySection ? theoryFileInputRef : practiceFileInputRef
     const emptyLabel = isWeeklyExercisesScope
@@ -3647,7 +3661,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
-            <p className="text-sm text-muted-foreground">{description}</p>
+            {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -4486,12 +4500,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
-                    <p>PDFs cubiertos: {currentSubjectVectorSummary.coveredCount}/{currentSubjectVectorSummary.relevantCount}</p>
-                    <p>PDFs practica: {currentSubjectVectorSummary.relevantCount}</p>
-                  </div>
-
-                  {currentSubjectVectorSummary.fragileConcepts.length > 0 ? (
+                  {!isTheoryContinueMode && currentSubjectVectorSummary.fragileConcepts.length > 0 ? (
                     <div className="mt-3 space-y-2">
                       <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Fragiles ahora</p>
                       <div className="flex flex-wrap gap-2">
@@ -4504,7 +4513,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     </div>
                   ) : null}
 
-                  {currentSubjectVectorSummary.staleReason.length > 0 ? (
+                  {!isTheoryContinueMode && currentSubjectVectorSummary.staleReason.length > 0 ? (
                     <div className="mt-3 flex flex-wrap gap-2">
                       {currentSubjectVectorSummary.staleReason.map((reason) => (
                         <span key={reason} className="rounded-full border border-border bg-card px-2 py-1 text-xs text-foreground">
