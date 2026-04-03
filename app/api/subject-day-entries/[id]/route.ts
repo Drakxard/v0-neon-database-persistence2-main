@@ -188,10 +188,64 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       body.practiceState === "erre" ? "erre" : body.practiceState === null ? null : undefined
     const isFeatured = typeof body.isFeatured === "boolean" ? body.isFeatured : undefined
     const featuredScope = body.featuredScope === "subject_week" ? "subject_week" : "entry_scope"
+    const pairRole = body.pairRole === "question" || body.pairRole === "answer" ? body.pairRole : undefined
 
     let rows: EntryRow[]
     try {
-      rows = await sql`
+      if (pairRole !== undefined) {
+        const pairScopeRows = await sql`
+          SELECT id, pair_id, pair_role
+          FROM subject_day_entries
+          WHERE id = ${entryId}
+          LIMIT 1
+        ` as Array<{ id: number; pair_id: string | null; pair_role: "question" | "answer" | null }>
+
+        const pairScope = pairScopeRows[0]
+        if (!pairScope?.pair_id) {
+          return NextResponse.json({ error: "Solo se puede cambiar el sentido dentro de una dupla." }, { status: 400 })
+        }
+
+        if (pairScope.pair_role === pairRole) {
+          rows = await sql`
+            SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+            FROM subject_day_entries
+            WHERE id = ${entryId}
+          ` as EntryRow[]
+        } else {
+          const siblingRows = await sql`
+            SELECT id, pair_role
+            FROM subject_day_entries
+            WHERE pair_id = ${pairScope.pair_id}
+              AND id <> ${entryId}
+            ORDER BY id ASC
+          ` as Array<{ id: number; pair_role: "question" | "answer" | null }>
+
+          const conflictingSibling = siblingRows.find((row) => row.pair_role === pairRole) ?? null
+          rows = await sql`
+            UPDATE subject_day_entries
+            SET
+              pair_role = CASE
+                WHEN id = ${entryId} THEN ${pairRole}
+                WHEN ${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null} THEN ${pairScope.pair_role}
+                ELSE pair_role
+              END,
+              updated_at = CASE
+                WHEN id = ${entryId} THEN NOW()
+                WHEN ${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null} THEN NOW()
+                ELSE updated_at
+              END
+            WHERE id = ${entryId}
+              OR (${conflictingSibling?.id ?? null}::INTEGER IS NOT NULL AND id = ${conflictingSibling?.id ?? null})
+            RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+          ` as EntryRow[]
+
+          const updatedTarget = rows.find((row) => row.id === entryId)
+          if (updatedTarget) {
+            rows = [updatedTarget]
+          }
+        }
+      } else {
+        rows = await sql`
         WITH entry_scope AS (
           SELECT subject_id, week_number, session_date, subject_day_material_id
           FROM subject_day_entries
@@ -238,11 +292,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           updated_at = NOW()
         WHERE id = ${entryId}
         RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
-      ` as EntryRow[]
+        ` as EntryRow[]
+      }
     } catch (error) {
       const isTryingNewFields = "customTitle" in body || practiceState !== undefined || isFeatured !== undefined
       if (isMissingColumn(error) && isTryingNewFields) {
         return getMissingMetadataColumnResponse(body as Record<string, unknown>)
+      }
+
+      if (isMissingPairColumn(error) && pairRole !== undefined) {
+        return NextResponse.json(
+          {
+            error:
+              "No se puede cambiar el sentido de la dupla porque faltan las columnas de audio pairs en Neon (scripts/016).",
+            code: "MISSING_AUDIO_PAIR_COLUMNS",
+          },
+          { status: 409 }
+        )
       }
 
       if (!isMissingColumn(error)) {

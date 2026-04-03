@@ -2,8 +2,8 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { transcribeAudioWithGemini } from "@/lib/gemini"
-import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
-import { downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
+import { deleteDriveFile, downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
+import { deleteR2Object, downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
@@ -211,11 +211,12 @@ export async function POST(request: Request) {
         week_number: number
         session_date: string
         subject_day_material_id: number | null
+        drive_file_id: string
         pair_role: "question" | "answer" | null
       }>
       try {
         pairRows = await sql`
-          SELECT id, subject_id, week_number, session_date, subject_day_material_id, pair_role
+          SELECT id, subject_id, week_number, session_date, subject_day_material_id, drive_file_id, pair_role
           FROM subject_day_entries
           WHERE pair_id = ${pairId}
           ORDER BY id ASC
@@ -225,6 +226,7 @@ export async function POST(request: Request) {
           week_number: number
           session_date: string
           subject_day_material_id: number | null
+          drive_file_id: string
           pair_role: "question" | "answer" | null
         }>
       } catch (error) {
@@ -239,15 +241,6 @@ export async function POST(request: Request) {
         )
       }
 
-      if (pairRows.length >= 2) {
-        return badRequest("Audio pair already completed")
-      }
-
-      const duplicateRole = pairRows.some((row) => row.pair_role === pairRole)
-      if (duplicateRole) {
-        return badRequest("Audio pair role already exists")
-      }
-
       const mismatchedContext = pairRows.some(
         (row) =>
           row.subject_id !== subjectId ||
@@ -257,6 +250,11 @@ export async function POST(request: Request) {
       )
       if (mismatchedContext) {
         return badRequest("Audio pair must belong to the same material and session")
+      }
+
+      const existingRoleRow = pairRows.find((row) => row.pair_role === pairRole) ?? null
+      if (!existingRoleRow && pairRows.length >= 2) {
+        return badRequest("Audio pair already completed")
       }
     }
 
@@ -280,39 +278,110 @@ export async function POST(request: Request) {
 
     let rows: EntryRow[]
     try {
-      rows = await sql`
-        INSERT INTO subject_day_entries (
-          subject_id,
-          subject_day_material_id,
-          week_number,
-          session_date,
-          weekday_index,
-          order_index,
-          transcript_text,
-          drive_file_id,
-          drive_file_name,
-          drive_mime_type,
-          drive_web_view_link,
-          pair_id,
-          pair_role
-        )
-        VALUES (
-          ${subjectId},
-          ${materialId},
-          ${weekNumber},
-          ${sessionDate},
-          ${weekdayIndex},
-          ${nextOrderIndex},
-          ${transcriptText},
-          ${driveFile.id},
-          ${uploadedFileName || driveFile.name},
-          ${driveFile.mimeType},
-          ${("webViewLink" in driveFile && driveFile.webViewLink) || ""},
-          ${pairId},
-          ${pairRole}
-        )
-        RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, FALSE AS is_featured, created_at, updated_at
-      ` as EntryRow[]
+      if (pairId && pairRole) {
+        const pairRows = await sql`
+          SELECT id, drive_file_id, pair_role
+          FROM subject_day_entries
+          WHERE pair_id = ${pairId}
+          ORDER BY id ASC
+        ` as Array<{ id: number; drive_file_id: string; pair_role: "question" | "answer" | null }>
+
+        const existingRoleRow = pairRows.find((row) => row.pair_role === pairRole) ?? null
+        if (existingRoleRow) {
+          rows = await sql`
+            UPDATE subject_day_entries
+            SET
+              transcript_text = ${transcriptText},
+              drive_file_id = ${driveFile.id},
+              drive_file_name = ${uploadedFileName || driveFile.name},
+              drive_mime_type = ${driveFile.mimeType},
+              drive_web_view_link = ${("webViewLink" in driveFile && driveFile.webViewLink) || ""},
+              updated_at = NOW()
+            WHERE id = ${existingRoleRow.id}
+            RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, FALSE AS is_featured, created_at, updated_at
+          ` as EntryRow[]
+
+          if (existingRoleRow.drive_file_id && existingRoleRow.drive_file_id !== driveFile.id) {
+            try {
+              if (isR2ObjectKey(existingRoleRow.drive_file_id)) {
+                await deleteR2Object(existingRoleRow.drive_file_id)
+              } else {
+                await deleteDriveFile(existingRoleRow.drive_file_id)
+              }
+            } catch (cleanupError) {
+              console.error("Failed to cleanup previous audio file after pair update:", cleanupError)
+            }
+          }
+        } else {
+          rows = await sql`
+            INSERT INTO subject_day_entries (
+              subject_id,
+              subject_day_material_id,
+              week_number,
+              session_date,
+              weekday_index,
+              order_index,
+              transcript_text,
+              drive_file_id,
+              drive_file_name,
+              drive_mime_type,
+              drive_web_view_link,
+              pair_id,
+              pair_role
+            )
+            VALUES (
+              ${subjectId},
+              ${materialId},
+              ${weekNumber},
+              ${sessionDate},
+              ${weekdayIndex},
+              ${nextOrderIndex},
+              ${transcriptText},
+              ${driveFile.id},
+              ${uploadedFileName || driveFile.name},
+              ${driveFile.mimeType},
+              ${("webViewLink" in driveFile && driveFile.webViewLink) || ""},
+              ${pairId},
+              ${pairRole}
+            )
+            RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, FALSE AS is_featured, created_at, updated_at
+          ` as EntryRow[]
+        }
+      } else {
+        rows = await sql`
+          INSERT INTO subject_day_entries (
+            subject_id,
+            subject_day_material_id,
+            week_number,
+            session_date,
+            weekday_index,
+            order_index,
+            transcript_text,
+            drive_file_id,
+            drive_file_name,
+            drive_mime_type,
+            drive_web_view_link,
+            pair_id,
+            pair_role
+          )
+          VALUES (
+            ${subjectId},
+            ${materialId},
+            ${weekNumber},
+            ${sessionDate},
+            ${weekdayIndex},
+            ${nextOrderIndex},
+            ${transcriptText},
+            ${driveFile.id},
+            ${uploadedFileName || driveFile.name},
+            ${driveFile.mimeType},
+            ${("webViewLink" in driveFile && driveFile.webViewLink) || ""},
+            ${pairId},
+            ${pairRole}
+          )
+          RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, FALSE AS is_featured, created_at, updated_at
+        ` as EntryRow[]
+      }
     } catch (error) {
       if (pairId && pairRole && isMissingPairColumns(error)) {
         return NextResponse.json(

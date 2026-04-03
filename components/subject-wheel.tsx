@@ -6,7 +6,7 @@ import { useTheme } from "next-themes"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -190,10 +190,19 @@ interface ReviewAudio {
 
 type PairRole = "question" | "answer"
 
+type AudioPairSlot = {
+  url: string
+  mimeType: string
+  blob: Blob | null
+  source: "local" | "persisted"
+  entryId: number | null
+  originalRole: PairRole | null
+}
+
 type AudioPairDraft = {
   target: AudioUploadTarget
   pairId: string
-  slots: Record<PairRole, ReviewAudio | null>
+  slots: Record<PairRole, AudioPairSlot | null>
 }
 
 type AudioUploadTarget = {
@@ -1241,7 +1250,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const disposeAudioPairDraft = useCallback((draft?: AudioPairDraft | null) => {
     if (!draft) return
     Object.values(draft.slots).forEach((audio) => {
-      if (audio) URL.revokeObjectURL(audio.url)
+      if (audio?.source === "local") URL.revokeObjectURL(audio.url)
     })
   }, [])
 
@@ -1633,23 +1642,39 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             setAudioPairDraft((previous) => {
               if (!previous) return previous
               const previousAudio = previous.slots[activeRole]
-              if (previousAudio) URL.revokeObjectURL(previousAudio.url)
+              const nextPairSlot: AudioPairSlot = {
+                url: nextReviewAudio.url,
+                mimeType: nextReviewAudio.mimeType,
+                blob: nextReviewAudio.blob,
+                source: "local",
+                entryId: previousAudio?.entryId ?? null,
+                originalRole: previousAudio?.originalRole ?? activeRole,
+              }
+              if (previousAudio?.source === "local") URL.revokeObjectURL(previousAudio.url)
               const nextDraft = {
                 ...previous,
                 slots: {
                   ...previous.slots,
-                  [activeRole]: nextReviewAudio,
+                  [activeRole]: nextPairSlot,
                 },
               }
               audioPairDraftRef.current = nextDraft
               return nextDraft
             })
           } else {
+            const nextPairSlot: AudioPairSlot = {
+              url: nextReviewAudio.url,
+              mimeType: nextReviewAudio.mimeType,
+              blob: nextReviewAudio.blob,
+              source: "local",
+              entryId: null,
+              originalRole: activeRole ?? "question",
+            }
             const nextDraft: AudioPairDraft = {
               target,
               pairId: generatePairId(),
               slots: {
-                question: nextReviewAudio,
+                question: nextPairSlot,
                 answer: null,
               },
             }
@@ -1701,6 +1726,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     recordingPairRoleRef.current = role
     setAudioPairRecordingRole(role)
     await startRecording(draft.target)
+  }
+
+  const swapAudioPairDraftRoles = () => {
+    setAudioPairDraft((previous) => {
+      if (!previous) return previous
+      const nextDraft = {
+        ...previous,
+        slots: {
+          question: previous.slots.answer,
+          answer: previous.slots.question,
+        },
+      }
+      audioPairDraftRef.current = nextDraft
+      return nextDraft
+    })
   }
 
   const confirmReview = async () => {
@@ -1794,7 +1834,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const confirmAudioPairReview = async () => {
     const draft = audioPairDraftRef.current
-    if (!draft || !draft.slots.question || !draft.slots.answer) return
+    if (!draft || (!draft.slots.question && !draft.slots.answer)) return
 
     setIsUploadingAudio(true)
     setEntriesError("")
@@ -1806,6 +1846,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       for (const role of ["question", "answer"] as const) {
         const slot = draft.slots[role]
         if (!slot) continue
+        if (slot.source === "persisted" && !slot.blob) {
+          if (slot.entryId != null && slot.originalRole && slot.originalRole !== role) {
+            const response = await fetch(`/api/subject-day-entries/${slot.entryId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ pairRole: role }),
+            })
+            const payload = await response.json()
+            if (!response.ok) {
+              throw new Error(getErrorMessage(payload, "No se pudo actualizar el sentido de la dupla."))
+            }
+            createdEntries.push(payload as SubjectDayEntry)
+          }
+          continue
+        }
 
         const createdEntry = await createPracticeAudioEntry<SubjectDayEntry>({
           subjectId: draft.target.subjectId,
@@ -1814,7 +1869,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           weekNumber: draft.target.weekNumber,
           weekdayIndex: draft.target.weekdayIndex,
           materialId: draft.target.materialId ?? null,
-          blob: slot.blob,
+          blob: slot.blob as Blob,
           mimeType: slot.mimeType,
           pairId: draft.pairId,
           pairRole: role,
@@ -1830,12 +1885,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         ) {
           throw new Error("La dupla de audio se guardo en una sesion o material incorrecto.")
         }
-        createdEntryIds.push(createdEntry.id)
+        if (slot.entryId == null) {
+          createdEntryIds.push(createdEntry.id)
+        }
         createdEntries.push(createdEntry)
       }
 
       if (currentSubject?.id === draft.target.subjectId && subjectDialogDateKey === draft.target.sessionDate) {
-        setEntries((previousEntries) => sortSubjectDayEntries([...previousEntries, ...createdEntries]))
+        const createdEntriesById = new Map(createdEntries.map((entry) => [entry.id, entry]))
+        const touchedEntryIds = new Set(
+          Object.values(draft.slots)
+            .map((slot) => slot?.entryId ?? null)
+            .filter((value): value is number => Number.isInteger(value))
+        )
+        setEntries((previousEntries) =>
+          sortSubjectDayEntries([
+            ...previousEntries.map((entry) => createdEntriesById.get(entry.id) ?? entry),
+            ...createdEntries.filter((entry) => !touchedEntryIds.has(entry.id)),
+          ])
+        )
       }
 
       cancelAudioPairReview()
@@ -1885,6 +1953,55 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       ...previous,
       [entry.id]: previous[entry.id] ?? entry.transcript_text,
     }))
+  }
+
+  const startAudioPairEdit = (entry: SubjectDayEntry) => {
+    const pairEntries = entry.pair_id ? entries.filter((item) => item.pair_id === entry.pair_id) : [entry]
+    const questionEntry = pairEntries.find((item) => item.pair_role === "question") ?? null
+    const answerEntry = pairEntries.find((item) => item.pair_role === "answer") ?? null
+    const baseEntry = questionEntry ?? answerEntry ?? entry
+
+    const target: AudioUploadTarget = {
+      source: "continue-practice",
+      subjectId: baseEntry.subject_id,
+      subjectName: getSubjectDisplayName(getSubjectById(baseEntry.subject_id, visibleSubjects)),
+      sessionDate: baseEntry.session_date,
+      weekNumber: baseEntry.week_number,
+      weekdayIndex: baseEntry.weekday_index,
+      materialId: baseEntry.subject_day_material_id ?? null,
+    }
+
+    const nextDraft: AudioPairDraft = {
+      target,
+      pairId: baseEntry.pair_id ?? generatePairId(),
+      slots: {
+        question: questionEntry
+          ? {
+              url: `/api/subject-day-entries/${questionEntry.id}/audio`,
+              mimeType: questionEntry.drive_mime_type || "audio/webm",
+              blob: null,
+              source: "persisted",
+              entryId: questionEntry.id,
+              originalRole: "question",
+            }
+          : null,
+        answer: answerEntry
+          ? {
+              url: `/api/subject-day-entries/${answerEntry.id}/audio`,
+              mimeType: answerEntry.drive_mime_type || "audio/webm",
+              blob: null,
+              source: "persisted",
+              entryId: answerEntry.id,
+              originalRole: "answer",
+            }
+          : null,
+      },
+    }
+
+    audioPairDraftRef.current = nextDraft
+    setAudioPairDraft(nextDraft)
+    setAudioPairRecordingRole(null)
+    recordingPairRoleRef.current = null
   }
 
   const closeAnswerDialog = () => {
@@ -4775,8 +4892,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                       audio
                                     </Button>
                                   ) : null}
+                                  <Button variant="outline" onClick={() => startAudioPairEdit(group.questionEntry)} className="h-11 border-border px-4 text-base text-foreground">
+                                    Editar audio
+                                  </Button>
                                   <Button variant="outline" onClick={() => startAnswerEdit(group.questionEntry)} className="h-11 border-border px-4 text-base text-foreground">
-                                    Editar dupla
+                                    Editar texto
                                   </Button>
                                 </div>
                                 {entryHasAudio(group.answerEntry) && answerExpandedAudio && answerAudioSrc ? (
@@ -4867,8 +4987,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             </button>
 
                             <div className="flex flex-wrap items-center gap-2">
+                              {entry.pair_id ? (
+                                <Button variant="outline" onClick={() => startAudioPairEdit(entry)} className="h-11 border-border px-4 text-base text-foreground">
+                                  Completar dupla
+                                </Button>
+                              ) : null}
                               <Button variant="outline" onClick={() => startAnswerEdit(entry)} className="h-11 border-border px-4 text-base text-foreground">
-                                Responder
+                                {entry.pair_id ? "Editar texto" : "Responder"}
                               </Button>
                               {entryHasAudio(entry) ? (
                                 <Button variant="outline" onClick={() => void togglePlayback(entry.id)} className="h-11 border-border px-4 text-base text-foreground">
@@ -5112,8 +5237,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           <DialogHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
-                <DialogTitle>Dupla de audio</DialogTitle>
-                <DialogDescription>El audio grabado entra como pregunta. Regraba o completa la respuesta antes de confirmar.</DialogDescription>
+                <DialogTitle>Confirmar dupla</DialogTitle>
               </div>
               <DialogClose asChild>
                 <button
@@ -5129,6 +5253,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
           {audioPairDraft ? (
             <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card/40 px-4 py-3">
+                <p className="text-sm text-muted-foreground">Ajusta el sentido antes de confirmar.</p>
+                <Button type="button" variant="outline" onClick={swapAudioPairDraftRoles} disabled={isUploadingAudio || isRecording}>
+                  <RotateCcw className="h-4 w-4" />
+                  Invertir roles
+                </Button>
+              </div>
               {(["question", "answer"] as const).map((role) => {
                 const slot = audioPairDraft.slots[role]
                 const isThisRecording = isRecording && audioPairRecordingRole === role
@@ -5138,7 +5269,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <div>
                         <p className="text-lg font-medium text-foreground">{role === "question" ? "Pregunta" : "Respuesta"}</p>
                         <p className="text-sm text-muted-foreground">
-                          {isThisRecording ? "Grabando..." : slot ? "Audio listo" : "Sin audio"}
+                          {isThisRecording ? "Grabando..." : slot ? (slot.source === "persisted" && !slot.blob ? "Audio guardado" : "Audio listo") : "Sin audio"}
                         </p>
                       </div>
                       <Button
@@ -5177,7 +5308,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </Button>
                 <Button
                   onClick={() => void confirmAudioPairReview()}
-                  disabled={!audioPairDraft.slots.question || !audioPairDraft.slots.answer || isUploadingAudio || isRecording}
+                  disabled={(!audioPairDraft.slots.question && !audioPairDraft.slots.answer) || isUploadingAudio || isRecording}
                 >
                   {isUploadingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                   Confirmar
