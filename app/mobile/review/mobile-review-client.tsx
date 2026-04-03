@@ -30,9 +30,9 @@ type MobileReviewTask = {
   staleReason: string[]
   lastInteractionAt: string | null
   coverageSnapshot: {
-    anchorEntryId: number | null
     relevantPracticeMaterialIds: number[]
     coveredPracticeMaterialIds: number[]
+    totalPracticeMaterialIds: number[]
   }
   material: {
     id: number

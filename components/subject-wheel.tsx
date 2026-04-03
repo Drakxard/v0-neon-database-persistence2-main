@@ -115,9 +115,9 @@ type VectorOverview = {
   currentDay: number | null
   endDate: string | null
   isActive: boolean
-  anchorEntryId: number | null
   relevantPracticeMaterialIds: number[]
   coveredPracticeMaterialIds: number[]
+  totalPracticeMaterialIds: number[]
   staleReason: string[]
   severity: "green" | "yellow" | "red"
   stateLabel: string
@@ -140,9 +140,9 @@ type AnalysisSubjectCard = {
   currentDay: number | null
   severity: "green" | "yellow" | "red" | "neutral"
   stateLabel: string
-  anchorEntryId: number | null
   coveredCount: number
   relevantCount: number
+  totalCount: number
   lastInteractionAt: string | null
   staleReason: string[]
 }
@@ -799,7 +799,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setVectorsError("")
 
       try {
-        const response = await fetch(`/api/mobile/review/overview?weekNumber=${homeSelectedWeekNumber}&includeInactive=true`)
+        const response = await fetch(`/api/mobile/review/overview?weekNumber=${homeSelectedWeekNumber}&date=${currentDateKey}&includeInactive=true`)
         const payload = (await response.json()) as { vectors?: VectorOverview[]; error?: string }
         if (!response.ok) {
           throw new Error(getErrorMessage(payload, "No se pudo cargar la cobertura semanal."))
@@ -824,7 +824,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     return () => {
       cancelled = true
     }
-  }, [homeSelectedWeekNumber, isAnalysisOpen])
+  }, [currentDateKey, homeSelectedWeekNumber, isAnalysisOpen])
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -3274,10 +3274,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           hasVector: false,
           currentDay: null,
           severity: "neutral",
-          stateLabel: "sin_vector",
-          anchorEntryId: null,
+          stateLabel: "sin_teoria",
           coveredCount: 0,
           relevantCount: 0,
+          totalCount: 0,
           lastInteractionAt: null,
           staleReason: [],
         }
@@ -3290,9 +3290,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         currentDay: vector.currentDay,
         severity: vector.severity,
         stateLabel: vector.stateLabel,
-        anchorEntryId: vector.anchorEntryId,
         coveredCount: vector.coveredPracticeMaterialIds.length,
         relevantCount: vector.relevantPracticeMaterialIds.length,
+        totalCount: vector.totalPracticeMaterialIds.length,
         lastInteractionAt: vector.lastInteractionAt,
         staleReason: vector.staleReason,
       }
@@ -3304,6 +3304,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const laggingCount = analysisSubjects.filter((subject) => subject.hasVector && subject.severity === "red").length
     const coveredPdfCount = analysisSubjects.reduce((total, subject) => total + subject.coveredCount, 0)
     const relevantPdfCount = analysisSubjects.reduce((total, subject) => total + subject.relevantCount, 0)
+    const totalPdfCount = analysisSubjects.reduce((total, subject) => total + subject.totalCount, 0)
 
     return {
       activeCount,
@@ -3311,6 +3312,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       laggingCount,
       coveredPdfCount,
       relevantPdfCount,
+      totalPdfCount,
     }
   }, [analysisSubjects])
   const currentSubjectPracticeCoverage = useMemo(() => {
@@ -3339,35 +3341,36 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     return fallback.map((material) => statusById.get(material.id) ?? material)
   }, [currentSubjectOverview, practiceEntriesByMaterialId, practiceMaterials])
   const currentSubjectVectorSummary = useMemo(() => {
-    const relevantCount = currentSubjectPracticeCoverage.filter((material) => !material.isCheckupDone || material.entryCount > 0).length
-    const coveredCount = currentSubjectPracticeCoverage.filter((material) => material.status === "cubierto_minimo").length
-    const startDate = currentSubjectPracticeCoverage[0]?.sessionDate ?? null
-    const currentDay =
-      startDate != null
-        ? Math.max(
-            1,
-            Math.floor((parseDateKey(subjectDialogDateKey).getTime() - parseDateKey(startDate).getTime()) / 86400000) + 1
-          )
-        : null
-
     const fragileConcepts = entries.filter((entry) => entry.practice_state === "erre")
-    const hasAnchor =
-      currentSubjectOverview?.anchorEntryId != null ||
-      entries.some((entry) => entry.is_featured && entry.week_number === dialogSelectedWeekNumber)
+
+    if (!currentSubjectOverview) {
+      return {
+        startDate: null,
+        currentDay: null,
+        relevantCount: 0,
+        coveredCount: 0,
+        totalCount: currentSubjectPracticeCoverage.length,
+        stateLabel: "sin_teoria",
+        severity: "yellow" as const,
+        staleReason: [],
+        lastInteractionAt: null,
+        fragileConcepts,
+      }
+    }
 
     return {
-      startDate: currentSubjectOverview?.startDate ?? startDate,
-      currentDay: currentSubjectOverview?.currentDay ?? currentDay,
-      relevantCount: currentSubjectOverview?.relevantPracticeMaterialIds.length ?? relevantCount,
-      coveredCount: currentSubjectOverview?.coveredPracticeMaterialIds.length ?? coveredCount,
-      hasAnchor,
-      stateLabel: currentSubjectOverview?.stateLabel ?? (hasAnchor ? "parcial" : "sin_ancla"),
-      severity: currentSubjectOverview?.severity ?? (hasAnchor && coveredCount >= relevantCount ? "green" : coveredCount > 0 ? "yellow" : "red"),
-      staleReason: currentSubjectOverview?.staleReason ?? [],
-      lastInteractionAt: currentSubjectOverview?.lastInteractionAt ?? null,
+      startDate: currentSubjectOverview.startDate,
+      currentDay: currentSubjectOverview.currentDay,
+      relevantCount: currentSubjectOverview.relevantPracticeMaterialIds.length,
+      coveredCount: currentSubjectOverview.coveredPracticeMaterialIds.length,
+      totalCount: currentSubjectOverview.totalPracticeMaterialIds.length,
+      stateLabel: currentSubjectOverview.stateLabel,
+      severity: currentSubjectOverview.severity,
+      staleReason: currentSubjectOverview.staleReason,
+      lastInteractionAt: currentSubjectOverview.lastInteractionAt,
       fragileConcepts,
     }
-  }, [currentSubjectOverview, currentSubjectPracticeCoverage, dialogSelectedWeekNumber, entries, subjectDialogDateKey])
+  }, [currentSubjectOverview, currentSubjectPracticeCoverage.length, entries])
   const selectedPracticeMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -3898,6 +3901,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         {analysisSummary.coveredPdfCount}/{analysisSummary.relevantPdfCount}
                       </p>
                     </div>
+                    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">PDFs totales</p>
+                      <p className="mt-2 text-2xl font-semibold text-foreground">{analysisSummary.totalPdfCount}</p>
+                    </div>
                   </div>
                 ) : null}
 
@@ -3928,17 +3935,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
                               {vector.hasVector
                                 ? `D${vector.currentDay ?? "?"} - ${vector.stateLabel.replaceAll("_", " ")}`
-                                : "Sin vector"}
+                                : "Sin teoria"}
                             </p>
                           </div>
                           <span className="rounded-full border border-current px-2 py-1 text-xs">
-                            {vector.coveredCount}/{vector.relevantCount} PDF
+                            {vector.coveredCount}/{vector.relevantCount}/{vector.totalCount} PDF
                           </span>
                         </div>
 
                         <div className="mt-4 grid gap-2 text-sm text-foreground md:grid-cols-2">
-                          <p>Ancla: {vector.anchorEntryId ? "si" : "no"}</p>
-                          <p>{vector.hasVector ? `Ultima interaccion: ${formatLastInteractionLabel(vector.lastInteractionAt)}` : "Sin practica subida"}</p>
+                          <p>{vector.hasVector ? `Ultima interaccion: ${formatLastInteractionLabel(vector.lastInteractionAt)}` : "Sin teoria"}</p>
+                          <p>PDFs del periodo: {vector.totalCount}</p>
                         </div>
 
                         {vector.hasVector && vector.staleReason.length > 0 ? (
@@ -4137,11 +4144,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 <section className="mb-4 rounded-2xl border border-border bg-muted/40 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Vector de 6 dias</p>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Vector de teoria</p>
                       <p className="text-sm text-foreground">
                         {currentSubjectVectorSummary.startDate
                           ? `Inicio ${currentSubjectVectorSummary.startDate}`
-                          : "Se activa cuando subes el primer PDF de practica."}
+                          : "Sin teoria vigente."}
                       </p>
                     </div>
                     <div
@@ -4153,13 +4160,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             : "border-emerald-300 bg-emerald-50 text-emerald-700"
                       }`}
                     >
-                      {currentSubjectVectorSummary.currentDay ? `D${currentSubjectVectorSummary.currentDay}` : "Sin vector"} - {currentSubjectVectorSummary.stateLabel.replaceAll("_", " ")}
+                      {currentSubjectVectorSummary.currentDay != null ? `D${currentSubjectVectorSummary.currentDay}` : "Sin teoria"} - {currentSubjectVectorSummary.stateLabel.replaceAll("_", " ")}
                     </div>
                   </div>
 
                   <div className="mt-3 grid gap-2 text-sm text-foreground sm:grid-cols-2">
-                    <p>Ancla abstracto: {currentSubjectVectorSummary.hasAnchor ? "si" : "no"}</p>
                     <p>PDFs cubiertos: {currentSubjectVectorSummary.coveredCount}/{currentSubjectVectorSummary.relevantCount}</p>
+                    <p>PDFs totales: {currentSubjectVectorSummary.totalCount}</p>
                     <p>Ultima interaccion movil: {formatLastInteractionLabel(currentSubjectVectorSummary.lastInteractionAt)}</p>
                     <p>Conceptos fragiles: {currentSubjectVectorSummary.fragileConcepts.length}</p>
                   </div>

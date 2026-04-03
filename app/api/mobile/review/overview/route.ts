@@ -41,7 +41,12 @@ export async function GET(request: Request) {
 
     const includeInactive = searchParams.get("includeInactive") === "true"
     const subjectIds = auth.session?.isAdmin ? undefined : auth.session?.allowedSubjectIds ?? []
-    const vectors = await listSubjectSixDayVectors({ weekNumber, includeInactive, subjectIds })
+    const vectors = await listSubjectSixDayVectors({
+      weekNumber,
+      includeInactive,
+      subjectIds,
+      now: parsedDate ?? new Date(),
+    })
     return NextResponse.json({ weekNumber, vectors })
   } catch (error) {
     console.error("GET /api/mobile/review/overview error:", error)

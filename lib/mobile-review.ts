@@ -36,9 +36,9 @@ export type MobileReviewTask = {
   staleReason: SubjectSixDayVector["staleReason"]
   lastInteractionAt: string | null
   coverageSnapshot: {
-    anchorEntryId: number | null
     relevantPracticeMaterialIds: number[]
     coveredPracticeMaterialIds: number[]
+    totalPracticeMaterialIds: number[]
   }
   material: {
     id: number
@@ -402,9 +402,9 @@ async function selectPairCandidates(params: {
 
 function buildCoverageSnapshot(vector: SubjectSixDayVector | null) {
   return {
-    anchorEntryId: vector?.anchorEntryId ?? null,
     relevantPracticeMaterialIds: vector?.relevantPracticeMaterialIds ?? [],
     coveredPracticeMaterialIds: vector?.coveredPracticeMaterialIds ?? [],
+    totalPracticeMaterialIds: vector?.totalPracticeMaterialIds ?? [],
   }
 }
 

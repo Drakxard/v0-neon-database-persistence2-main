@@ -7,9 +7,8 @@ const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
 
 export type PracticeMaterialCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
 export type SubjectVectorSeverity = "green" | "yellow" | "red"
-export type SubjectVectorState = "sin_ancla" | "sin_dupla_en_pdf_relevante" | "sin_interaccion_movil_reciente" | "fragil" | "cerrable" | "parcial"
+export type SubjectVectorState = "sin_dupla_en_pdf_relevante" | "sin_interaccion_movil_reciente" | "fragil" | "cerrable" | "parcial"
 export type SubjectVectorReason =
-  | "sin_ancla"
   | "sin_dupla_en_pdf_relevante"
   | "sin_interaccion_movil_reciente"
   | "fragil"
@@ -33,9 +32,9 @@ export type SubjectSixDayVector = {
   currentDay: number | null
   endDate: string | null
   isActive: boolean
-  anchorEntryId: number | null
   relevantPracticeMaterialIds: number[]
   coveredPracticeMaterialIds: number[]
+  totalPracticeMaterialIds: number[]
   staleReason: SubjectVectorReason[]
   severity: SubjectVectorSeverity
   stateLabel: SubjectVectorState
@@ -47,6 +46,7 @@ type SubjectDayMaterialCoverageRow = {
   id: number
   subject_id: string
   week_number: number
+  material_type: "theory" | "practice"
   session_date: string | Date
   file_name: string
   is_checkup_done: boolean
@@ -60,7 +60,6 @@ type SubjectDayEntryCoverageRow = {
   session_date: string | Date
   subject_day_material_id: number | null
   pair_id: string | null
-  is_featured: boolean
   updated_at: string | Date
 }
 
@@ -160,7 +159,34 @@ function buildSubjectVector(params: {
   const { subjectId, weekNumber, materials, entries, interactions, now } = params
   const subject = getSubjectById(subjectId)
   const todayKey = getBuenosAiresDateKey(now)
-  const practiceMaterials = materials
+  const theoryMaterials = materials
+    .filter((material) => material.material_type === "theory")
+    .sort((left, right) => {
+      const leftDate = normalizeSessionDateKey(left.session_date)
+      const rightDate = normalizeSessionDateKey(right.session_date)
+      if (leftDate !== rightDate) return leftDate.localeCompare(rightDate)
+      return toIsoTimestamp(left.created_at).localeCompare(toIsoTimestamp(right.created_at))
+    })
+
+  const latestTheory = [...theoryMaterials]
+    .reverse()
+    .find((material) => normalizeSessionDateKey(material.session_date) <= todayKey) ?? null
+
+  if (!latestTheory) {
+    return null
+  }
+
+  const startDate = normalizeSessionDateKey(latestTheory.session_date)
+  const endDate = addDaysToDateKey(startDate, 6)
+  const currentDay = diffDateKeys(startDate, todayKey)
+  const isActive = currentDay >= 0 && currentDay <= 6
+
+  if (!isActive) {
+    return null
+  }
+
+  const practiceMaterialRows = materials.filter((material) => material.material_type === "practice")
+  const practiceMaterials = practiceMaterialRows
     .map((material) =>
       buildPracticeMaterialCoverage(
         material,
@@ -172,23 +198,19 @@ function buildSubjectVector(params: {
       return left.fileName.localeCompare(right.fileName)
     })
 
-  const startDate = practiceMaterials[0]?.createdDate ?? null
-  const endDate = startDate ? addDaysToDateKey(startDate, 5) : null
-  const currentDay = startDate ? diffDateKeys(startDate, todayKey) + 1 : null
-  const isActive = Boolean(startDate && currentDay && currentDay >= 1 && currentDay <= 6)
-
   const relevantPracticeMaterials = practiceMaterials.filter((material) => {
-    if (!startDate) return false
-    return material.createdDate >= startDate && material.createdDate <= todayKey && material.createdDate <= (endDate ?? todayKey)
+    return material.sessionDate >= startDate && material.sessionDate <= endDate
   })
 
-  const anchorEntry =
-    [...entries]
-      .filter((entry) => entry.is_featured)
-      .sort((left, right) => toIsoTimestamp(right.updated_at).localeCompare(toIsoTimestamp(left.updated_at)))[0] ?? null
+  const totalPracticeMaterials = practiceMaterialRows.filter((material) => material.week_number === weekNumber)
 
   const lastInteraction =
-    [...interactions].sort((left, right) => toIsoTimestamp(right.created_at).localeCompare(toIsoTimestamp(left.created_at)))[0] ?? null
+    [...interactions]
+      .filter((interaction) => {
+        const interactionDate = timestampToBuenosAiresDateKey(interaction.created_at)
+        return interactionDate >= startDate && interactionDate <= endDate
+      })
+      .sort((left, right) => toIsoTimestamp(right.created_at).localeCompare(toIsoTimestamp(left.created_at)))[0] ?? null
 
   const recentInteraction = lastInteraction
     ? diffDateKeys(timestampToBuenosAiresDateKey(lastInteraction.created_at), todayKey) <= 1
@@ -197,12 +219,15 @@ function buildSubjectVector(params: {
   const latestRatedInteraction =
     [...interactions]
       .filter((interaction) => interaction.rating === "ok" || interaction.rating === "doubt" || interaction.rating === "fail")
+      .filter((interaction) => {
+        const interactionDate = timestampToBuenosAiresDateKey(interaction.created_at)
+        return interactionDate >= startDate && interactionDate <= endDate
+      })
       .sort((left, right) => toIsoTimestamp(right.created_at).localeCompare(toIsoTimestamp(left.created_at)))[0] ?? null
 
   const isFragile = latestRatedInteraction?.rating === "doubt" || latestRatedInteraction?.rating === "fail"
 
   const staleReason: SubjectVectorReason[] = []
-  if (!anchorEntry) staleReason.push("sin_ancla")
   if (relevantPracticeMaterials.some((material) => material.status !== "cubierto_minimo")) {
     staleReason.push("sin_dupla_en_pdf_relevante")
   }
@@ -214,26 +239,23 @@ function buildSubjectVector(params: {
   }
 
   const severity: SubjectVectorSeverity =
-    staleReason.includes("sin_ancla") ||
     staleReason.includes("sin_dupla_en_pdf_relevante") ||
     staleReason.includes("sin_interaccion_movil_reciente")
       ? "red"
       : staleReason.includes("fragil")
         ? "yellow"
-        : practiceMaterials.length > 0
+        : relevantPracticeMaterials.length > 0
           ? "green"
           : "yellow"
 
   let stateLabel: SubjectVectorState = "parcial"
-  if (staleReason.includes("sin_ancla")) {
-    stateLabel = "sin_ancla"
-  } else if (staleReason.includes("sin_dupla_en_pdf_relevante")) {
+  if (staleReason.includes("sin_dupla_en_pdf_relevante")) {
     stateLabel = "sin_dupla_en_pdf_relevante"
   } else if (staleReason.includes("sin_interaccion_movil_reciente")) {
     stateLabel = "sin_interaccion_movil_reciente"
   } else if (staleReason.includes("fragil")) {
     stateLabel = "fragil"
-  } else if (anchorEntry && relevantPracticeMaterials.every((material) => material.status === "cubierto_minimo") && recentInteraction) {
+  } else if (relevantPracticeMaterials.every((material) => material.status === "cubierto_minimo") && recentInteraction) {
     stateLabel = "cerrable"
   }
 
@@ -245,53 +267,53 @@ function buildSubjectVector(params: {
     currentDay,
     endDate,
     isActive,
-    anchorEntryId: anchorEntry?.id ?? null,
     relevantPracticeMaterialIds: relevantPracticeMaterials.map((material) => material.id),
     coveredPracticeMaterialIds: relevantPracticeMaterials
       .filter((material) => material.status === "cubierto_minimo")
       .map((material) => material.id),
+    totalPracticeMaterialIds: totalPracticeMaterials.map((material) => material.id),
     staleReason,
     severity,
     stateLabel,
     lastInteractionAt: lastInteraction ? toIsoTimestamp(lastInteraction.created_at) : null,
-    practiceMaterials,
+    practiceMaterials: relevantPracticeMaterials,
   } satisfies SubjectSixDayVector
 }
 
-async function listPracticeMaterialsByWeek(params: {
-  weekNumber: number
+async function listMaterialsForCoverage(params: {
+  analysisDate: string
   subjectIds?: string[]
 }) {
-  const { weekNumber, subjectIds } = params
+  const { analysisDate, subjectIds } = params
   if (subjectIds && subjectIds.length === 0) {
     return []
   }
 
   const rows = await sql`
-    SELECT id, subject_id, week_number, session_date, file_name, is_checkup_done, created_at
+    SELECT id, subject_id, week_number, material_type, session_date, file_name, is_checkup_done, created_at
     FROM subject_day_materials
-    WHERE material_type = 'practice'
-      AND week_number = ${weekNumber}
+    WHERE material_type IN ('practice', 'theory')
+      AND session_date <= ${analysisDate}
       AND (${subjectIds ? subjectIds : null}::TEXT[] IS NULL OR subject_id = ANY(${subjectIds ? subjectIds : null}::TEXT[]))
-    ORDER BY created_at ASC, id ASC
+    ORDER BY session_date ASC, created_at ASC, id ASC
   ` as SubjectDayMaterialCoverageRow[]
 
   return rows
 }
 
-async function listEntriesByWeek(params: {
-  weekNumber: number
+async function listEntriesForCoverage(params: {
+  analysisDate: string
   subjectIds?: string[]
 }) {
-  const { weekNumber, subjectIds } = params
+  const { analysisDate, subjectIds } = params
   if (subjectIds && subjectIds.length === 0) {
     return []
   }
 
   const rows = await sql`
-    SELECT id, subject_id, week_number, session_date, subject_day_material_id, pair_id, is_featured, updated_at
+    SELECT id, subject_id, week_number, session_date, subject_day_material_id, pair_id, updated_at
     FROM subject_day_entries
-    WHERE week_number = ${weekNumber}
+    WHERE session_date <= ${analysisDate}
       AND (${subjectIds ? subjectIds : null}::TEXT[] IS NULL OR subject_id = ANY(${subjectIds ? subjectIds : null}::TEXT[]))
     ORDER BY updated_at DESC, id DESC
   ` as SubjectDayEntryCoverageRow[]
@@ -299,11 +321,11 @@ async function listEntriesByWeek(params: {
   return rows
 }
 
-async function listMobileInteractionsByWeek(params: {
-  weekNumber: number
+async function listMobileInteractionsForCoverage(params: {
+  analysisDate: string
   subjectIds?: string[]
 }) {
-  const { weekNumber, subjectIds } = params
+  const { analysisDate, subjectIds } = params
   if (subjectIds && subjectIds.length === 0) {
     return []
   }
@@ -312,7 +334,7 @@ async function listMobileInteractionsByWeek(params: {
     const rows = await sql`
       SELECT subject_id, week_number, created_at, rating
       FROM mobile_review_events
-      WHERE week_number = ${weekNumber}
+      WHERE created_at <= ${analysisDate}::DATE + INTERVAL '1 day'
         AND (${subjectIds ? subjectIds : null}::TEXT[] IS NULL OR subject_id = ANY(${subjectIds ? subjectIds : null}::TEXT[]))
       ORDER BY created_at DESC, id DESC
     ` as MobileInteractionCoverageRow[]
@@ -333,10 +355,11 @@ export async function listSubjectSixDayVectors(params: {
   now?: Date
 }) {
   const { weekNumber, subjectIds, includeInactive = false, now = new Date() } = params
+  const analysisDate = getBuenosAiresDateKey(now)
   const [materials, entries, interactions] = await Promise.all([
-    listPracticeMaterialsByWeek({ weekNumber, subjectIds }),
-    listEntriesByWeek({ weekNumber, subjectIds }),
-    listMobileInteractionsByWeek({ weekNumber, subjectIds }),
+    listMaterialsForCoverage({ analysisDate, subjectIds }),
+    listEntriesForCoverage({ analysisDate, subjectIds }),
+    listMobileInteractionsForCoverage({ analysisDate, subjectIds }),
   ])
 
   const subjectKeys = new Set<string>([
@@ -356,6 +379,7 @@ export async function listSubjectSixDayVectors(params: {
         now,
       })
     )
+    .filter((vector): vector is SubjectSixDayVector => Boolean(vector))
     .filter((vector) => includeInactive || vector.isActive)
     .sort((left, right) => {
       if (left.severity !== right.severity) {
