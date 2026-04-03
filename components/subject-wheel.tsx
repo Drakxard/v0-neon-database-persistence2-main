@@ -731,6 +731,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({})
   const [editingTitleId, setEditingTitleId] = useState<number | null>(null)
   const [titleDrafts, setTitleDrafts] = useState<Record<number, string>>({})
+  const [moveEntryTarget, setMoveEntryTarget] = useState<SubjectDayEntry | null>(null)
+  const [moveEntryMaterialId, setMoveEntryMaterialId] = useState("")
+  const [isMovingEntryId, setIsMovingEntryId] = useState<number | null>(null)
   const [revealedAnswers, setRevealedAnswers] = useState<Record<number, boolean>>({})
   const [isDeletingEntryId, setIsDeletingEntryId] = useState<number | null>(null)
   const [isSavingAnswerId, setIsSavingAnswerId] = useState<number | null>(null)
@@ -2345,6 +2348,75 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
+  const openMoveEntryDialog = (entry: SubjectDayEntry) => {
+    const targetEntry =
+      entry.pair_id
+        ? entries.find((item) => item.pair_id === entry.pair_id && item.pair_role === "question") ?? entry
+        : entry
+    const matchingTheoryMaterials = visibleTheoryMaterials.filter(
+      (material) => material.subject_id === targetEntry.subject_id && material.week_number === targetEntry.week_number
+    )
+
+    if (matchingTheoryMaterials.length === 0) {
+      setEntriesError("No hay PDFs de teoria cargados para esa materia en esa semana.")
+      return
+    }
+
+    setMoveEntryTarget(targetEntry)
+    setMoveEntryMaterialId(String(matchingTheoryMaterials[0].id))
+  }
+
+  const closeMoveEntryDialog = () => {
+    setMoveEntryTarget(null)
+    setMoveEntryMaterialId("")
+  }
+
+  const moveEntryToTheoryMaterial = async () => {
+    if (!moveEntryTarget || !moveEntryMaterialId) return
+
+    const targetMaterialId = Number.parseInt(moveEntryMaterialId, 10)
+    if (!Number.isInteger(targetMaterialId)) {
+      setEntriesError("Selecciona un PDF de teoria valido.")
+      return
+    }
+
+    const entriesToMove = moveEntryTarget.pair_id
+      ? entries.filter((item) => item.pair_id === moveEntryTarget.pair_id)
+      : [moveEntryTarget]
+
+    setIsMovingEntryId(moveEntryTarget.id)
+    try {
+      const results = await Promise.all(
+        entriesToMove.map((entry) =>
+          fetch(`/api/subject-day-entries/${entry.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ targetMaterialId }),
+          }).then(async (response) => ({
+            ok: response.ok,
+            payload: await response.json(),
+            id: entry.id,
+          }))
+        )
+      )
+
+      const failed = results.find((result) => !result.ok)
+      if (failed) {
+        throw new Error(getErrorMessage(failed.payload, "No se pudo mover la duda al PDF de teoria."))
+      }
+
+      const byId = new Map(results.map((result) => [result.id, result.payload as SubjectDayEntry]))
+      setEntries((previousEntries) => sortSubjectDayEntries(previousEntries.map((item) => byId.get(item.id) ?? item)))
+      closeMoveEntryDialog()
+      toast({ title: "Duda movida", description: "La duda se llevo al PDF de teoria." })
+    } catch (error) {
+      console.error("Failed to move entry to theory material:", error)
+      setEntriesError(error instanceof Error ? error.message : "No se pudo mover la duda al PDF de teoria.")
+    } finally {
+      setIsMovingEntryId(null)
+    }
+  }
+
   const copyEntries = async (entriesToCopy: SubjectDayEntry[], successMessage: string, onError?: (message: string) => void) => {
     if (entriesToCopy.length === 0 || isCopyingEntries) return
 
@@ -3544,6 +3616,35 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => theoryMaterials.filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material)),
     [theoryMaterials]
   )
+  const materialById = useMemo(
+    () =>
+      [...materials, ...pendingMaterials].reduce<Record<number, SubjectDayMaterial>>((accumulator, material) => {
+        accumulator[material.id] = material
+        return accumulator
+      }, {}),
+    [materials, pendingMaterials]
+  )
+  const moveEntryMaterialOptions = useMemo(
+    () =>
+      moveEntryTarget
+        ? visibleTheoryMaterials.filter(
+            (material) =>
+              material.subject_id === moveEntryTarget.subject_id && material.week_number === moveEntryTarget.week_number
+          )
+        : [],
+    [moveEntryTarget, visibleTheoryMaterials]
+  )
+  const canMoveEntryToTheory = useCallback(
+    (entry: SubjectDayEntry) => {
+      if (entry.subject_day_material_id == null) return false
+      const material = materialById[entry.subject_day_material_id]
+      if (!material || material.material_type !== "practice") return false
+      return visibleTheoryMaterials.some(
+        (theoryMaterial) => theoryMaterial.subject_id === entry.subject_id && theoryMaterial.week_number === entry.week_number
+      )
+    },
+    [materialById, visibleTheoryMaterials]
+  )
   const continueMaterialEntries = useMemo(
     () =>
       currentContinueMaterial
@@ -4636,6 +4737,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   className="h-4 w-4"
                                 />
                                 <p className="text-xs font-medium text-foreground sm:text-sm">{getEntryDisplayTitle(entry)}</p>
+                              {canMoveEntryToTheory(entry) ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openMoveEntryDialog(entry)}
+                                  className="h-8 border-border px-3 text-xs text-foreground"
+                                >
+                                  Llevar a teoria
+                                </Button>
+                              ) : null}
                               <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
                                 <Pencil className="h-4 w-4 text-muted-foreground" />
                               </Button>
@@ -4994,6 +5105,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                   >
                                     Promover a ancla
                                   </Button>
+                                  {continueMode === "practice" ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => openMoveEntryDialog(titleEntry)}
+                                      className="h-8 border-border px-3 text-xs text-foreground"
+                                    >
+                                      Llevar a teoria
+                                    </Button>
+                                  ) : null}
                                   <Button size="icon" variant="ghost" onClick={() => startTitleEdit(titleEntry)} className="h-8 w-8">
                                     <Pencil className="h-4 w-4" />
                                   </Button>
@@ -5098,6 +5219,16 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             ) : (
                               <div className="flex flex-wrap items-center gap-2 pr-8 text-foreground">
                                 <p className="text-lg font-medium">{getEntryDisplayTitle(entry)}</p>
+                                {continueMode === "practice" ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openMoveEntryDialog(entry)}
+                                    className="h-8 border-border px-3 text-xs text-foreground"
+                                  >
+                                    Llevar a teoria
+                                  </Button>
+                                ) : null}
                                 <Button size="icon" variant="ghost" onClick={() => startTitleEdit(entry)} className="h-8 w-8">
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -5223,6 +5354,61 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(moveEntryTarget)} onOpenChange={(open) => (!open ? closeMoveEntryDialog() : undefined)}>
+        <DialogContent showCloseButton={false} className="sm:max-w-lg">
+          <DialogHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-2">
+                <DialogTitle>Llevar duda a teoria</DialogTitle>
+                <DialogDescription>
+                  Mueve esta duda al PDF de teoria de la misma materia y semana.
+                </DialogDescription>
+              </div>
+              <DialogClose asChild>
+                <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="Cerrar">
+                  <X className="h-4 w-4" />
+                </Button>
+              </DialogClose>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground">Duda</p>
+              <p className="text-sm text-muted-foreground">
+                {moveEntryTarget ? getEntryDisplayTitle(moveEntryTarget) : ""}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">PDF de teoria destino</p>
+              <Select value={moveEntryMaterialId} onValueChange={setMoveEntryMaterialId}>
+                <SelectTrigger className="h-11 text-base">
+                  <SelectValue placeholder="Selecciona un PDF de teoria" />
+                </SelectTrigger>
+                <SelectContent>
+                  {moveEntryMaterialOptions.map((material) => (
+                    <SelectItem key={material.id} value={String(material.id)}>
+                      {`${getWeekdayLabel(material.session_date)} · ${material.file_name}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={closeMoveEntryDialog} disabled={isMovingEntryId !== null}>
+              Cancelar
+            </Button>
+            <Button onClick={() => void moveEntryToTheoryMaterial()} disabled={!moveEntryMaterialId || isMovingEntryId !== null}>
+              {isMovingEntryId !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Mover
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

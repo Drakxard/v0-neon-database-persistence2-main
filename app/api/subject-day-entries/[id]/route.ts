@@ -198,6 +198,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const isFeatured = typeof body.isFeatured === "boolean" ? body.isFeatured : undefined
     const featuredScope = body.featuredScope === "subject_week" ? "subject_week" : "entry_scope"
     const pairRole = body.pairRole === "question" || body.pairRole === "answer" ? body.pairRole : undefined
+    const targetMaterialId =
+      typeof body.targetMaterialId === "number" && Number.isInteger(body.targetMaterialId)
+        ? body.targetMaterialId
+        : undefined
 
     let rows: EntryRow[]
     try {
@@ -276,6 +280,44 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             rows = [updatedTarget]
           }
         }
+      } else if (targetMaterialId !== undefined) {
+        const targetMaterialRows = await sql`
+          SELECT id, subject_id, week_number, session_date, weekday_index
+          FROM subject_day_materials
+          WHERE id = ${targetMaterialId}
+          LIMIT 1
+        ` as Array<{
+          id: number
+          subject_id: string
+          week_number: number
+          session_date: string
+          weekday_index: number
+        }>
+
+        const targetMaterial = targetMaterialRows[0]
+        if (!targetMaterial) {
+          return NextResponse.json({ error: "No se encontro el PDF de destino." }, { status: 404 })
+        }
+
+        if (targetMaterial.subject_id !== scopeRows[0].subject_id) {
+          return NextResponse.json(
+            { error: "Solo se puede mover la duda a un PDF de la misma materia." },
+            { status: 400 }
+          )
+        }
+
+        rows = await sql`
+          UPDATE subject_day_entries
+          SET
+            subject_day_material_id = ${targetMaterial.id},
+            subject_id = ${targetMaterial.subject_id},
+            week_number = ${targetMaterial.week_number},
+            session_date = ${targetMaterial.session_date},
+            weekday_index = ${targetMaterial.weekday_index},
+            updated_at = NOW()
+          WHERE id = ${entryId}
+          RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+        ` as EntryRow[]
       } else {
         rows = await sql`
         WITH entry_scope AS (
