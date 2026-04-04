@@ -1,7 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 
 import type { PracticeMaterialCoverageStatus, SubjectSixDayVector } from "@/lib/audio-coverage"
-import { getSubjectSixDayVector } from "@/lib/audio-coverage"
+import { getSubjectSixDayVector, listSubjectSixDayVectors } from "@/lib/audio-coverage"
 import { downloadDriveFile } from "@/lib/google-drive"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { getSubjectById, isValidSubjectId } from "@/lib/subjects"
@@ -481,23 +481,48 @@ function buildTask(params: {
 
 async function updateMobileReviewStatePair(params: {
   state: MobileReviewStateRow
+  subjectId: string
+  weekNumber: number
   pair: MobileReviewPair | null
 }) {
-  const { state, pair } = params
-  if (!pair) return state
+  const { state, subjectId, weekNumber, pair } = params
 
   const updatedRows = await sql`
     UPDATE mobile_review_state
     SET
-      current_pair_id = ${pair.pairId},
-      current_subject_id = ${pair.subjectId},
-      current_week_number = ${pair.weekNumber},
+      current_pair_id = ${pair?.pairId ?? null},
+      current_subject_id = ${subjectId},
+      current_week_number = ${weekNumber},
       updated_at = NOW()
     WHERE device_id = ${state.device_id}
     RETURNING device_id, current_pair_id, current_subject_id, current_week_number, updated_at
   ` as MobileReviewStateRow[]
 
   return updatedRows[0] ?? state
+}
+
+function resolveSubjectSelection(params: {
+  state: MobileReviewStateRow
+  vectors: SubjectSixDayVector[]
+  weekNumber: number
+  forceNext: boolean
+}) {
+  const { state, vectors, weekNumber, forceNext } = params
+  if (vectors.length === 0) {
+    return null
+  }
+
+  const currentIndex =
+    state.current_week_number === weekNumber && state.current_subject_id
+      ? vectors.findIndex((vector) => vector.subjectId === state.current_subject_id)
+      : -1
+
+  if (forceNext) {
+    const baseIndex = currentIndex >= 0 ? currentIndex : -1
+    return vectors[(baseIndex + 1 + vectors.length) % vectors.length] ?? null
+  }
+
+  return vectors[currentIndex >= 0 ? currentIndex : 0] ?? null
 }
 
 export async function resolveMobileReviewPair(params: {
@@ -507,19 +532,24 @@ export async function resolveMobileReviewPair(params: {
 }): Promise<MobileReviewResolveResult> {
   const { deviceId, forceNext = false, now = new Date() } = params
   const state = await getOrCreateMobileReviewState(deviceId)
-  const activeSlot = await getActiveMobileReviewSlot(now)
-  if (!activeSlot) {
-    return { state, activeSlot: null, task: null, pair: null, totalPairs: 0, currentIndex: 0, debugReason: "no_active_slot" }
+  const weekNumber = getBuenosAiresWeekNumber(now)
+  const activeVectors = await listSubjectSixDayVectors({ weekNumber, includeInactive: false, now })
+  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, forceNext })
+  if (!selectedVector) {
+    return { state, activeSlot: null, task: null, pair: null, totalPairs: 0, currentIndex: 0, debugReason: "no_valid_pairs" }
   }
 
-  const weekNumber = getBuenosAiresWeekNumber(now)
-  const vector = await getSubjectSixDayVector({
-    subjectId: activeSlot.subject_id,
-    weekNumber,
-    now,
-  })
+  const activeSlot = null
+  const subjectId = selectedVector.subjectId
+  const vector =
+    selectedVector ??
+    (await getSubjectSixDayVector({
+      subjectId,
+      weekNumber,
+      now,
+    }))
   const allPairs = await selectPairCandidates({
-    subjectId: activeSlot.subject_id,
+    subjectId,
     weekNumber,
   })
 
@@ -541,7 +571,7 @@ export async function resolveMobileReviewPair(params: {
   if (uncoveredMaterial) {
     const task = buildTask({
       kind: "coverage_gap",
-      subjectId: activeSlot.subject_id,
+      subjectId,
       weekNumber,
       vector,
       instruction: `Falta sembrar una dupla util en ${uncoveredMaterial.fileName}.`,
@@ -556,7 +586,7 @@ export async function resolveMobileReviewPair(params: {
       fallbackPair: anchorPair,
     })
 
-    const nextState = await updateMobileReviewStatePair({ state, pair: anchorPair })
+    const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair: anchorPair })
     return {
       state: nextState,
       activeSlot,
@@ -577,14 +607,14 @@ export async function resolveMobileReviewPair(params: {
     const selection = resolvePairSelection({
       state,
       candidates: materialCandidates,
-      subjectId: activeSlot.subject_id,
+      subjectId,
       weekNumber,
       forceNext,
     })
     const pair = selection.selectedRow ? mapPairRow(selection.selectedRow) : null
     const task = buildTask({
       kind: "material_pair",
-      subjectId: activeSlot.subject_id,
+      subjectId,
       weekNumber,
       vector,
       instruction: `Evalua el concepto mas util de ${coveredMaterial.fileName}.`,
@@ -597,7 +627,7 @@ export async function resolveMobileReviewPair(params: {
       },
       pair,
     })
-    const nextState = await updateMobileReviewStatePair({ state, pair })
+    const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair })
     return {
       state: nextState,
       activeSlot,
@@ -612,14 +642,14 @@ export async function resolveMobileReviewPair(params: {
   if (anchorPair) {
     const task = buildTask({
       kind: "subject_anchor",
-      subjectId: activeSlot.subject_id,
+      subjectId,
       weekNumber,
       vector,
       instruction: "Trabaja el ancla conceptual mas fuerte de esta materia.",
       material: null,
       pair: anchorPair,
     })
-    const nextState = await updateMobileReviewStatePair({ state, pair: anchorPair })
+    const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair: anchorPair })
     return {
       state: nextState,
       activeSlot,
@@ -633,7 +663,7 @@ export async function resolveMobileReviewPair(params: {
 
   const gapTask = buildTask({
     kind: "coverage_gap",
-    subjectId: activeSlot.subject_id,
+    subjectId,
     weekNumber,
     vector,
     instruction: vector?.startDate
@@ -642,8 +672,9 @@ export async function resolveMobileReviewPair(params: {
     material: null,
     pair: null,
   })
+  const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair: null })
   return {
-    state,
+    state: nextState,
     activeSlot,
     task: gapTask,
     pair: null,
@@ -731,22 +762,15 @@ export async function logMobileReviewEvent(input: MobileReviewEventInput) {
 
 export async function getMobileReviewStatus(deviceId: string, now = new Date()) {
   const state = await getOrCreateMobileReviewState(deviceId)
-  const activeSlot = await getActiveMobileReviewSlot(now)
   const weekNumber = getBuenosAiresWeekNumber(now)
-  const subject = activeSlot ? getSubjectById(activeSlot.subject_id) : null
+  const activeVectors = await listSubjectSixDayVectors({ weekNumber, includeInactive: false, now })
+  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, forceNext: false })
+  const subject = selectedVector ? getSubjectById(selectedVector.subjectId) : null
 
   return {
     deviceId: state.device_id,
-    activeSlot: activeSlot
-      ? {
-          weekdayIndex: activeSlot.weekday_index,
-          startTime: activeSlot.start_time,
-          endTime: activeSlot.end_time,
-          subjectId: activeSlot.subject_id,
-          subjectName: subject?.name.replace(/\n/g, " ") || activeSlot.subject_id,
-        }
-      : null,
-    subjectId: activeSlot?.subject_id ?? null,
+    activeSlot: null,
+    subjectId: selectedVector?.subjectId ?? null,
     subjectName: subject?.name.replace(/\n/g, " ") ?? null,
     weekNumber,
     hasCurrentPair: Boolean(state.current_pair_id),

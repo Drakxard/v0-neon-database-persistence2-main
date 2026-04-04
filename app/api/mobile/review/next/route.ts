@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     }
 
     const resolved = await resolveMobileReviewPair({ deviceId, forceNext: true })
-    if (!resolved.activeSlot || !resolved.task) {
+    if (!resolved.task) {
       return NextResponse.json({
         task: null,
         status: await getMobileReviewStatus(deviceId),

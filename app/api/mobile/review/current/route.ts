@@ -23,16 +23,6 @@ export async function GET(request: Request) {
     }
 
     const resolved = await resolveMobileReviewPair({ deviceId })
-    if (!resolved.activeSlot) {
-      return NextResponse.json({
-        task: null,
-        status: await getMobileReviewStatus(deviceId),
-        currentIndex: resolved.currentIndex,
-        totalPairs: resolved.totalPairs,
-        debugReason: resolved.debugReason,
-      })
-    }
-
     if (!resolved.task) {
       return NextResponse.json({
         task: null,

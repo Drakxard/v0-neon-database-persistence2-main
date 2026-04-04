@@ -3350,13 +3350,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
 
     return (
-      <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-3 sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
             {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
             <Button
               type="button"
               variant="outline"
@@ -3376,7 +3376,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 )
               }}
               disabled={isUploadingMaterialType !== null || !currentSubject}
-              className="border-border text-foreground"
+              className="h-10 border-border px-0 text-foreground"
               aria-label={`Abrir visor para fragmentar un PDF de ${getContinueModeLabel(mode)}`}
             >
               <ExternalLink className="h-4 w-4" />
@@ -3386,14 +3386,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               variant="outline"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploadingMaterialType !== null}
-              className="border-border text-foreground"
+              className="h-10 border-border px-0 text-foreground"
             >
               {isUploadingMaterialType === mode ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             </Button>
             <Button
               type="button"
               onClick={() => void openContinueModal(mode)}
-              className="bg-primary text-primary-foreground"
+              className="h-10 bg-primary text-primary-foreground"
             >
               Continuar
             </Button>
@@ -3403,10 +3403,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <div className="space-y-2">
           {materialsForMode.length > 0 ? (
             materialsForMode.map((material) => (
-              <div key={material.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
+              <div key={material.id} className="rounded-xl border border-border bg-card px-3 py-3">
                 {"is_pending_upload" in material ? (
-                  <>
-                    <span className="inline-flex min-w-0 flex-1 items-center gap-2 truncate text-sm text-muted-foreground">
+                  <div className="space-y-2">
+                    <span className="inline-flex min-w-0 items-center gap-2 truncate text-sm text-muted-foreground">
                       <Checkbox checked={false} disabled />
                       <span className="truncate">{material.file_name}</span>
                     </span>
@@ -3419,10 +3419,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Subiendo...
                     </span>
-                  </>
+                  </div>
                 ) : (
-                  <>
-                    {(() => {
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      {(() => {
                       const coverage = coverageItems.find((item) => item.id === material.id)
                       const coverageLabel =
                         coverage?.status === "cubierto_minimo"
@@ -3443,45 +3444,52 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         </span>
                       )
                     })()}
-                    <Checkbox
-                      checked={material.is_checkup_done}
-                      onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
-                    />
-                    <a
-                      href={buildMaterialViewerHref(material.id)}
-                      className="min-w-0 flex-1 truncate pr-7 text-sm text-foreground hover:underline"
-                    >
-                      {material.file_name}
-                    </a>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void openContinueModal(mode, material.id)}
-                      className="h-8 border-border px-3 text-xs text-foreground"
-                    >
-                      Ver
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void copyEntriesForMaterial(material.id)}
-                      disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
-                      className="h-8 border-border px-3 text-xs text-foreground"
-                    >
-                      Copiar
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void deleteMaterial(material)}
-                      disabled={isDeletingMaterialId === material.id}
-                      className="h-6 w-6 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      aria-label={`Borrar ${material.file_name}`}
-                    >
-                      {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                    </Button>
-                  </>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void deleteMaterial(material)}
+                        disabled={isDeletingMaterialId === material.id}
+                        className="h-7 w-7 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`Borrar ${material.file_name}`}
+                      >
+                        {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <Checkbox
+                        checked={material.is_checkup_done}
+                        onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
+                      />
+                      <a
+                        href={buildMaterialViewerHref(material.id)}
+                        className="min-w-0 flex-1 truncate text-sm text-foreground hover:underline"
+                      >
+                        {material.file_name}
+                      </a>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void openContinueModal(mode, material.id)}
+                        className="h-9 border-border px-3 text-xs text-foreground"
+                      >
+                        Ver
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void copyEntriesForMaterial(material.id)}
+                        disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
+                        className="h-9 border-border px-3 text-xs text-foreground"
+                      >
+                        Copiar
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
             ))
@@ -4016,7 +4024,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialogOrReturn() : undefined)}>
         <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-card p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border sm:border-border" showCloseButton={false}>
-          <div className="relative flex h-full flex-col overflow-hidden px-4 py-4 sm:p-8">
+          <div className="relative flex h-full flex-col overflow-hidden px-3 py-3 sm:p-8">
             <Button
               variant="outline"
               size="icon"
@@ -4026,7 +4034,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? dialogSelectedWeekNumber <= 0
                   : subjectDialogDayIndex <= 0
               }
-              className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
+              className="absolute left-3 top-1/2 z-20 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:flex sm:h-12 sm:w-12"
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
@@ -4039,31 +4047,63 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   ? dialogSelectedWeekNumber >= latestWeekNumber
                   : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
               }
-              className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:h-12 sm:w-12"
+              className="absolute right-3 top-1/2 z-20 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:flex sm:h-12 sm:w-12"
             >
               <ChevronRight className="h-5 w-5" />
             </Button>
 
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
-              <div className="flex items-start justify-between gap-3">
-                {practiceSectionView === "theory" || isTheoryContinueMode ? (
-                  <DialogTitle className="min-w-0 text-left text-[clamp(1.35rem,4.2vw,2rem)] font-normal leading-tight text-foreground">
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <DialogTitle className="min-w-0 text-left text-[1.15rem] font-normal leading-tight text-foreground sm:text-[clamp(1.35rem,4.2vw,2rem)]">
                     {getSubjectDisplayName(currentSubject)}
                   </DialogTitle>
-                ) : (
-                  <DialogTitle className="sr-only">{getSubjectDisplayName(currentSubject)}</DialogTitle>
-                )}
-
-                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
-                    className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                     aria-label="Cerrar modal"
                     title="Cerrar"
                   >
                     <X className="h-4 w-4" />
                   </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 sm:hidden">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(-1) : moveDay(-1))}
+                    disabled={
+                      practiceSectionView === "exercises" && !subjectViewDateOverride
+                        ? dialogSelectedWeekNumber <= 0
+                        : subjectDialogDayIndex <= 0
+                    }
+                    className="h-9 w-9 rounded-full border-border"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <div className="min-w-0 flex-1 text-center text-xs text-muted-foreground">
+                    {practiceSectionView === "exercises" && !subjectViewDateOverride
+                      ? `Semana ${dialogSelectedWeekNumber}`
+                      : getWeekdayLabel(subjectDialogDateKey)}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
+                    disabled={
+                      practiceSectionView === "exercises" && !subjectViewDateOverride
+                        ? dialogSelectedWeekNumber >= latestWeekNumber
+                        : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
+                    }
+                    className="h-9 w-9 rounded-full border-border"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
                   {practiceSectionView === "exercises" && currentSubject
                     ? ([
                         { key: "e_fich" as const, label: "E-Fich" },
@@ -4081,7 +4121,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             onPointerCancel={handleShortcutPointerCancel}
                             onClick={() => handleShortcutClick(shortcut.key)}
                             disabled={isSavingShortcut || isSubjectShortcutsLoading}
-                            className={`h-9 border-border px-3 text-xs ${
+                            className={`h-9 border-border px-3 text-xs sm:text-sm ${
                               url ? "text-foreground" : "text-muted-foreground"
                             }`}
                             aria-label={shortcut.label}
@@ -4134,7 +4174,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto py-4 pr-1 sm:py-6 sm:pl-14 sm:pr-14">
+            <div className="flex-1 overflow-y-auto py-4 sm:py-6 sm:pl-14 sm:pr-14">
               <input
                 ref={theoryFileInputRef}
                 type="file"
@@ -4173,44 +4213,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
               {currentSubject ? (
                 <section className="mb-4 rounded-2xl border border-border bg-muted/40 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Vector de teoria</p>
-                      <p className="text-sm text-foreground">
-                        {currentSubjectVectorSummary.startDate
-                          ? `Inicio ${currentSubjectVectorSummary.startDate}`
-                          : "Sin teoria vigente."}
-                      </p>
-                    </div>
+                  <div className="flex justify-end">
                     <div
                       className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.hasVector)}`}
                     >
                       {getCurrentSubjectVectorBadgeLabel(currentSubjectVectorSummary)}
                     </div>
                   </div>
-
-                  {!isTheoryContinueMode && currentSubjectVectorSummary.fragileConcepts.length > 0 ? (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Fragiles ahora</p>
-                      <div className="flex flex-wrap gap-2">
-                        {currentSubjectVectorSummary.fragileConcepts.slice(0, 4).map((entry) => (
-                          <span key={entry.id} className="rounded-full border border-border bg-card px-2 py-1 text-xs text-foreground">
-                            {entry.display_title}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {!isTheoryContinueMode && currentSubjectVectorSummary.staleReason.length > 0 ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {currentSubjectVectorSummary.staleReason.map((reason) => (
-                        <span key={reason} className="rounded-full border border-border bg-card px-2 py-1 text-xs text-foreground">
-                          {reason.replaceAll("_", " ")}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
                 </section>
               ) : null}
 

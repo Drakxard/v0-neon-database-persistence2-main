@@ -232,8 +232,8 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     : ""
   const emptyStateMessage =
     payload?.debugReason === "no_active_slot"
-      ? "No hay una franja activa en este momento."
-      : activeTask?.instruction || "No hay una tarea util para la franja actual."
+      ? "No hay una materia activa en este momento."
+      : activeTask?.instruction || "No hay materias activas para esta semana."
 
   useEffect(() => {
     if (!requiresAccess) return
@@ -624,18 +624,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
           <header className="grid min-h-11 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-3">
             <div aria-hidden="true" className="h-10 w-10" />
             <div className="text-center text-[1.9rem] leading-[1.05] text-black">{subjectTitle}</div>
-            <button
-              type="button"
-              onClick={() => void openSlotsModal()}
-              className="grid h-10 w-10 place-items-center border-2 border-black bg-[#f7ecc0]"
-              aria-label="Configurar horarios"
-            >
-              <span className="relative block h-5 w-5 border-2 border-black">
-                <span className="absolute inset-x-0 top-0 h-1 border-b-2 border-black bg-black/15" />
-                <span className="absolute left-[3px] top-[-4px] h-2 w-[2px] bg-black" />
-                <span className="absolute right-[3px] top-[-4px] h-2 w-[2px] bg-black" />
-              </span>
-            </button>
+            <div aria-hidden="true" className="h-10 w-10" />
           </header>
 
           <div className="flex min-h-0 flex-col justify-start gap-7 overflow-hidden">
@@ -743,179 +732,13 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
                 disabled={isLoading}
                 className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
               >
-                {isLoading ? "Cargando..." : "Siguiente pregunta"}
+                {isLoading ? "Cargando..." : "Siguiente materia"}
               </button>
             </div>
             <p className="text-base leading-none text-black/80">{pairCounter}</p>
           </div>
         </div>
       </div>
-
-      {isModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-3 py-4">
-          <div className="flex max-h-full w-full max-w-[360px] flex-col border-4 border-black bg-[#f1e4a9]">
-            <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
-              <h2 className="text-xl leading-none">Horarios</h2>
-              <button type="button" onClick={() => setIsModalOpen(false)} className="border border-black px-2 py-1 text-sm">
-                Cerrar
-              </button>
-            </div>
-
-            <div className="space-y-4 overflow-y-auto px-4 py-4">
-              <section className="space-y-3 border-2 border-black bg-[#f7ecc0] p-3">
-                <h3 className="text-sm font-semibold">{slotForm.id ? "Editar franja" : "Nueva franja"}</h3>
-
-                <label className="block space-y-1 text-sm">
-                  <span>Materia</span>
-                  <select
-                    value={slotForm.subjectId}
-                    onChange={(event) => handleSlotInputChange("subjectId", event.target.value)}
-                    className="w-full border border-black bg-white px-2 py-1"
-                  >
-                    {SUBJECTS.map((subject) => (
-                      <option key={subject.id} value={subject.id}>
-                        {subject.name.replace(/\n/g, " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="block space-y-1 text-sm">
-                  <span>Dia</span>
-                  <select
-                    value={slotForm.weekdayIndex}
-                    onChange={(event) => handleSlotInputChange("weekdayIndex", event.target.value)}
-                    className="w-full border border-black bg-white px-2 py-1"
-                  >
-                    {WEEKDAY_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="block space-y-1 text-sm">
-                    <span>Inicio</span>
-                    <input
-                      type="time"
-                      value={slotForm.startTime}
-                      onChange={(event) => handleSlotInputChange("startTime", event.target.value)}
-                      className="w-full border border-black bg-white px-2 py-1"
-                    />
-                  </label>
-
-                  <label className="block space-y-1 text-sm">
-                    <span>Fin</span>
-                    <input
-                      type="time"
-                      value={slotForm.endTime}
-                      onChange={(event) => handleSlotInputChange("endTime", event.target.value)}
-                      className="w-full border border-black bg-white px-2 py-1"
-                    />
-                  </label>
-                </div>
-
-                <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-                  <label className="block space-y-1 text-sm">
-                    <span>Prioridad</span>
-                    <input
-                      type="number"
-                      step="1"
-                      value={slotForm.priority}
-                      onChange={(event) => handleSlotInputChange("priority", event.target.value)}
-                      className="w-full border border-black bg-white px-2 py-1"
-                    />
-                  </label>
-
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={slotForm.enabled}
-                      onChange={(event) => handleSlotInputChange("enabled", event.target.checked)}
-                    />
-                    <span>Activa</span>
-                  </label>
-                </div>
-
-                <div className="flex gap-2 text-sm">
-                  <button type="button" onClick={() => void saveSlot()} className="border border-black px-3 py-1" disabled={isSavingSlot}>
-                    {isSavingSlot ? "Guardando..." : slotForm.id ? "Guardar" : "Crear"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSlotForm(createEmptySlotForm())}
-                    className="border border-black px-3 py-1"
-                    disabled={isSavingSlot}
-                  >
-                    Nueva
-                  </button>
-                  <button type="button" onClick={() => void openScheduleModal()} className="border border-black px-3 py-1" disabled={isSavingSlot}>
-                    Ver horarios
-                  </button>
-                </div>
-
-                {slotsError ? <p className="text-sm text-red-700">{slotsError}</p> : null}
-              </section>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {isScheduleModalOpen ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/35 px-3 py-4">
-          <div className="flex max-h-full w-full max-w-[360px] flex-col border-4 border-black bg-[#f1e4a9]">
-            <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
-              <button
-                type="button"
-                onClick={() => setScheduleDayIndex((current) => (current + 6) % 7)}
-                className="border border-black px-2 py-1 text-sm"
-              >
-                {"<"}
-              </button>
-              <h2 className="text-xl leading-none">{scheduleDayLabel}</h2>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setScheduleDayIndex((current) => (current + 1) % 7)}
-                  className="border border-black px-2 py-1 text-sm"
-                >
-                  {">"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsScheduleModalOpen(false)
-                    setIsModalOpen(true)
-                  }}
-                  className="border border-black px-2 py-1 text-sm"
-                >
-                  Volver
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4 overflow-y-auto px-4 py-4">
-              {isSlotsLoading ? <p className="text-sm">Cargando horarios...</p> : null}
-              {!isSlotsLoading && slotsForSelectedDay.length === 0 ? (
-                <p className="text-sm">No hay franjas para este dia.</p>
-              ) : null}
-              {slotsForSelectedDay.map((slot) => (
-                <SlotRow
-                  key={slot.id}
-                  slot={slot}
-                  onEdit={editSlotFromSchedule}
-                  onToggle={(selectedSlot) => void toggleSlot(selectedSlot)}
-                  onDelete={(selectedSlot) => void deleteSlot(selectedSlot)}
-                  busy={isSavingSlot}
-                />
-              ))}
-              {slotsError ? <p className="text-sm text-red-700">{slotsError}</p> : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </main>
   )
 }
