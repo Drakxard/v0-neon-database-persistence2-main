@@ -729,6 +729,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
   const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
+  const handleDailySessionLoaded = useCallback(() => {
+    setHistory([])
+    setHistoryIndex(-1)
+  }, [])
   const {
     reviewEntries,
     isLoadingReview,
@@ -774,10 +778,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setCompletedSubjects,
     getDisplaySubjectsForDate,
     normalizeSubjectsForDay,
-    onLoaded: () => {
-      setHistory([])
-      setHistoryIndex(-1)
-    },
+    onLoaded: handleDailySessionLoaded,
   })
 
   // Load the persisted session for the currently selected date.
