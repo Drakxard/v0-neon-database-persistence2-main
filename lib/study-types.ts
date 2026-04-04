@@ -104,3 +104,30 @@ export type SubjectSynthesisRecord = {
   exerciseSkippedText: string | null
   updatedAt: string | null
 }
+
+export type SubjectMaterialSynthesisRecord = {
+  subjectDayMaterialId: number
+  exerciseScopeText: string
+  exerciseSolvedCount: number
+  exerciseTotalCount: number
+  updatedAt: string | null
+}
+
+export type SubjectSynthesisDerivedSummary = {
+  subjectId: string
+  weekNumber: number
+  hasPerMaterialProgress: boolean
+  exerciseSolvedCount: number
+  exerciseTotalCount: number
+  percentage: number
+  legacyExerciseSkippedText: string | null
+}
+
+export type SubjectSynthesisSubjectPayload = {
+  subjectId: string
+  weekNumber: number
+  materials: SubjectDayMaterial[]
+  entries: SubjectDayEntry[]
+  legacySummary: SubjectSynthesisRecord
+  materialProgress: SubjectMaterialSynthesisRecord[]
+}

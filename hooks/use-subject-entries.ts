@@ -131,6 +131,7 @@ export function useSubjectEntries() {
     practiceLoadError,
     subjectShortcuts,
     isSubjectShortcutsLoading,
+    setReviewEntries,
     setReviewError,
     setPracticeLoadError,
     setPracticeEntries,

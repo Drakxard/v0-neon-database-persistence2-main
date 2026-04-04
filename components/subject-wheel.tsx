@@ -21,18 +21,22 @@ import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
-import { fetchSubjectSynthesis, saveSubjectSynthesis } from "@/lib/subject-synthesis-client"
+import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import type {
   PendingSubjectDayMaterial,
+  PracticeCoverageStatus,
   SubjectDayEntry,
   SubjectDayEntryLink,
   SubjectDayMaterial,
+  SubjectMaterialSynthesisRecord,
   SubjectDayMaterialType,
   SubjectShortcutKey,
   SubjectShortcuts,
+  SubjectSynthesisDerivedSummary,
   SubjectSynthesisRecord,
+  SubjectSynthesisSubjectPayload,
   VectorOverview,
 } from "@/lib/study-types"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
@@ -88,6 +92,23 @@ type AnalysisSubjectCard = {
 type SynthesisPlaybackItem = {
   materialId: number
   entryId: number
+}
+
+type SynthesisMaterialDraft = {
+  exerciseScopeText: string
+  exerciseSolvedCount: string
+  exerciseTotalCount: string
+}
+
+type SynthesisSubjectState = {
+  materials: SubjectDayMaterial[]
+  entries: SubjectDayEntry[]
+  legacySummary: SubjectSynthesisRecord
+  perMaterialProgress: Record<number, SubjectMaterialSynthesisRecord>
+  drafts: Record<number, SynthesisMaterialDraft>
+  isLoading: boolean
+  isSaving: boolean
+  error: string
 }
 
 function buildMaterialDraftViewerHref(params: {
@@ -358,22 +379,25 @@ function getSynthesisCountdownLabel(params: {
 
 function getSynthesisHeaderLabel(params: {
   subject: Subject | null
+  percentage: number
   weekNumber: number
   currentWeekNumber: number
   referenceDate: Date
 }) {
-  const { subject, weekNumber, currentWeekNumber, referenceDate } = params
+  const { subject, percentage, weekNumber, currentWeekNumber, referenceDate } = params
   const subjectName = getSubjectDisplayName(subject)
-  if (!subjectName) return ""
-  if (weekNumber !== currentWeekNumber) return subjectName
+  if (!subjectName || !subject) return ""
+  const prefix = `${percentage}% ${subjectName}`
+  if (weekNumber !== currentWeekNumber) return prefix
 
   const countdown = getSynthesisCountdownLabel({
     subjectId: subject.id,
     fromDate: referenceDate,
   })
 
-  if (!countdown) return subjectName
-  return `${subjectName}, falta ${countdown.daysUntil} para ${countdown.weekdayLabel}`
+  if (!countdown) return prefix
+  const dayLabel = countdown.daysUntil === 1 ? "dia" : "dias"
+  return `${prefix}, falta ${countdown.daysUntil} ${dayLabel} para el ${countdown.weekdayLabel}`
 }
 
 function idsToSubjects(ids: string[], subjects: Subject[]): Subject[] {
@@ -660,6 +684,106 @@ function getDefaultSubjectSynthesisRecord(subjectId: string, weekNumber: number)
   }
 }
 
+function createEmptySynthesisMaterialDraft(): SynthesisMaterialDraft {
+  return {
+    exerciseScopeText: "",
+    exerciseSolvedCount: "0",
+    exerciseTotalCount: "0",
+  }
+}
+
+function createSynthesisMaterialDraft(progress?: SubjectMaterialSynthesisRecord | null): SynthesisMaterialDraft {
+  return {
+    exerciseScopeText: progress?.exerciseScopeText ?? "",
+    exerciseSolvedCount: String(progress?.exerciseSolvedCount ?? 0),
+    exerciseTotalCount: String(progress?.exerciseTotalCount ?? 0),
+  }
+}
+
+function getSynthesisDraftNumber(value: string) {
+  return Math.max(0, Number.parseInt(value || "0", 10) || 0)
+}
+
+function hasSynthesisDraftValue(draft: SynthesisMaterialDraft | undefined) {
+  if (!draft) return false
+
+  return (
+    draft.exerciseScopeText.trim().length > 0 ||
+    getSynthesisDraftNumber(draft.exerciseSolvedCount) > 0 ||
+    getSynthesisDraftNumber(draft.exerciseTotalCount) > 0
+  )
+}
+
+function buildEmptySynthesisSubjectState(subjectId: string, weekNumber: number): SynthesisSubjectState {
+  return {
+    materials: [],
+    entries: [],
+    legacySummary: getDefaultSubjectSynthesisRecord(subjectId, weekNumber),
+    perMaterialProgress: {},
+    drafts: {},
+    isLoading: false,
+    isSaving: false,
+    error: "",
+  }
+}
+
+function buildSynthesisSubjectState(payload: SubjectSynthesisSubjectPayload): SynthesisSubjectState {
+  const perMaterialProgress = payload.materialProgress.reduce<Record<number, SubjectMaterialSynthesisRecord>>((accumulator, progress) => {
+    accumulator[progress.subjectDayMaterialId] = progress
+    return accumulator
+  }, {})
+  const sortedMaterials = sortSubjectDayMaterials(payload.materials)
+  const drafts = sortedMaterials.reduce<Record<number, SynthesisMaterialDraft>>((accumulator, material) => {
+    accumulator[material.id] = createSynthesisMaterialDraft(perMaterialProgress[material.id] ?? null)
+    return accumulator
+  }, {})
+
+  return {
+    materials: sortedMaterials,
+    entries: sortSubjectDayEntries(payload.entries),
+    legacySummary: payload.legacySummary,
+    perMaterialProgress,
+    drafts,
+    isLoading: false,
+    isSaving: false,
+    error: "",
+  }
+}
+
+function buildSynthesisSubjectSummary(subjectId: string, weekNumber: number, state: SynthesisSubjectState | null | undefined): SubjectSynthesisDerivedSummary {
+  const legacySummary = state?.legacySummary ?? getDefaultSubjectSynthesisRecord(subjectId, weekNumber)
+  const drafts = state?.drafts ?? {}
+  const draftItems = Object.values(drafts)
+  const hasPerMaterialProgress = draftItems.some((draft) => hasSynthesisDraftValue(draft))
+
+  if (!hasPerMaterialProgress) {
+    const legacyTotal = Math.max(0, legacySummary.exerciseTotalCount)
+    const legacySolved = Math.max(0, legacySummary.exerciseSolvedCount)
+    return {
+      subjectId,
+      weekNumber,
+      hasPerMaterialProgress: false,
+      exerciseSolvedCount: legacySolved,
+      exerciseTotalCount: legacyTotal,
+      percentage: legacyTotal > 0 ? Math.floor((legacySolved / legacyTotal) * 100) : 0,
+      legacyExerciseSkippedText: legacySummary.exerciseSkippedText ?? "",
+    }
+  }
+
+  const exerciseSolvedCount = draftItems.reduce((sum, draft) => sum + getSynthesisDraftNumber(draft.exerciseSolvedCount), 0)
+  const exerciseTotalCount = draftItems.reduce((sum, draft) => sum + getSynthesisDraftNumber(draft.exerciseTotalCount), 0)
+
+  return {
+    subjectId,
+    weekNumber,
+    hasPerMaterialProgress: true,
+    exerciseSolvedCount,
+    exerciseTotalCount,
+    percentage: exerciseTotalCount > 0 ? Math.floor((exerciseSolvedCount / exerciseTotalCount) * 100) : 0,
+    legacyExerciseSkippedText: legacySummary.exerciseSkippedText ?? "",
+  }
+}
+
 export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const visibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => authSession.isAdmin || authSession.allowedSubjectIds.includes(subject.id)),
@@ -781,18 +905,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isSynthesisWeekSelectorOpen, setIsSynthesisWeekSelectorOpen] = useState(false)
   const [synthesisSubjectId, setSynthesisSubjectId] = useState<string>("")
   const [synthesisWeekNumber, setSynthesisWeekNumber] = useState(0)
-  const [synthesisEntries, setSynthesisEntries] = useState<SubjectDayEntry[]>([])
-  const [synthesisMaterials, setSynthesisMaterials] = useState<SubjectDayMaterial[]>([])
-  const [isSynthesisLoading, setIsSynthesisLoading] = useState(false)
-  const [synthesisError, setSynthesisError] = useState("")
-  const [synthesisRecord, setSynthesisRecord] = useState<SubjectSynthesisRecord | null>(null)
-  const [isSynthesisRecordLoading, setIsSynthesisRecordLoading] = useState(false)
-  const [isSynthesisSaving, setIsSynthesisSaving] = useState(false)
-  const [isEditingSynthesisProgress, setIsEditingSynthesisProgress] = useState(false)
-  const [synthesisSolvedDraft, setSynthesisSolvedDraft] = useState("0")
-  const [synthesisTotalDraft, setSynthesisTotalDraft] = useState("0")
-  const [synthesisSkippedDraft, setSynthesisSkippedDraft] = useState("")
-  const [isSynthesisSkippedExpanded, setIsSynthesisSkippedExpanded] = useState(false)
+  const [synthesisSubjectStateMap, setSynthesisSubjectStateMap] = useState<Record<string, SynthesisSubjectState>>({})
   const [synthesisPlaybackQueue, setSynthesisPlaybackQueue] = useState<SynthesisPlaybackItem[]>([])
   const [synthesisPlaybackIndex, setSynthesisPlaybackIndex] = useState(-1)
   const [isSynthesisPlaybackActive, setIsSynthesisPlaybackActive] = useState(false)
@@ -845,6 +958,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     () => synthesisSubjects.findIndex((subject) => subject.id === synthesisSubjectId),
     [synthesisSubjectId, synthesisSubjects]
   )
+  const synthesisSelectedState = useMemo(() => {
+    if (!synthesisSelectedSubject) return null
+    return synthesisSubjectStateMap[synthesisSelectedSubject.id] ?? buildEmptySynthesisSubjectState(synthesisSelectedSubject.id, synthesisWeekNumber)
+  }, [synthesisSelectedSubject, synthesisSubjectStateMap, synthesisWeekNumber])
+  const synthesisSelectedSummary = useMemo(
+    () =>
+      synthesisSelectedSubject
+        ? buildSynthesisSubjectSummary(synthesisSelectedSubject.id, synthesisWeekNumber, synthesisSelectedState)
+        : null,
+    [synthesisSelectedState, synthesisSelectedSubject, synthesisWeekNumber]
+  )
   const dialogSelectedDate = useMemo(() => parseDateKey(dialogDateKey), [dialogDateKey])
   const dialogSelectedWeekNumber = useMemo(() => getWeekNumberForDate(dialogSelectedDate), [dialogSelectedDate])
   const dialogWeekDates = useMemo(() => getWeekDates(dialogSelectedWeekNumber), [dialogSelectedWeekNumber])
@@ -869,6 +993,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     practiceLoadError,
     subjectShortcuts,
     isSubjectShortcutsLoading,
+    setReviewEntries,
     setReviewError,
     setPracticeLoadError,
     setPracticeEntries,
@@ -879,13 +1004,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     saveSubjectShortcut: persistSubjectShortcut,
   } = useSubjectEntries()
   const { isUploadingMaterialType, uploadMaterials } = useMaterialUploads()
-  const synthesisOverview = useMobileReviewOverview({
-    enabled: Boolean(isSynthesisOpen && synthesisSelectedSubject),
-    weekNumber: synthesisWeekNumber,
-    dateKey: currentDateKey,
-    subjectId: synthesisSelectedSubject?.id ?? null,
-    logPrefix: "synthesis overview",
-  })
   const currentSubjectOverviewLoad = useMobileReviewOverview({
     enabled: Boolean(isDialogOpen && currentSubject),
     weekNumber: dialogSelectedWeekNumber,
@@ -949,62 +1067,51 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [])
 
   useEffect(() => {
-    if (!synthesisRecord) return
-
-    setSynthesisSolvedDraft(String(synthesisRecord.exerciseSolvedCount))
-    setSynthesisTotalDraft(String(synthesisRecord.exerciseTotalCount))
-    setSynthesisSkippedDraft(synthesisRecord.exerciseSkippedText ?? "")
-    setIsEditingSynthesisProgress(false)
-  }, [synthesisRecord])
-
-  useEffect(() => {
-    if (!isSynthesisOpen || !synthesisSelectedSubject) return
+    if (!isSynthesisOpen || synthesisSubjects.length === 0) return
 
     const requestId = synthesisLoadRequestIdRef.current + 1
     synthesisLoadRequestIdRef.current = requestId
-    setIsSynthesisLoading(true)
-    setIsSynthesisRecordLoading(true)
-    setSynthesisError("")
+    setSynthesisSubjectStateMap(
+      Object.fromEntries(
+        synthesisSubjects.map((subject) => [
+          subject.id,
+          {
+            ...buildEmptySynthesisSubjectState(subject.id, synthesisWeekNumber),
+            isLoading: true,
+          },
+        ])
+      )
+    )
 
-    void Promise.all([
-      fetch(`/api/subject-day-entries?${new URLSearchParams({
-        subjectId: synthesisSelectedSubject.id,
-        weekNumber: String(synthesisWeekNumber),
-      }).toString()}`).then((response) => requireOkJson<SubjectDayEntry[]>(response, "No se pudieron cargar las dudas de sintesis.")),
-      fetch(`/api/subject-day-materials?${new URLSearchParams({
-        subjectId: synthesisSelectedSubject.id,
-        weekNumber: String(synthesisWeekNumber),
-        scope: "week",
-        materialType: "theory",
-      }).toString()}`).then((response) => requireOkJson<SubjectDayMaterial[]>(response, "No se pudieron cargar los PDFs de teoria.")),
-      fetch(`/api/subject-day-materials?${new URLSearchParams({
-        subjectId: synthesisSelectedSubject.id,
-        weekNumber: String(synthesisWeekNumber),
-        scope: "week",
-        materialType: "practice",
-      }).toString()}`).then((response) => requireOkJson<SubjectDayMaterial[]>(response, "No se pudieron cargar los PDFs de practica.")),
-      fetchSubjectSynthesis(synthesisSelectedSubject.id, synthesisWeekNumber),
-    ])
-      .then(([nextEntries, theoryRows, practiceRows, nextRecord]) => {
-        if (requestId !== synthesisLoadRequestIdRef.current) return
-        setSynthesisEntries(sortSubjectDayEntries(Array.isArray(nextEntries) ? nextEntries : []))
-        setSynthesisMaterials(mergeSubjectDayMaterials(theoryRows, practiceRows))
-        setSynthesisRecord(nextRecord)
+    void Promise.allSettled(
+      synthesisSubjects.map(async (subject) => ({
+        subjectId: subject.id,
+        payload: await fetchSubjectSynthesisMaterials(subject.id, synthesisWeekNumber),
+      }))
+    ).then((results) => {
+      if (requestId !== synthesisLoadRequestIdRef.current) return
+
+      setSynthesisSubjectStateMap((previous) => {
+        const nextState = { ...previous }
+
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            nextState[result.value.subjectId] = buildSynthesisSubjectState(result.value.payload)
+            return
+          }
+
+          const subjectId = synthesisSubjects[index]?.id
+          if (!subjectId) return
+          nextState[subjectId] = {
+            ...buildEmptySynthesisSubjectState(subjectId, synthesisWeekNumber),
+            error: result.reason instanceof Error ? result.reason.message : "No se pudo cargar la sintesis semanal.",
+          }
+        })
+
+        return nextState
       })
-      .catch((error) => {
-        if (requestId !== synthesisLoadRequestIdRef.current) return
-        console.error("Failed to load synthesis data:", error)
-        setSynthesisEntries([])
-        setSynthesisMaterials([])
-        setSynthesisRecord(getDefaultSubjectSynthesisRecord(synthesisSelectedSubject.id, synthesisWeekNumber))
-        setSynthesisError(error instanceof Error ? error.message : "No se pudo cargar la sintesis semanal.")
-      })
-      .finally(() => {
-        if (requestId !== synthesisLoadRequestIdRef.current) return
-        setIsSynthesisLoading(false)
-        setIsSynthesisRecordLoading(false)
-      })
-  }, [isSynthesisOpen, synthesisSelectedSubject, synthesisWeekNumber])
+    })
+  }, [isSynthesisOpen, synthesisSubjects, synthesisWeekNumber])
 
   useEffect(() => {
     if (!isSynthesisOpen) {
@@ -1018,14 +1125,19 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   useEffect(() => {
     const audio = synthesisPlaybackAudioRef.current
+    const nextPlaybackItem =
+      synthesisPlaybackIndex >= 0 && synthesisPlaybackIndex < synthesisPlaybackQueue.length
+        ? synthesisPlaybackQueue[synthesisPlaybackIndex]
+        : null
+
     if (!audio) return
 
-    if (!isSynthesisPlaybackActive || !currentSynthesisPlaybackItem) {
+    if (!isSynthesisPlaybackActive || !nextPlaybackItem) {
       audio.pause()
       return
     }
 
-    const nextSrc = `/api/subject-day-entries/${currentSynthesisPlaybackItem.entryId}/audio`
+    const nextSrc = `/api/subject-day-entries/${nextPlaybackItem.entryId}/audio`
     if (audio.src !== new URL(nextSrc, window.location.origin).toString()) {
       audio.src = nextSrc
       audio.load()
@@ -1035,7 +1147,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       console.error("Failed to play synthesis queue audio:", error)
       setIsSynthesisPlaybackActive(false)
     })
-  }, [currentSynthesisPlaybackItem, isSynthesisPlaybackActive])
+  }, [isSynthesisPlaybackActive, synthesisPlaybackIndex, synthesisPlaybackQueue])
 
   useEffect(() => {
     const currentQuestion = practiceQuestions[currentPracticeIndex]
@@ -3096,11 +3208,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     resetSynthesisPlayback()
     setSynthesisWeekNumber(homeSelectedWeekNumber)
     setSynthesisSubjectId(firstSubject.id)
-    setSynthesisEntries([])
-    setSynthesisMaterials([])
-    setSynthesisError("")
-    setSynthesisRecord(getDefaultSubjectSynthesisRecord(firstSubject.id, homeSelectedWeekNumber))
-    setIsSynthesisSkippedExpanded(false)
+    setSynthesisSubjectStateMap({})
     setIsSynthesisWeekSelectorOpen(false)
     setIsSynthesisOpen(true)
   }, [homeSelectedWeekNumber, resetSynthesisPlayback, synthesisSubjects])
@@ -3139,13 +3247,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [resetSynthesisPlayback, synthesisSubjectId, synthesisSubjectIndex, synthesisSubjects])
 
   const handleStartSynthesisPlayback = useCallback((mode: ContinueMode) => {
-    const nextQueue = mode === "theory" ? synthesisTheoryQueue : synthesisPracticeQueue
+    const entriesByMaterialId = (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
+      if (entry.subject_day_material_id == null) return accumulator
+      const materialId = entry.subject_day_material_id
+      const current = accumulator[materialId] ?? []
+      current.push(entry)
+      accumulator[materialId] = current
+      return accumulator
+    }, {})
+    const materialsForMode = sortSubjectDayMaterials(
+      (synthesisSelectedState?.materials ?? []).filter((material) => material.material_type === mode)
+    )
+    const nextQueue = buildSynthesisPlaybackQueue(materialsForMode, entriesByMaterialId)
     if (nextQueue.length === 0) return
 
     setSynthesisPlaybackQueue(nextQueue)
     setSynthesisPlaybackIndex(0)
     setIsSynthesisPlaybackActive(true)
-  }, [synthesisPracticeQueue, synthesisTheoryQueue])
+  }, [synthesisSelectedState])
 
   const handlePauseResumeSynthesisPlayback = useCallback(() => {
     if (synthesisPlaybackQueue.length === 0) return
@@ -3180,45 +3299,99 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     })
   }, [synthesisPlaybackQueue.length])
 
+  const handleSynthesisDraftChange = useCallback(
+    (materialId: number, field: keyof SynthesisMaterialDraft, value: string) => {
+      if (!synthesisSelectedSubject) return
+
+      setSynthesisSubjectStateMap((previous) => {
+        const current = previous[synthesisSelectedSubject.id] ?? buildEmptySynthesisSubjectState(synthesisSelectedSubject.id, synthesisWeekNumber)
+        const nextDrafts = {
+          ...current.drafts,
+          [materialId]: {
+            ...(current.drafts[materialId] ?? createEmptySynthesisMaterialDraft()),
+            [field]: field === "exerciseScopeText" ? value : value.replace(/[^\d]/g, ""),
+          },
+        }
+
+        return {
+          ...previous,
+          [synthesisSelectedSubject.id]: {
+            ...current,
+            drafts: nextDrafts,
+          },
+        }
+      })
+    },
+    [synthesisSelectedSubject, synthesisWeekNumber]
+  )
+
   const handleSaveSynthesisProgress = useCallback(async () => {
-    if (!synthesisSelectedSubject) return
+    if (!synthesisSelectedSubject || !synthesisSelectedState) return
 
-    const exerciseSolvedCount = Math.max(0, Number.parseInt(synthesisSolvedDraft || "0", 10) || 0)
-    const exerciseTotalCount = Math.max(0, Number.parseInt(synthesisTotalDraft || "0", 10) || 0)
+    setSynthesisSubjectStateMap((previous) => ({
+      ...previous,
+      [synthesisSelectedSubject.id]: {
+        ...synthesisSelectedState,
+        isSaving: true,
+        error: "",
+      },
+    }))
 
-    setIsSynthesisSaving(true)
     try {
-      const nextRecord = await saveSubjectSynthesis({
+      const nextPayload = await saveSubjectSynthesisMaterials({
         subjectId: synthesisSelectedSubject.id,
         weekNumber: synthesisWeekNumber,
-        exerciseSolvedCount,
-        exerciseTotalCount,
-        exerciseSkippedText: synthesisSkippedDraft,
+        items: synthesisSelectedState.materials.map((material) => {
+          const draft = synthesisSelectedState.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
+          return {
+            subjectDayMaterialId: material.id,
+            exerciseScopeText: draft.exerciseScopeText,
+            exerciseSolvedCount: getSynthesisDraftNumber(draft.exerciseSolvedCount),
+            exerciseTotalCount: getSynthesisDraftNumber(draft.exerciseTotalCount),
+          }
+        }),
       })
 
-      setSynthesisRecord(nextRecord)
-      setIsEditingSynthesisProgress(false)
+      setSynthesisSubjectStateMap((previous) => ({
+        ...previous,
+        [synthesisSelectedSubject.id]: buildSynthesisSubjectState(nextPayload),
+      }))
     } catch (error) {
       console.error("Failed to save synthesis progress:", error)
       toast({
         title: "No se pudo guardar la sintesis",
-        description: error instanceof Error ? error.message : "No se pudo guardar la sintesis semanal.",
+        description: error instanceof Error ? error.message : "No se pudo guardar la sintesis por archivo.",
         variant: "destructive",
       })
-    } finally {
-      setIsSynthesisSaving(false)
+
+      setSynthesisSubjectStateMap((previous) => ({
+        ...previous,
+        [synthesisSelectedSubject.id]: {
+          ...(previous[synthesisSelectedSubject.id] ?? buildEmptySynthesisSubjectState(synthesisSelectedSubject.id, synthesisWeekNumber)),
+          isSaving: false,
+          error: error instanceof Error ? error.message : "No se pudo guardar la sintesis por archivo.",
+        },
+      }))
     }
-  }, [synthesisSelectedSubject, synthesisSkippedDraft, synthesisSolvedDraft, synthesisTotalDraft, synthesisWeekNumber])
+  }, [synthesisSelectedState, synthesisSelectedSubject, synthesisWeekNumber])
 
-  const handleCancelSynthesisProgressEdit = useCallback(() => {
-    const nextRecord = synthesisRecord ?? (synthesisSelectedSubject ? getDefaultSubjectSynthesisRecord(synthesisSelectedSubject.id, synthesisWeekNumber) : null)
-    if (!nextRecord) return
+  const handleResetSynthesisDrafts = useCallback(() => {
+    if (!synthesisSelectedSubject || !synthesisSelectedState) return
 
-    setSynthesisSolvedDraft(String(nextRecord.exerciseSolvedCount))
-    setSynthesisTotalDraft(String(nextRecord.exerciseTotalCount))
-    setSynthesisSkippedDraft(nextRecord.exerciseSkippedText ?? "")
-    setIsEditingSynthesisProgress(false)
-  }, [synthesisRecord, synthesisSelectedSubject, synthesisWeekNumber])
+    const nextDrafts = synthesisSelectedState.materials.reduce<Record<number, SynthesisMaterialDraft>>((accumulator, material) => {
+      accumulator[material.id] = createSynthesisMaterialDraft(synthesisSelectedState.perMaterialProgress[material.id] ?? null)
+      return accumulator
+    }, {})
+
+    setSynthesisSubjectStateMap((previous) => ({
+      ...previous,
+      [synthesisSelectedSubject.id]: {
+        ...synthesisSelectedState,
+        drafts: nextDrafts,
+        error: "",
+      },
+    }))
+  }, [synthesisSelectedState, synthesisSelectedSubject])
 
   const openSynthesisMaterial = useCallback(async (material: SubjectDayMaterial, mode: ContinueMode) => {
     await flushPendingFeaturedUpdate()
@@ -3450,7 +3623,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [entries])
   const currentSubjectOverview = currentSubjectOverviewLoad.selectedVector
   const synthesisEntriesByMaterialId = useMemo(() => {
-    return synthesisEntries.reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
+    return (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
       if (entry.subject_day_material_id == null) return accumulator
       const materialId = entry.subject_day_material_id
       const current = accumulator[materialId] ?? []
@@ -3458,23 +3631,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       accumulator[materialId] = current
       return accumulator
     }, {})
-  }, [synthesisEntries])
-  const synthesisOverviewVector = synthesisOverview.selectedVector
+  }, [synthesisSelectedState?.entries])
   const synthesisTheoryMaterials = useMemo(
-    () => sortSubjectDayMaterials(synthesisMaterials.filter((material) => material.material_type === "theory")),
-    [synthesisMaterials]
+    () => sortSubjectDayMaterials((synthesisSelectedState?.materials ?? []).filter((material) => material.material_type === "theory")),
+    [synthesisSelectedState?.materials]
   )
   const synthesisPracticeMaterials = useMemo(
-    () => sortSubjectDayMaterials(synthesisMaterials.filter((material) => material.material_type === "practice")),
-    [synthesisMaterials]
-  )
-  const synthesisTheoryCoverage = useMemo(
-    () => buildMaterialCoverage(synthesisTheoryMaterials, synthesisEntriesByMaterialId),
-    [synthesisEntriesByMaterialId, synthesisTheoryMaterials]
-  )
-  const synthesisPracticeCoverage = useMemo(
-    () => buildMaterialCoverage(synthesisPracticeMaterials, synthesisEntriesByMaterialId),
-    [synthesisEntriesByMaterialId, synthesisPracticeMaterials]
+    () => sortSubjectDayMaterials((synthesisSelectedState?.materials ?? []).filter((material) => material.material_type === "practice")),
+    [synthesisSelectedState?.materials]
   )
   const synthesisTheoryQueue = useMemo(
     () => buildSynthesisPlaybackQueue(synthesisTheoryMaterials, synthesisEntriesByMaterialId),
@@ -3488,15 +3652,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     synthesisPlaybackIndex >= 0 && synthesisPlaybackIndex < synthesisPlaybackQueue.length
       ? synthesisPlaybackQueue[synthesisPlaybackIndex]
       : null
+  const synthesisAllMaterials = synthesisSelectedState?.materials ?? []
+  const hasSynthesisPerMaterialProgress = synthesisSelectedSummary?.hasPerMaterialProgress ?? false
+  const isSynthesisLoading = synthesisSelectedState?.isLoading ?? false
+  const isSynthesisSaving = synthesisSelectedState?.isSaving ?? false
+  const synthesisError = synthesisSelectedState?.error ?? ""
   const synthesisHeaderLabel = useMemo(
     () =>
       getSynthesisHeaderLabel({
         subject: synthesisSelectedSubject,
+        percentage: synthesisSelectedSummary?.percentage ?? 0,
         weekNumber: synthesisWeekNumber,
         currentWeekNumber: currentCalendarWeek,
         referenceDate: homeSelectedDate,
       }),
-    [currentCalendarWeek, homeSelectedDate, synthesisSelectedSubject, synthesisWeekNumber]
+    [currentCalendarWeek, homeSelectedDate, synthesisSelectedSubject, synthesisSelectedSummary?.percentage, synthesisWeekNumber]
   )
   const synthesisWeekOptions = useMemo(
     () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => currentCalendarWeek - index),
@@ -3909,104 +4079,73 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const renderSynthesisMaterialSection = (mode: ContinueMode) => {
     const isTheory = mode === "theory"
     const materialsForMode = isTheory ? synthesisTheoryMaterials : synthesisPracticeMaterials
-    const coverageForMode = isTheory ? synthesisTheoryCoverage : synthesisPracticeCoverage
     const queueForMode = isTheory ? synthesisTheoryQueue : synthesisPracticeQueue
-    const sectionLabel = isTheory ? "teoria" : "practica"
+    const sectionLabel = isTheory ? "Teoria" : "Practica"
 
     return (
-      <section className="space-y-3 rounded-3xl border border-border bg-card px-5 py-5 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-lg font-medium text-foreground">
-            {`Hay ${materialsForMode.length} ${isTheory ? (materialsForMode.length === 1 ? "apunte" : "apuntes") : (materialsForMode.length === 1 ? "archivo" : "archivos")} de ${sectionLabel} con los audios:`}
-          </p>
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-base font-medium text-foreground">{sectionLabel}</p>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             onClick={() => handleStartSynthesisPlayback(mode)}
             disabled={queueForMode.length === 0}
-            className="h-10 border-border px-4 text-foreground"
+            className="h-8 px-2 text-sm text-muted-foreground hover:text-foreground"
           >
-            {isTheory ? "Reproducir toda la teoria" : "Reproducir toda la practica"}
+            {isTheory ? "Reproducir teoria" : "Reproducir practica"}
           </Button>
+          {currentSynthesisPlaybackItem && queueForMode.some((item) => item.entryId === currentSynthesisPlaybackItem.entryId) ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handlePauseResumeSynthesisPlayback}
+                className="h-8 px-2 text-sm text-muted-foreground hover:text-foreground"
+              >
+                {isSynthesisPlaybackActive ? <Pause className="mr-1 h-4 w-4" /> : <Play className="mr-1 h-4 w-4" />}
+                {isSynthesisPlaybackActive ? "Pausar" : "Reanudar"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleSkipSynthesisPlayback}
+                className="h-8 px-2 text-sm text-muted-foreground hover:text-foreground"
+              >
+                <ChevronRight className="mr-1 h-4 w-4" />
+                Siguiente audio
+              </Button>
+            </>
+          ) : null}
         </div>
 
-        <div className="space-y-2">
-          {materialsForMode.length > 0 ? (
-            materialsForMode.map((material) => {
+        {materialsForMode.length > 0 ? (
+          <div className="space-y-1">
+            {materialsForMode.map((material) => {
               const materialQueue = queueForMode.filter((item) => item.materialId === material.id)
               const isActive = currentSynthesisPlaybackItem?.materialId === material.id
-              const coverage = coverageForMode.find((item) => item.id === material.id)
-              const coverageLabel =
-                coverage?.status === "cubierto_minimo"
-                  ? "Cubierto minimo"
-                  : coverage?.status === "tocado_sin_dupla"
-                    ? "Tocado sin dupla"
-                    : "Sin tocar"
-              const coverageClassName =
-                coverage?.status === "cubierto_minimo"
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : coverage?.status === "tocado_sin_dupla"
-                    ? "border-amber-300 bg-amber-50 text-amber-700"
-                    : "border-border bg-muted/40 text-muted-foreground"
 
               return (
-                <div
-                  key={material.id}
-                  className={`space-y-3 rounded-2xl border px-4 py-4 transition-colors ${
-                    isActive ? "border-emerald-300 bg-emerald-50/70" : "border-border bg-background"
-                  }`}
-                >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-2 py-1 text-[11px] ${coverageClassName}`}>{coverageLabel}</span>
-                        <span className="text-xs text-muted-foreground">{`${materialQueue.length} ${materialQueue.length === 1 ? "audio" : "audios"}`}</span>
-                      </div>
-                      <p className={`truncate text-base font-medium ${isActive ? "text-emerald-700" : "text-foreground"}`}>{material.file_name}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void openSynthesisMaterial(material, mode)}
-                        className="h-9 border-border px-3 text-foreground"
-                      >
-                        Ver
-                      </Button>
-                    </div>
-                  </div>
-
-                  {isActive ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handlePauseResumeSynthesisPlayback}
-                        className="h-9 border-border px-3 text-foreground"
-                      >
-                        {isSynthesisPlaybackActive ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                        {isSynthesisPlaybackActive ? "Pausar" : "Reanudar"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handleSkipSynthesisPlayback}
-                        className="h-9 border-border px-3 text-foreground"
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                        Siguiente audio
-                      </Button>
-                    </div>
+                <div key={material.id} className="flex flex-wrap items-center gap-2 text-[1.05rem] leading-8 text-foreground sm:text-[1.15rem]">
+                  <span className={isActive ? "font-semibold text-emerald-700" : ""}>{material.file_name}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void openSynthesisMaterial(material, mode)}
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Ver
+                  </Button>
+                  {materialQueue.length > 0 ? (
+                    <span className="text-xs text-muted-foreground">{`${materialQueue.length} audio${materialQueue.length === 1 ? "" : "s"}`}</span>
                   ) : null}
                 </div>
               )
-            })
-          ) : (
-            <p className="rounded-2xl border border-dashed border-border bg-background px-4 py-5 text-sm text-muted-foreground">
-              {`Todavia no hay archivos de ${sectionLabel} cargados para esta semana.`}
-            </p>
-          )}
-        </div>
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{`Todavia no hay archivos de ${sectionLabel.toLowerCase()} cargados para esta semana.`}</p>
+        )}
       </section>
     )
   }
@@ -4411,11 +4550,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
-            <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
               <audio ref={synthesisPlaybackAudioRef} onEnded={handleSynthesisAudioEnded} className="hidden" />
 
               {isSynthesisLoading ? (
-                <div className="flex min-h-40 items-center justify-center rounded-3xl border border-border bg-card text-sm text-muted-foreground shadow-sm">
+                <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Cargando sintesis...
                 </div>
@@ -4424,95 +4563,99 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               {!isSynthesisLoading ? (
                 <>
                   {synthesisError ? (
-                    <div className="rounded-3xl border border-red-300 bg-red-50 px-5 py-4 text-sm text-red-700 shadow-sm">
+                    <div className="text-sm text-red-700">
                       {synthesisError}
                     </div>
                   ) : null}
 
                   {synthesisSelectedSubject ? (
-                    <section className="rounded-3xl border border-border bg-card px-5 py-5 shadow-sm">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(synthesisOverviewVector?.currentDay ?? null, Boolean(synthesisOverviewVector))}`}>
-                          {getVectorDayLabel(synthesisOverviewVector?.currentDay ?? null, Boolean(synthesisOverviewVector))}
-                        </span>
-                        {synthesisOverviewVector?.lastInteractionAt ? (
-                          <span className="text-xs text-muted-foreground">
-                            {`Ultima interaccion: ${formatLastInteractionLabel(synthesisOverviewVector.lastInteractionAt)}`}
-                          </span>
+                    <section className="space-y-10 text-foreground">
+                      {renderSynthesisMaterialSection("theory")}
+                      {renderSynthesisMaterialSection("practice")}
+
+                      <section className="space-y-4">
+                        <p className="text-[1.95rem] font-semibold leading-tight text-foreground sm:text-[2.2rem]">
+                          {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios`}
+                        </p>
+
+                        {synthesisAllMaterials.length > 0 ? (
+                          <div className="space-y-3">
+                            {synthesisAllMaterials.map((material) => {
+                              const draft = synthesisSelectedState?.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
+                              const solvedCount = getSynthesisDraftNumber(draft.exerciseSolvedCount)
+                              const totalCount = getSynthesisDraftNumber(draft.exerciseTotalCount)
+
+                              return (
+                                <div key={material.id} className="flex flex-col gap-2 text-[1.02rem] text-foreground sm:text-[1.1rem]">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span>{material.file_name}</span>
+                                    <span aria-hidden="true">-&gt;</span>
+                                    <input
+                                      value={draft.exerciseScopeText}
+                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseScopeText", event.target.value)}
+                                      placeholder="1 a 14 y 18"
+                                      className="min-w-[14rem] flex-1 border-b border-border bg-transparent px-1 py-0.5 text-foreground outline-none placeholder:text-muted-foreground"
+                                    />
+                                    <span>realice</span>
+                                    <input
+                                      value={draft.exerciseSolvedCount}
+                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseSolvedCount", event.target.value)}
+                                      inputMode="numeric"
+                                      className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
+                                    />
+                                    <span>/</span>
+                                    <input
+                                      value={draft.exerciseTotalCount}
+                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseTotalCount", event.target.value)}
+                                      inputMode="numeric"
+                                      className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
+                                    />
+                                  </div>
+                                  {totalCount === 0 && solvedCount === 0 && draft.exerciseScopeText.trim().length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">Sin detalle por archivo cargado todavia.</p>
+                                  ) : null}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">No hay archivos cargados para esta materia en esta semana.</p>
+                        )}
+
+                        {!hasSynthesisPerMaterialProgress && synthesisSelectedState?.legacySummary.exerciseSkippedText?.trim() ? (
+                          <p className="text-sm text-muted-foreground">
+                            {`Legado: saltaste ${synthesisSelectedState.legacySummary.exerciseSkippedText} por repetitivos.`}
+                          </p>
                         ) : null}
-                      </div>
+
+                        <div className="flex flex-wrap items-center gap-3 pt-2">
+                          <Button
+                            type="button"
+                            onClick={() => void handleSaveSynthesisProgress()}
+                            disabled={isSynthesisSaving || !synthesisSelectedState}
+                            className="h-10 px-4"
+                          >
+                            {isSynthesisSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                            Guardar materia
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={handleResetSynthesisDrafts}
+                            disabled={isSynthesisSaving || !synthesisSelectedState}
+                            className="h-10 px-2 text-muted-foreground hover:text-foreground"
+                          >
+                            Descartar cambios
+                          </Button>
+                          {synthesisSelectedSummary ? (
+                            <span className="text-sm text-muted-foreground">
+                              {`Vas ${synthesisSelectedSummary.exerciseSolvedCount}/${synthesisSelectedSummary.exerciseTotalCount} ejercicios`}
+                            </span>
+                          ) : null}
+                        </div>
+                      </section>
                     </section>
                   ) : null}
-
-                  {renderSynthesisMaterialSection("theory")}
-                  {renderSynthesisMaterialSection("practice")}
-
-                  <section className="space-y-4 rounded-3xl border border-border bg-card px-5 py-5 shadow-sm">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {isEditingSynthesisProgress ? (
-                        <>
-                          <Input
-                            value={synthesisSolvedDraft}
-                            onChange={(event) => setSynthesisSolvedDraft(event.target.value.replace(/[^\d]/g, ""))}
-                            className="h-9 w-24"
-                          />
-                          <span className="text-lg font-medium text-foreground">/</span>
-                          <Input
-                            value={synthesisTotalDraft}
-                            onChange={(event) => setSynthesisTotalDraft(event.target.value.replace(/[^\d]/g, ""))}
-                            className="h-9 w-24"
-                          />
-                          <Button type="button" size="sm" onClick={() => void handleSaveSynthesisProgress()} disabled={isSynthesisSaving || isSynthesisRecordLoading}>
-                            {isSynthesisSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                            Guardar
-                          </Button>
-                          <Button type="button" size="sm" variant="outline" onClick={handleCancelSynthesisProgressEdit} disabled={isSynthesisSaving}>
-                            <X className="h-4 w-4" />
-                            Cancelar
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-2xl font-semibold text-foreground">
-                            {`Vas ${synthesisRecord?.exerciseSolvedCount ?? 0}/${synthesisRecord?.exerciseTotalCount ?? 0} ejercicios`}
-                          </p>
-                          <Button type="button" variant="ghost" size="icon" onClick={() => setIsEditingSynthesisProgress(true)} className="h-8 w-8">
-                            <Pencil className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
-                        <span>saltaste</span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          onClick={() => setIsSynthesisSkippedExpanded((previous) => !previous)}
-                          className="h-8 px-2 text-sm text-foreground"
-                        >
-                          {isSynthesisSkippedExpanded ? "Ocultar numeros" : "Ver numeros"}
-                        </Button>
-                        <span>por repetitivos</span>
-                      </div>
-
-                      {isSynthesisSkippedExpanded || isEditingSynthesisProgress ? (
-                        isEditingSynthesisProgress ? (
-                          <Textarea
-                            value={synthesisSkippedDraft}
-                            onChange={(event) => setSynthesisSkippedDraft(event.target.value)}
-                            placeholder="eje 8 a 12"
-                            className="min-h-24 resize-none"
-                          />
-                        ) : (
-                          <div className="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
-                            {synthesisRecord?.exerciseSkippedText?.trim() ? synthesisRecord.exerciseSkippedText : "Sin omisiones cargadas."}
-                          </div>
-                        )
-                      ) : null}
-                    </div>
-                  </section>
                 </>
               ) : null}
             </div>
