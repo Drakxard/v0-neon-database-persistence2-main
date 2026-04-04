@@ -752,8 +752,8 @@ function buildSynthesisSubjectState(payload: SubjectSynthesisSubjectPayload): Sy
 
 function buildSynthesisSubjectSummary(subjectId: string, weekNumber: number, state: SynthesisSubjectState | null | undefined): SubjectSynthesisDerivedSummary {
   const legacySummary = state?.legacySummary ?? getDefaultSubjectSynthesisRecord(subjectId, weekNumber)
-  const drafts = state?.drafts ?? {}
-  const draftItems = Object.values(drafts)
+  const practiceMaterials = (state?.materials ?? []).filter((material) => material.material_type === "practice")
+  const draftItems = practiceMaterials.map((material) => state?.drafts[material.id] ?? createEmptySynthesisMaterialDraft())
   const hasPerMaterialProgress = draftItems.some((draft) => hasSynthesisDraftValue(draft))
 
   if (!hasPerMaterialProgress) {
@@ -3341,7 +3341,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       const nextPayload = await saveSubjectSynthesisMaterials({
         subjectId: synthesisSelectedSubject.id,
         weekNumber: synthesisWeekNumber,
-        items: synthesisSelectedState.materials.map((material) => {
+        items: synthesisSelectedState.materials
+          .filter((material) => material.material_type === "practice")
+          .map((material) => {
           const draft = synthesisSelectedState.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
           return {
             subjectDayMaterialId: material.id,
@@ -3349,7 +3351,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             exerciseSolvedCount: getSynthesisDraftNumber(draft.exerciseSolvedCount),
             exerciseTotalCount: getSynthesisDraftNumber(draft.exerciseTotalCount),
           }
-        }),
+          }),
       })
 
       setSynthesisSubjectStateMap((previous) => ({
@@ -3652,7 +3654,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     synthesisPlaybackIndex >= 0 && synthesisPlaybackIndex < synthesisPlaybackQueue.length
       ? synthesisPlaybackQueue[synthesisPlaybackIndex]
       : null
-  const synthesisAllMaterials = synthesisSelectedState?.materials ?? []
+  const synthesisExerciseMaterials = synthesisPracticeMaterials
   const hasSynthesisPerMaterialProgress = synthesisSelectedSummary?.hasPerMaterialProgress ?? false
   const isSynthesisLoading = synthesisSelectedState?.isLoading ?? false
   const isSynthesisSaving = synthesisSelectedState?.isSaving ?? false
@@ -4501,39 +4503,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           showCloseButton={false}
           className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 text-foreground sm:max-w-none"
         >
-          <DialogHeader className="border-b border-border bg-card px-6 py-5 text-left sm:px-8">
-            <div className="flex flex-col gap-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <DialogTitle className="flex items-center gap-2">
-                    <BarChart3 className="h-4 w-4 text-muted-foreground" />
-                    Sintesis
-                  </DialogTitle>
-                  <DialogDescription>
-                    Navega la semana por materia, reproduce audios utiles y guarda el avance manual de ejercicios.
-                  </DialogDescription>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeSynthesisModal}
-                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                  aria-label="Cerrar sintesis"
-                  title="Cerrar"
-                >
-                  <X className="h-7 w-7" />
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 text-sm sm:text-base">
+          <DialogHeader className="border-b border-border bg-card px-6 py-3 text-left sm:px-8">
+            <div className="flex items-center gap-4">
+              <div className="flex min-w-0 flex-1 items-center gap-3 text-sm sm:text-base">
                 <Button
                   type="button"
                   variant="ghost"
                   onClick={handleSynthesisPreviousSubject}
-                  className="h-9 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                  className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
                 >
-                  {"< Otra materia"}
+                  {"<"}
                 </Button>
-                <p className="min-w-0 flex-1 text-left text-[1.05rem] font-medium text-foreground sm:text-[1.35rem]">
+                <p className="min-w-0 flex-1 text-left text-[1rem] font-medium text-foreground sm:text-[1.15rem]">
                   {synthesisHeaderLabel || "Sintesis"}
                 </p>
                 <Button
@@ -4541,11 +4522,20 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   variant="ghost"
                   onClick={handleSynthesisNextSubject}
                   disabled={synthesisSubjectIndex < 0 || synthesisSubjectIndex >= synthesisSubjects.length - 1}
-                  className="h-9 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground disabled:opacity-35"
+                  className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground disabled:opacity-35"
                 >
-                  {"Otra materia >"}
+                  {">"}
                 </Button>
               </div>
+              <button
+                type="button"
+                onClick={closeSynthesisModal}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                aria-label="Cerrar sintesis"
+                title="Cerrar"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
           </DialogHeader>
 
@@ -4578,9 +4568,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios`}
                         </p>
 
-                        {synthesisAllMaterials.length > 0 ? (
+                        {synthesisExerciseMaterials.length > 0 ? (
                           <div className="space-y-3">
-                            {synthesisAllMaterials.map((material) => {
+                            {synthesisExerciseMaterials.map((material) => {
                               const draft = synthesisSelectedState?.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
                               const solvedCount = getSynthesisDraftNumber(draft.exerciseSolvedCount)
                               const totalCount = getSynthesisDraftNumber(draft.exerciseTotalCount)
@@ -4619,7 +4609,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             })}
                           </div>
                         ) : (
-                          <p className="text-sm text-muted-foreground">No hay archivos cargados para esta materia en esta semana.</p>
+                          <p className="text-sm text-muted-foreground">No hay archivos de practica cargados para esta materia en esta semana.</p>
                         )}
 
                         {!hasSynthesisPerMaterialProgress && synthesisSelectedState?.legacySummary.exerciseSkippedText?.trim() ? (
