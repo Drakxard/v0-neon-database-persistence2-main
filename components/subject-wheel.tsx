@@ -690,6 +690,45 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     isPracticeOpen && practiceLaunchView === "theory" && practiceSubjectId
       ? getSubjectById(practiceSubjectId, visibleSubjects)
       : null
+
+  // AI modal state
+  const [isAiOpen, setIsAiOpen] = useState(false)
+  const [aiPrompt, setAiPrompt] = useState("")
+  const [aiResponse, setAiResponse] = useState("")
+  const [isAiLoading, setIsAiLoading] = useState(false)
+  const [aiSent, setAiSent] = useState(false)
+  const aiResponseRef = useRef<HTMLDivElement>(null)
+  // Panoramas indexed by subject id for the AI context
+  const [panoramaMap, setPanoramaMap] = useState<Record<string, string>>({})
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordingChunksRef = useRef<Blob[]>([])
+  const audioPairDraftRef = useRef<AudioPairDraft | null>(null)
+  const recordingPairRoleRef = useRef<PairRole | null>(null)
+  const audioCacheRef = useRef<Map<number, string>>(new Map())
+  const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
+  const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
+  const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
+  const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
+  const shortcutLongPressTimerRef = useRef<number | null>(null)
+  const shouldSuppressShortcutClickRef = useRef(false)
+  const subjectDayDataRequestIdRef = useRef(0)
+  const todayKey = getTodayDateString()
+  const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
+  const homeSelectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
+  const homeSelectedWeekNumber = useMemo(() => getWeekNumberForDate(homeSelectedDate), [homeSelectedDate])
+  const homeSelectedWeekNumberRef = useRef(homeSelectedWeekNumber)
+  const dialogSelectedDate = useMemo(() => parseDateKey(dialogDateKey), [dialogDateKey])
+  const dialogSelectedWeekNumber = useMemo(() => getWeekNumberForDate(dialogSelectedDate), [dialogSelectedDate])
+  const dialogWeekDates = useMemo(() => getWeekDates(dialogSelectedWeekNumber), [dialogSelectedWeekNumber])
+  const currentCalendarWeekRef = useRef(currentCalendarWeek)
+  const previousCalendarWeekRef = useRef(currentCalendarWeek)
+  const subjectDialogDateKey = subjectViewDateOverride ?? dialogDateKey
+  const subjectDialogDayIndex = dialogWeekDates.findIndex((date) => formatDateKey(date) === subjectDialogDateKey)
+  const lastVisibleDayIndex = dialogWeekDates.reduce((lastIndex, date, index) => {
+    return formatDateKey(date) <= todayKey ? index : lastIndex
+  }, -1)
+  const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
   const {
     reviewEntries,
     isLoadingReview,
@@ -740,45 +779,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setHistoryIndex(-1)
     },
   })
-
-  // AI modal state
-  const [isAiOpen, setIsAiOpen] = useState(false)
-  const [aiPrompt, setAiPrompt] = useState("")
-  const [aiResponse, setAiResponse] = useState("")
-  const [isAiLoading, setIsAiLoading] = useState(false)
-  const [aiSent, setAiSent] = useState(false)
-  const aiResponseRef = useRef<HTMLDivElement>(null)
-  // Panoramas indexed by subject id for the AI context
-  const [panoramaMap, setPanoramaMap] = useState<Record<string, string>>({})
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const mediaStreamRef = useRef<MediaStream | null>(null)
-  const recordingChunksRef = useRef<Blob[]>([])
-  const audioPairDraftRef = useRef<AudioPairDraft | null>(null)
-  const recordingPairRoleRef = useRef<PairRole | null>(null)
-  const audioCacheRef = useRef<Map<number, string>>(new Map())
-  const audioElementRefs = useRef<Record<number, HTMLAudioElement | null>>({})
-  const pendingMaterialCheckupTimersRef = useRef<Map<number, number>>(new Map())
-  const pendingFeaturedUpdateRef = useRef<PendingFeaturedUpdate | null>(null)
-  const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
-  const shortcutLongPressTimerRef = useRef<number | null>(null)
-  const shouldSuppressShortcutClickRef = useRef(false)
-  const subjectDayDataRequestIdRef = useRef(0)
-  const todayKey = getTodayDateString()
-  const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
-  const homeSelectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
-  const homeSelectedWeekNumber = useMemo(() => getWeekNumberForDate(homeSelectedDate), [homeSelectedDate])
-  const homeSelectedWeekNumberRef = useRef(homeSelectedWeekNumber)
-  const dialogSelectedDate = useMemo(() => parseDateKey(dialogDateKey), [dialogDateKey])
-  const dialogSelectedWeekNumber = useMemo(() => getWeekNumberForDate(dialogSelectedDate), [dialogSelectedDate])
-  const dialogWeekDates = useMemo(() => getWeekDates(dialogSelectedWeekNumber), [dialogSelectedWeekNumber])
-  const currentCalendarWeekRef = useRef(currentCalendarWeek)
-  const previousCalendarWeekRef = useRef(currentCalendarWeek)
-  const subjectDialogDateKey = subjectViewDateOverride ?? dialogDateKey
-  const subjectDialogDayIndex = dialogWeekDates.findIndex((date) => formatDateKey(date) === subjectDialogDateKey)
-  const lastVisibleDayIndex = dialogWeekDates.reduce((lastIndex, date, index) => {
-    return formatDateKey(date) <= todayKey ? index : lastIndex
-  }, -1)
-  const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
 
   // Load the persisted session for the currently selected date.
   useEffect(() => {
