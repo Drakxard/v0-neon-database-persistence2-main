@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
+import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 
 type MaterialContext = {
@@ -84,13 +85,6 @@ function getRecorderMimeType() {
   return mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || ""
 }
 
-function getErrorMessage(payload: unknown, fallback: string) {
-  if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
-    return payload.error
-  }
-  return fallback
-}
-
 function generatePairId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
@@ -125,31 +119,6 @@ function buildPairAnchors(anchor: PendingAnchor) {
       yp: anchor.yp,
     },
   } satisfies Record<PairRole, PendingAnchor>
-}
-
-async function readResponsePayload(response: Response) {
-  const contentType = response.headers.get("content-type") || ""
-
-  if (contentType.includes("application/json")) {
-    return response.json()
-  }
-
-  const text = await response.text()
-  if (!text) return null
-
-  try {
-    return JSON.parse(text)
-  } catch {
-    return { error: text }
-  }
-}
-
-async function requireOkJson(response: Response, fallback: string) {
-  const payload = await readResponsePayload(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, fallback))
-  }
-  return payload
 }
 
 function buildViewerSrc({
@@ -562,41 +531,17 @@ export function PracticeViewerClient({
         const safeFileName = rawFileName.trim() || `fragmento-${activeContext.sessionDate}.pdf`
         const fileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
 
-        const sessionResponse = await fetch("/api/subject-day-materials/upload-session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        await uploadSubjectDayMaterial(
+          {
             subjectId: activeContext.subjectId,
             subjectName: activeContext.subjectName,
             sessionDate: activeContext.sessionDate,
             weekNumber: activeContext.weekNumber,
             materialType: draftMaterialType,
-            mimeType: "application/pdf",
-            fileName,
-          }),
-        })
-        const sessionPayload = (await requireOkJson(
-          sessionResponse,
-          "No se pudo preparar la subida del PDF fragmentado."
-        )) as DriveUploadSessionResponse
-
-        const { driveFileId } = await uploadBlobToStorage(sessionPayload, payload.blob)
-        const persistedFileName = fileName.trim()
-
-        await requireOkJson(
-          await fetch("/api/subject-day-materials/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subjectId: activeContext.subjectId,
-              sessionDate: activeContext.sessionDate,
-              weekNumber: activeContext.weekNumber,
-              materialType: draftMaterialType,
-              driveFileId,
-              fileName: persistedFileName,
-            }),
-          }),
-          "No se pudo confirmar el PDF fragmentado."
+          },
+          payload.blob,
+          fileName,
+          "application/pdf"
         )
 
         setUploadFeedback(`PDF creado: ${fileName}`)

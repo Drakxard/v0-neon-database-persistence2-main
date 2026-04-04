@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless'
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { normalizeAllowedSubjectIds } from "@/lib/subjects"
+import { parseDateKey } from "@/lib/server/request-parsing"
 
 const sql = neon(process.env.DATABASE_URL!)
 
@@ -10,7 +11,7 @@ export async function GET(request: Request) {
     if (auth.response) return auth.response
 
     const { searchParams } = new URL(request.url)
-    const date = searchParams.get('date')
+    const date = parseDateKey(searchParams.get('date'))
 
     if (!date) {
       return Response.json({ error: 'Missing date parameter' }, { status: 400 })
@@ -68,7 +69,8 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Empty request body' }, { status: 400 })
     }
 
-    const { date, activeSubjectIds, completedSubjects, showAllSubjects } = JSON.parse(rawBody)
+    const { date: rawDate, activeSubjectIds, completedSubjects, showAllSubjects } = JSON.parse(rawBody)
+    const date = parseDateKey(rawDate)
 
     if (!date || !Array.isArray(activeSubjectIds)) {
       return Response.json({ error: 'Invalid request data' }, { status: 400 })

@@ -1,6 +1,7 @@
 "use client"
 
 import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { requireOkJson } from "@/lib/client/api"
 
 type PracticeEntryBaseParams = {
   subjectId: string
@@ -21,44 +22,6 @@ type PracticeAudioEntryParams = PracticeEntryBaseParams & {
 type PracticeTextEntryParams = PracticeEntryBaseParams & {
   transcriptText: string
   answerText?: string
-}
-
-function getErrorMessage(payload: unknown, fallback: string) {
-  if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
-    return payload.error
-  }
-
-  if (typeof payload === "string" && payload.trim().length > 0) {
-    return payload
-  }
-
-  return fallback
-}
-
-async function readResponsePayload(response: Response) {
-  const contentType = response.headers.get("content-type") || ""
-
-  if (contentType.includes("application/json")) {
-    return response.json()
-  }
-
-  const text = await response.text()
-  if (!text) return null
-
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
-}
-
-async function requireOkJson(response: Response, fallback: string) {
-  const payload = await readResponsePayload(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, fallback))
-  }
-
-  return payload
 }
 
 export async function createPracticeAudioEntry<TEntry = unknown>({

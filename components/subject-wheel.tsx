@@ -12,11 +12,27 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { useDailySessionState } from "@/hooks/use-daily-session-state"
+import { useMaterialUploads } from "@/hooks/use-material-uploads"
+import { useMobileReviewOverview } from "@/hooks/use-mobile-review-overview"
+import { useSubjectEntries } from "@/hooks/use-subject-entries"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
-import { uploadBlobToStorage, type DriveUploadSessionResponse } from "@/lib/client-storage-upload"
+import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
+import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
+import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
+import type {
+  PendingSubjectDayMaterial,
+  SubjectDayEntry,
+  SubjectDayEntryLink,
+  SubjectDayMaterial,
+  SubjectDayMaterialType,
+  SubjectShortcutKey,
+  SubjectShortcuts,
+  VectorOverview,
+} from "@/lib/study-types"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
 
@@ -51,88 +67,6 @@ interface QuestionDraft {
   respuesta: string
 }
 
-interface SubjectDayEntryLink {
-  id: number
-  label: string
-  url: string
-}
-
-interface SubjectDayEntry {
-  id: number
-  subject_day_material_id: number | null
-  subject_id: string
-  week_number: number
-  session_date: string
-  weekday_index: number
-  order_index: number
-  transcript_text: string
-  drive_file_id: string
-  drive_file_name: string
-  drive_mime_type: string
-  drive_web_view_link: string
-  answer_text: string | null
-  custom_title: string | null
-  display_title: string
-  practice_state: "erre" | null
-  pair_id: string | null
-  pair_role: "question" | "answer" | null
-  is_featured: boolean
-  external_links: SubjectDayEntryLink[]
-  created_at: string
-  updated_at: string
-}
-
-type SubjectDayMaterialType = "theory" | "practice"
-
-interface SubjectDayMaterial {
-  id: number
-  subject_id: string
-  week_number: number
-  session_date: string
-  weekday_index: number
-  material_type: SubjectDayMaterialType
-  order_index: number
-  file_name: string
-  drive_file_id: string
-  drive_mime_type: string
-  drive_web_view_link: string
-  is_checkup_done: boolean
-  created_at: string
-  updated_at: string
-}
-
-interface PendingSubjectDayMaterial extends SubjectDayMaterial {
-  is_pending_upload: true
-}
-
-type PracticeCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
-
-type VectorOverview = {
-  subjectId: string
-  subjectName: string
-  weekNumber: number
-  startDate: string | null
-  currentDay: number | null
-  endDate: string | null
-  isActive: boolean
-  relevantPracticeMaterialIds: number[]
-  coveredPracticeMaterialIds: number[]
-  totalPracticeMaterialIds: number[]
-  staleReason: string[]
-  severity: "green" | "yellow" | "red"
-  stateLabel: string
-  lastInteractionAt: string | null
-  practiceMaterials: Array<{
-    id: number
-    fileName: string
-    sessionDate: string
-    status: PracticeCoverageStatus
-    isCheckupDone: boolean
-    pairCount: number
-    entryCount: number
-  }>
-}
-
 type AnalysisSubjectCard = {
   subjectId: string
   subjectName: string
@@ -145,14 +79,6 @@ type AnalysisSubjectCard = {
   totalCount: number
   lastInteractionAt: string | null
   staleReason: string[]
-}
-
-type SubjectShortcutKey = "e_fich" | "figma"
-
-type SubjectShortcuts = {
-  subjectId: string
-  eFich: string | null
-  figma: string | null
 }
 
 function buildMaterialDraftViewerHref(params: {
@@ -418,7 +344,6 @@ function normalizeSubjectsForDay(completedIds: string[], date: Date, showAllSubj
   return { activeSubjects, completedSubjects }
 }
 
-type SaveStatus = "idle" | "saving" | "saved" | "error"
 type PracticeFilters = {
   random: boolean
   unanswered: boolean
@@ -435,26 +360,6 @@ function shuffleQuestions<T>(items: T[]): T[] {
   return shuffled
 }
 
-async function parseJsonResponse(response: Response) {
-  const text = await response.text()
-  if (!text) return null
-
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
-  }
-}
-
-async function requireOkJson(response: Response, fallback: string) {
-  const payload = await parseJsonResponse(response)
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload, fallback))
-  }
-
-  return payload
-}
-
 function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
   const materialMap = new Map<string, SubjectDayMaterial>()
 
@@ -465,26 +370,6 @@ function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
   }
 
   return sortSubjectDayMaterials(Array.from(materialMap.values()))
-}
-
-function getErrorMessage(payload: unknown, fallback: string) {
-  if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
-    return payload.error
-  }
-
-  if (typeof payload === "string" && payload.trim().length > 0) {
-    return payload
-  }
-
-  return fallback
-}
-
-function getEmptySubjectShortcuts(subjectId = ""): SubjectShortcuts {
-  return {
-    subjectId,
-    eFich: null,
-    figma: null,
-  }
 }
 
 function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcutKey) {
@@ -687,14 +572,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
-  const [isLoading, setIsLoading] = useState(true)
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle")
   const { theme, setTheme } = useTheme()
   const [themeMenuMounted, setThemeMenuMounted] = useState(false)
-
-  // This ref is only flipped to true AFTER the initial load sets state,
-  // so the sync useEffect never fires on the first render with stale default state.
-  const readyToSync = useRef(false)
 
   useEffect(() => {
     setThemeMenuMounted(true)
@@ -748,18 +627,15 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [subjectViewDateOverride, setSubjectViewDateOverride] = useState<string | null>(null)
   const [dialogShowAllSubjectsForDay, setDialogShowAllSubjectsForDay] = useState(false)
   const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
-  const [isUploadingMaterialType, setIsUploadingMaterialType] = useState<SubjectDayMaterialType | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
   const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
   const [isSavingLink, setIsSavingLink] = useState(false)
-  const [subjectShortcuts, setSubjectShortcuts] = useState<SubjectShortcuts>(() => getEmptySubjectShortcuts())
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false)
   const [shortcutDraft, setShortcutDraft] = useState("")
   const [shortcutDialogKey, setShortcutDialogKey] = useState<SubjectShortcutKey | null>(null)
   const [shortcutDialogMode, setShortcutDialogMode] = useState<"create" | "edit">("create")
-  const [isSubjectShortcutsLoading, setIsSubjectShortcutsLoading] = useState(false)
   const [isSavingShortcut, setIsSavingShortcut] = useState(false)
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
@@ -777,13 +653,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [practiceSubjectId, setPracticeSubjectId] = useState<string>("")
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
   const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
-  const [practiceEntries, setPracticeEntries] = useState<SubjectDayEntry[]>([])
   const [practiceVisibleEntries, setPracticeVisibleEntries] = useState<SubjectDayEntry[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
   const [isPracticeFinished, setIsPracticeFinished] = useState(false)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false)
-  const [isLoadingPractice, setIsLoadingPractice] = useState(false)
-  const [practiceLoadError, setPracticeLoadError] = useState("")
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false)
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
@@ -805,14 +678,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   } | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
   const [reviewSubjectId, setReviewSubjectId] = useState("")
-  const [reviewEntries, setReviewEntries] = useState<SubjectDayEntry[]>([])
-  const [isLoadingReview, setIsLoadingReview] = useState(false)
-  const [reviewError, setReviewError] = useState("")
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(false)
-  const [currentSubjectDialogVectorOverview, setCurrentSubjectDialogVectorOverview] = useState<VectorOverview | null>(null)
-  const [vectorOverviews, setVectorOverviews] = useState<VectorOverview[]>([])
-  const [isVectorsLoading, setIsVectorsLoading] = useState(false)
-  const [vectorsError, setVectorsError] = useState("")
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
   const activeShortcutSubject = isDialogOpen && currentSubject
@@ -824,6 +690,56 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     isPracticeOpen && practiceLaunchView === "theory" && practiceSubjectId
       ? getSubjectById(practiceSubjectId, visibleSubjects)
       : null
+  const {
+    reviewEntries,
+    isLoadingReview,
+    reviewError,
+    practiceEntries,
+    isLoadingPractice,
+    practiceLoadError,
+    subjectShortcuts,
+    isSubjectShortcutsLoading,
+    setReviewError,
+    setPracticeLoadError,
+    setPracticeEntries,
+    setSubjectShortcuts,
+    loadReviewEntries: loadSubjectReviewEntries,
+    loadPracticeEntries: loadSubjectPracticeEntries,
+    loadSubjectShortcuts: loadSubjectShortcutsData,
+    saveSubjectShortcut: persistSubjectShortcut,
+  } = useSubjectEntries()
+  const { isUploadingMaterialType, uploadMaterials } = useMaterialUploads()
+  const analysisOverview = useMobileReviewOverview({
+    enabled: isAnalysisOpen,
+    weekNumber: homeSelectedWeekNumber,
+    dateKey: currentDateKey,
+    logPrefix: "analysis overview",
+  })
+  const currentSubjectOverviewLoad = useMobileReviewOverview({
+    enabled: Boolean(isDialogOpen && currentSubject),
+    weekNumber: dialogSelectedWeekNumber,
+    dateKey: subjectDialogDateKey,
+    subjectId: currentSubject?.id ?? null,
+    logPrefix: "current subject vector overview",
+  })
+  const { isLoading, saveStatus } = useDailySessionState({
+    currentDateKey,
+    homeSelectedDate,
+    visibleSubjects,
+    activeSubjects,
+    allCompletedSubjectIds,
+    showAllSubjectsForDay,
+    setShowAllSubjectsForDay,
+    setAllCompletedSubjectIds,
+    setActiveSubjects,
+    setCompletedSubjects,
+    getDisplaySubjectsForDate,
+    normalizeSubjectsForDay,
+    onLoaded: () => {
+      setHistory([])
+      setHistoryIndex(-1)
+    },
+  })
 
   // AI modal state
   const [isAiOpen, setIsAiOpen] = useState(false)
@@ -846,7 +762,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const shortcutLongPressTimerRef = useRef<number | null>(null)
   const shouldSuppressShortcutClickRef = useRef(false)
-  const subjectShortcutsRequestIdRef = useRef(0)
   const subjectDayDataRequestIdRef = useRef(0)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
@@ -882,82 +797,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     homeSelectedWeekNumberRef.current = homeSelectedWeekNumber
   }, [homeSelectedWeekNumber])
 
-  useEffect(() => {
-    if (!isAnalysisOpen) return
-
-    let cancelled = false
-
-    const loadVectorOverviews = async () => {
-      setIsVectorsLoading(true)
-      setVectorsError("")
-
-      try {
-        const response = await fetch(`/api/mobile/review/overview?weekNumber=${homeSelectedWeekNumber}&date=${currentDateKey}&includeInactive=true`)
-        const payload = (await response.json()) as { vectors?: VectorOverview[]; error?: string }
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload, "No se pudo cargar la cobertura semanal."))
-        }
-        if (!cancelled) {
-          setVectorOverviews(Array.isArray(payload.vectors) ? payload.vectors : [])
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setVectorsError(error instanceof Error ? error.message : "No se pudo cargar la cobertura semanal.")
-          setVectorOverviews([])
-        }
-      } finally {
-        if (!cancelled) {
-          setIsVectorsLoading(false)
-        }
-      }
-    }
-
-    void loadVectorOverviews()
-
-    return () => {
-      cancelled = true
-    }
-  }, [currentDateKey, homeSelectedWeekNumber, isAnalysisOpen])
-
-  useEffect(() => {
-    if (!isDialogOpen || !currentSubject) {
-      setCurrentSubjectDialogVectorOverview(null)
-      return
-    }
-
-    let cancelled = false
-    setCurrentSubjectDialogVectorOverview(null)
-
-    const loadCurrentSubjectVectorOverview = async () => {
-      try {
-        const response = await fetch(
-          `/api/mobile/review/overview?weekNumber=${dialogSelectedWeekNumber}&date=${subjectDialogDateKey}&includeInactive=true`
-        )
-        const payload = (await response.json()) as { vectors?: VectorOverview[]; error?: string }
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload, "No se pudo cargar el vector de teoria."))
-        }
-
-        if (!cancelled) {
-          const matchedVector = Array.isArray(payload.vectors)
-            ? payload.vectors.find((vector) => vector.subjectId === currentSubject.id) ?? null
-            : null
-          setCurrentSubjectDialogVectorOverview(matchedVector)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to load current subject vector overview:", error)
-          setCurrentSubjectDialogVectorOverview(null)
-        }
-      }
-    }
-
-    void loadCurrentSubjectVectorOverview()
-
-    return () => {
-      cancelled = true
-    }
-  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, subjectDialogDateKey])
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -971,49 +810,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     previousCalendarWeekRef.current = currentCalendarWeek
   }, [currentCalendarWeek, homeSelectedWeekNumber, todayKey])
 
-  useEffect(() => {
-    const loadFromDatabase = async () => {
-      readyToSync.current = false
-
-      try {
-        const response = await fetch(`/api/sessions?date=${currentDateKey}`)
-        if (!response.ok) throw new Error("Failed to fetch session")
-        const session = await response.json()
-
-        if (session && Array.isArray(session.active_subject_ids)) {
-          const completedSubjectsData = session.completed_subjects || {}
-          const completedIds = Object.keys(completedSubjectsData)
-          const nextShowAllSubjects = Boolean(session.show_all_subjects)
-          const normalized = normalizeSubjectsForDay(completedIds, homeSelectedDate, nextShowAllSubjects, visibleSubjects)
-          setShowAllSubjectsForDay(nextShowAllSubjects)
-          setAllCompletedSubjectIds(completedIds)
-          setActiveSubjects(normalized.activeSubjects)
-          setCompletedSubjects(normalized.completedSubjects)
-        } else {
-          setShowAllSubjectsForDay(false)
-          setAllCompletedSubjectIds([])
-          setActiveSubjects(getDisplaySubjectsForDate(homeSelectedDate, false, visibleSubjects))
-          setCompletedSubjects([])
-        }
-      } catch (error) {
-        console.error("Failed to load from database:", error)
-        setShowAllSubjectsForDay(false)
-        setAllCompletedSubjectIds([])
-        setActiveSubjects(getDisplaySubjectsForDate(homeSelectedDate, false, visibleSubjects))
-        setCompletedSubjects([])
-      } finally {
-        setHistory([])
-        setHistoryIndex(-1)
-        setIsLoading(false)
-        // Only allow syncing AFTER the loaded state has been applied
-        setTimeout(() => {
-          readyToSync.current = true
-        }, 0)
-      }
-    }
-
-    loadFromDatabase()
-  }, [currentDateKey, homeSelectedDate, visibleSubjects])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -1031,46 +827,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setExampleLinkDraft(currentQuestion?.example_link || "")
   }, [practiceSubjectIndex, currentPracticeIndex, currentPracticeQuestionId])
 
-  // Sync to database whenever state changes — but only after initial load
-  useEffect(() => {
-    if (!readyToSync.current) return
-
-    const syncToDatabase = async () => {
-      setSaveStatus("saving")
-      try {
-        const activeIds = subjectsToIds(activeSubjects)
-        const completedObj = allCompletedSubjectIds.reduce(
-          (acc, subject) => {
-            acc[subject] = true
-            return acc
-          },
-          {} as Record<string, boolean>
-        )
-
-        const res = await fetch("/api/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            date: currentDateKey,
-            activeSubjectIds: activeIds,
-            completedSubjects: completedObj,
-            showAllSubjects: showAllSubjectsForDay,
-          }),
-        })
-
-        if (!res.ok) throw new Error("Save failed")
-        setSaveStatus("saved")
-        // Reset to idle after 2 seconds
-        setTimeout(() => setSaveStatus("idle"), 2000)
-      } catch (error) {
-        console.error("Failed to sync to database:", error)
-        setSaveStatus("error")
-        setTimeout(() => setSaveStatus("idle"), 3000)
-      }
-    }
-
-    syncToDatabase()
-  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, showAllSubjectsForDay])
 
   // Load persisted AI prompt on mount
   useEffect(() => {
@@ -1526,7 +1282,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const resetSubjectUiState = () => {
     subjectDayDataRequestIdRef.current += 1
-    subjectShortcutsRequestIdRef.current += 1
     clearPendingFeaturedSave()
     pendingFeaturedUpdateRef.current = null
     if (shortcutLongPressTimerRef.current !== null) {
@@ -1559,7 +1314,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setShortcutDraft("")
     setShortcutDialogKey(null)
     setShortcutDialogMode("create")
-    setIsSubjectShortcutsLoading(false)
     setIsSavingShortcut(false)
     setPracticeSectionView("theory")
     setExerciseWeeklyScopeEnabled(false)
@@ -1567,7 +1321,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setSubjectViewDateOverride(null)
     setDialogShowAllSubjectsForDay(showAllSubjectsForDay)
     setSelectedPracticeMaterialId(null)
-    setIsUploadingMaterialType(null)
     setIsLinkDialogOpen(false)
     setLinkEntryId(null)
     setLinkDraft({ label: "", url: "" })
@@ -2645,42 +2398,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const loadSubjectShortcuts = useCallback(async (subjectId: string) => {
-    const requestId = subjectShortcutsRequestIdRef.current + 1
-    subjectShortcutsRequestIdRef.current = requestId
-    setIsSubjectShortcutsLoading(true)
-
     try {
-      const response = await fetch(`/api/subject-shortcuts?${new URLSearchParams({ subjectId }).toString()}`, {
-        cache: "no-store",
-      })
-      const payload = await parseJsonResponse(response)
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudieron cargar los accesos directos de la materia."))
-      }
-
-      if (requestId !== subjectShortcutsRequestIdRef.current) return
-
-      setSubjectShortcuts({
-        subjectId,
-        eFich:
-          payload && typeof payload === "object" && "eFich" in payload && typeof payload.eFich === "string"
-            ? payload.eFich
-            : null,
-        figma:
-          payload && typeof payload === "object" && "figma" in payload && typeof payload.figma === "string"
-            ? payload.figma
-            : null,
-      })
+      await loadSubjectShortcutsData(subjectId)
     } catch (error) {
-      console.error("Failed to load subject shortcuts:", error)
-      if (requestId !== subjectShortcutsRequestIdRef.current) return
       setSubjectShortcuts(getEmptySubjectShortcuts(subjectId))
       setEntriesError(error instanceof Error ? error.message : "No se pudieron cargar los accesos directos de la materia.")
-    } finally {
-      if (requestId !== subjectShortcutsRequestIdRef.current) return
-      setIsSubjectShortcutsLoading(false)
     }
-  }, [])
+  }, [loadSubjectShortcutsData, setSubjectShortcuts])
 
   useEffect(() => {
     if (isDialogOpen && currentSubject) {
@@ -2713,31 +2437,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     setIsSavingShortcut(true)
     try {
-      const response = await fetch("/api/subject-shortcuts", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          subjectId,
-          shortcutKey: shortcutDialogKey,
-          url: shortcutDraft.trim(),
-        }),
-      })
-
-      const payload = await parseJsonResponse(response)
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudo guardar el acceso directo."))
-      }
-
-      setSubjectShortcuts({
+      await persistSubjectShortcut({
         subjectId,
-        eFich:
-          payload && typeof payload === "object" && "eFich" in payload && typeof payload.eFich === "string"
-            ? payload.eFich
-            : null,
-        figma:
-          payload && typeof payload === "object" && "figma" in payload && typeof payload.figma === "string"
-            ? payload.figma
-            : null,
+        shortcutKey: shortcutDialogKey,
+        url: shortcutDraft.trim(),
       })
       closeShortcutDialog()
     } catch (error) {
@@ -2806,99 +2509,50 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const weekNumber = dialogSelectedWeekNumber
     const sessionDate = subjectDialogDateKey
     const weekdayIndex = subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0
-    const baseOrderIndex =
-      (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
-      pendingMaterials.filter((material) => material.material_type === materialType).length
-
-    const pendingUploadBatch = validFiles.map((file, index) => {
-      const tempId = -(Date.now() + index + 1)
-
-      return {
-        tempId,
-        file,
-        pendingMaterial: {
-          id: tempId,
-          subject_id: subjectId,
-          week_number: weekNumber,
-          session_date: sessionDate,
-          weekday_index: weekdayIndex,
-          material_type: materialType,
-          order_index: baseOrderIndex + index + 1,
-          file_name: file.name,
-          drive_file_id: "",
-          drive_mime_type: "application/pdf",
-          drive_web_view_link: "",
-          is_checkup_done: false,
-          created_at: "",
-          updated_at: "",
-          is_pending_upload: true as const,
-        } satisfies PendingSubjectDayMaterial,
-      }
-    })
 
     setEntriesError("")
-    setIsUploadingMaterialType(materialType)
-    setPendingMaterials((previousMaterials) => [
-      ...previousMaterials,
-      ...pendingUploadBatch.map((item) => item.pendingMaterial),
-    ])
+    const failedUploads = await uploadMaterials({
+      subjectId,
+      subjectName,
+      sessionDate,
+      weekNumber,
+      materialType,
+      files: validFiles,
+      buildPendingMaterials: (uploadFiles) => {
+        const baseOrderIndex =
+          (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
+          pendingMaterials.filter((material) => material.material_type === materialType).length
 
-    const failedUploads: string[] = []
-
-    try {
-      for (const item of pendingUploadBatch) {
-        try {
-          const sessionResponse = await fetch("/api/subject-day-materials/upload-session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subjectId,
-              subjectName,
-              sessionDate,
-              weekNumber,
-              materialType,
-              fileName: item.file.name,
-              mimeType: item.file.type || "application/pdf",
-            }),
-          })
-          const sessionPayload = (await requireOkJson(
-            sessionResponse,
-            `No se pudo preparar la subida de ${item.file.name}.`
-          )) as DriveUploadSessionResponse
-
-          const { driveFileId } = await uploadBlobToStorage(sessionPayload, item.file)
-          const persistedFileName = item.file.name.trim()
-
-          const response = await fetch("/api/subject-day-materials/complete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              subjectId,
-              sessionDate,
-              weekNumber,
-              materialType,
-              driveFileId,
-              fileName: persistedFileName,
-            }),
-          })
-          const payload = await requireOkJson(response, `No se pudo confirmar ${item.file.name}.`)
-
-          setMaterials((previousMaterials) =>
-            mergeSubjectDayMaterials(previousMaterials, [payload as SubjectDayMaterial])
-          )
-        } catch (error) {
-          console.error("Failed to upload subject day material:", error)
-          const message = error instanceof Error ? error.message : "No se pudo subir el PDF."
-          failedUploads.push(`${item.file.name}: ${message}`)
-        } finally {
-          setPendingMaterials((previousMaterials) =>
-            previousMaterials.filter((material) => material.id !== item.tempId)
-          )
-        }
-      }
-    } finally {
-      setIsUploadingMaterialType(null)
-    }
+        return uploadFiles.map((file, index) => {
+          const tempId = -(Date.now() + index + 1)
+          return {
+            tempId,
+            file,
+            pendingMaterial: {
+              id: tempId,
+              subject_id: subjectId,
+              week_number: weekNumber,
+              session_date: sessionDate,
+              weekday_index: weekdayIndex,
+              material_type: materialType,
+              order_index: baseOrderIndex + index + 1,
+              file_name: file.name,
+              drive_file_id: "",
+              drive_mime_type: "application/pdf",
+              drive_web_view_link: "",
+              is_checkup_done: false,
+              created_at: "",
+              updated_at: "",
+              is_pending_upload: true as const,
+            } satisfies PendingSubjectDayMaterial,
+          }
+        })
+      },
+      mergeMaterials: (previousMaterials, incomingMaterials) =>
+        mergeSubjectDayMaterials(previousMaterials, incomingMaterials),
+      setMaterials,
+      setPendingMaterials,
+    })
 
     if (failedUploads.length > 0) {
       setEntriesError(failedUploads.join(" | "))
@@ -3243,97 +2897,34 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const loadReviewEntries = async (subjectId: string) => {
-    setIsLoadingReview(true)
-    setReviewError("")
     setReviewSubjectId(subjectId)
-
-    try {
-      const params = new URLSearchParams({ subjectId })
-      const response = await fetch(`/api/subject-day-entries?${params.toString()}`)
-      const payload = await parseJsonResponse(response)
-      if (!response.ok) {
-        throw new Error(getErrorMessage(payload, "No se pudieron cargar los destacados."))
-      }
-
-      const normalizedEntries = Array.isArray(payload) ? (payload as SubjectDayEntry[]) : []
-      setReviewEntries(
-        normalizedEntries.filter((entry) => entry.is_featured).sort((left, right) => {
-          if (left.week_number !== right.week_number) return left.week_number - right.week_number
-          return left.session_date.localeCompare(right.session_date)
-        })
-      )
-    } catch (error) {
-      console.error("Failed to load review entries:", error)
-      setReviewEntries([])
-      setReviewError(error instanceof Error ? error.message : "No se pudieron cargar los destacados.")
-    } finally {
-      setIsLoadingReview(false)
-    }
+    await loadSubjectReviewEntries(subjectId)
   }
 
   const loadPracticeEntries = async (subjectId: string, weekNumberValue = practiceWeekNumber, filters = practiceFilters) => {
-    const subjectIndex = SUBJECT_ID_TO_INDEX[subjectId]
-    if (subjectIndex === undefined) {
-      setPracticeLoadError("La materia seleccionada no es valida.")
-      setPracticeSubjectId("")
-      setPracticeSubjectIndex(null)
-      setPracticeEntries([])
-      setPracticeVisibleEntries([])
-      return
-    }
-
-    const parsedWeekNumber = Number.parseInt(weekNumberValue, 10)
-    if (Number.isNaN(parsedWeekNumber) || parsedWeekNumber < 0) {
-      setPracticeLoadError("La semana seleccionada no es valida.")
-      setPracticeEntries([])
-      setPracticeVisibleEntries([])
-      return
-    }
-
-    setIsLoadingPractice(true)
-    setPracticeLoadError("")
+    const normalizedWeekNumber = Number.parseInt(weekNumberValue, 10)
     setPracticeSubjectId(subjectId)
-    setPracticeSubjectIndex(subjectIndex)
-    setPracticeWeekNumber(String(parsedWeekNumber))
+    setPracticeWeekNumber(Number.isNaN(normalizedWeekNumber) ? weekNumberValue : String(normalizedWeekNumber))
     setCurrentPracticeIndex(0)
     setIsPracticeFinished(false)
     setIsAnswerRevealed(false)
-    try {
-      const controller = new AbortController()
-      const timeoutId = window.setTimeout(() => controller.abort(), 10000)
-      let res: Response
+    const normalizedEntries = await loadSubjectPracticeEntries({
+      subjectId,
+      weekNumber: weekNumberValue,
+      applyFilters: (entries) => applyPracticeFilters(entries, filters, { shuffle: true }),
+      onResolvedSubject: (subjectIndex) => {
+        setPracticeSubjectIndex(subjectIndex)
+        setPracticeWeekNumber(String(normalizedWeekNumber))
+      },
+      onFailedValidation: () => {
+        setPracticeSubjectId("")
+        setPracticeSubjectIndex(null)
+        setPracticeEntries([])
+        setPracticeVisibleEntries([])
+      },
+    })
 
-      try {
-        const params = new URLSearchParams({
-          subjectId,
-          weekNumber: String(parsedWeekNumber),
-        })
-
-        res = await fetch(`/api/subject-day-entries?${params.toString()}`, {
-          signal: controller.signal,
-        })
-      } finally {
-        window.clearTimeout(timeoutId)
-      }
-
-      const data = await parseJsonResponse(res)
-      if (!res.ok) {
-        throw new Error(getErrorMessage(data, "No se pudieron cargar las dudas de practica."))
-      }
-
-      const normalizedEntries = Array.isArray(data) ? (data as SubjectDayEntry[]) : []
-      setPracticeEntries(normalizedEntries)
-      setPracticeVisibleEntries(applyPracticeFilters(normalizedEntries, filters, { shuffle: true }))
-    } catch (err) {
-      console.error("[v0] Failed to load practice entries:", err)
-      setPracticeEntries([])
-      setPracticeVisibleEntries([])
-      setPracticeLoadError(
-        err instanceof Error ? err.message : "No se pudieron cargar las dudas de practica."
-      )
-    } finally {
-      setIsLoadingPractice(false)
-    }
+    setPracticeVisibleEntries(normalizedEntries)
   }
 
   const togglePracticeFilter = (key: keyof PracticeFilters) => {
@@ -3481,13 +3072,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [entries])
   const vectorOverviewBySubjectId = useMemo(
     () =>
-      vectorOverviews.reduce<Record<string, VectorOverview>>((accumulator, vector) => {
+      analysisOverview.vectors.reduce<Record<string, VectorOverview>>((accumulator, vector) => {
         accumulator[vector.subjectId] = vector
         return accumulator
       }, {}),
-    [vectorOverviews]
+    [analysisOverview.vectors]
   )
-  const currentSubjectOverview = currentSubjectDialogVectorOverview
+  const currentSubjectOverview = currentSubjectOverviewLoad.selectedVector
   const analysisSubjects = useMemo<AnalysisSubjectCard[]>(() => {
     const trackedSubjectIds = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -3916,15 +3507,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setHistoryIndex(-1)
 
       // Delete today's session from database
-      await fetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: currentDateKey,
-          activeSubjectIds: scheduledSubjectIds,
-          completedSubjects: {},
-          showAllSubjects: showAllSubjectsForDay,
-        }),
+      await saveDailySession({
+        date: currentDateKey,
+        activeSubjectIds: scheduledSubjectIds,
+        completedSubjects: {},
+        showAllSubjects: showAllSubjectsForDay,
       })
     } catch (error) {
       console.error("[v0] Failed to reset:", error)
@@ -4312,18 +3899,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </DialogHeader>
 
           <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5 sm:px-6">
-            {isVectorsLoading ? (
+            {analysisOverview.isLoading ? (
               <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Cargando analisis...
               </div>
             ) : null}
 
-            {!isVectorsLoading ? (
+            {!analysisOverview.isLoading ? (
               <>
-                {vectorsError ? <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-sm text-red-700">{vectorsError}</div> : null}
+                {analysisOverview.error ? <div className="rounded-2xl border border-red-300 bg-red-50 px-4 py-4 text-sm text-red-700">{analysisOverview.error}</div> : null}
 
-                {!vectorsError ? (
+                {!analysisOverview.error ? (
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <div className="rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-4">
                       <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Al dia</p>
@@ -4342,13 +3929,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   </div>
                 ) : null}
 
-                {!vectorsError && analysisSubjects.length === 0 ? (
+                {!analysisOverview.error && analysisSubjects.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-6 text-sm text-muted-foreground">
                     No hay materias para mostrar.
                   </div>
                 ) : null}
 
-                {!vectorsError ? (
+                {!analysisOverview.error ? (
                   <div className="grid gap-4 xl:grid-cols-2">
                     {analysisSubjects.map((vector) => (
                       <article

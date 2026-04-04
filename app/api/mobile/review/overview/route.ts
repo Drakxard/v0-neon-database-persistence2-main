@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { requireAuthSession } from "@/lib/authz"
 import { listSubjectSixDayVectors } from "@/lib/audio-coverage"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
+import { parseOptionalNonNegativeInteger, parseRequiredString } from "@/lib/server/request-parsing"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -24,8 +25,8 @@ export async function GET(request: Request) {
     if (auth.response) return auth.response
 
     const { searchParams } = new URL(request.url)
-    const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
-    const dateKey = searchParams.get("date")?.trim() || ""
+    const rawWeekNumber = parseOptionalNonNegativeInteger(searchParams.get("weekNumber"))
+    const dateKey = parseRequiredString(searchParams.get("date"))
     const parsedDate = dateKey ? parseSessionDate(dateKey) : null
 
     if (dateKey && !parsedDate) {

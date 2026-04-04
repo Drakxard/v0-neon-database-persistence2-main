@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { parseRequiredString } from "@/lib/server/request-parsing"
 
 export const runtime = "nodejs"
 
@@ -57,7 +58,7 @@ async function selectSubjectShortcuts(subjectId: string) {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const subjectId = String(searchParams.get("subjectId") || "").trim()
+  const subjectId = parseRequiredString(searchParams.get("subjectId"))
 
   try {
     const auth = await requireAuthSession()
@@ -87,9 +88,9 @@ export async function PUT(request: Request) {
     if (auth.response) return auth.response
 
     const body = await request.json()
-    const subjectId = String(body?.subjectId || "").trim()
+    const subjectId = parseRequiredString(body?.subjectId)
     const shortcutKey = body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" ? body.shortcutKey : null
-    const url = typeof body?.url === "string" ? body.url.trim() : ""
+    const url = parseRequiredString(body?.url)
 
     if (!subjectId) {
       return badRequest("Missing subjectId")
