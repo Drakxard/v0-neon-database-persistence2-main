@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const resolved = await resolveMobileReviewPair({ deviceId, advanceSubject: true })
+    const resolved = await resolveMobileReviewPair({ deviceId, advancePair: true })
     if (!resolved.task) {
       return NextResponse.json({
         task: null,
@@ -37,13 +37,13 @@ export async function POST(request: Request) {
       debugReason: resolved.debugReason,
     })
   } catch (error) {
-    console.error("POST /api/mobile/review/next error:", error)
+    console.error("POST /api/mobile/review/next-pair error:", error)
     if (isMissingMobileReviewDependency(error)) {
       return NextResponse.json(
         { error: "Faltan migraciones de mobile review en Neon (scripts/017 y 018, ademas de 016 para pares)." },
         { status: 503 }
       )
     }
-    return NextResponse.json({ error: "Failed to resolve next review pair" }, { status: 500 })
+    return NextResponse.json({ error: "Failed to resolve next review audio pair" }, { status: 500 })
   }
 }

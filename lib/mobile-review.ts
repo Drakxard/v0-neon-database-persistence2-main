@@ -103,7 +103,7 @@ type PairRow = {
   pair_id: string
   subject_id: string
   week_number: number
-  session_date: string
+  session_date: string | Date
   material_id: number | null
   file_name: string | null
   question_is_featured: boolean
@@ -178,6 +178,10 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
   }
 
   return sessionDate.includes("T") ? sessionDate.slice(0, 10) : sessionDate
+}
+
+function compareSessionDateDesc(left: string | Date, right: string | Date) {
+  return normalizeSessionDateKey(right).localeCompare(normalizeSessionDateKey(left))
 }
 
 function mapSlotRow(row: SlotRow): MobileReviewSlot {
@@ -413,9 +417,10 @@ function resolvePairSelection(params: {
   candidates: PairRow[]
   subjectId: string
   weekNumber: number
-  forceNext: boolean
+  advancePair: boolean
+  allowStoredPair: boolean
 }) {
-  const { state, candidates, subjectId, weekNumber, forceNext } = params
+  const { state, candidates, subjectId, weekNumber, advancePair, allowStoredPair } = params
   if (candidates.length === 0) {
     return {
       selectedRow: null,
@@ -426,17 +431,17 @@ function resolvePairSelection(params: {
   }
 
   const currentStoredIndex =
-    !forceNext && state.current_pair_id && state.current_subject_id === subjectId && state.current_week_number === weekNumber
+    allowStoredPair && state.current_pair_id && state.current_subject_id === subjectId && state.current_week_number === weekNumber
       ? candidates.findIndex((row) => row.pair_id === state.current_pair_id)
       : -1
 
   let selectedIndex = currentStoredIndex
   let debugReason: MobileReviewResolveResult["debugReason"] | undefined
-  if (currentStoredIndex === -1 && state.current_pair_id && !forceNext) {
+  if (currentStoredIndex === -1 && state.current_pair_id && allowStoredPair) {
     debugReason = "stored_pair_not_found"
   }
 
-  if (forceNext) {
+  if (advancePair) {
     const baseIndex = currentStoredIndex >= 0 ? currentStoredIndex : -1
     selectedIndex = (baseIndex + 1 + candidates.length) % candidates.length
   } else if (selectedIndex < 0) {
@@ -505,9 +510,9 @@ function resolveSubjectSelection(params: {
   state: MobileReviewStateRow
   vectors: SubjectSixDayVector[]
   weekNumber: number
-  forceNext: boolean
+  advanceSubject: boolean
 }) {
-  const { state, vectors, weekNumber, forceNext } = params
+  const { state, vectors, weekNumber, advanceSubject } = params
   if (vectors.length === 0) {
     return null
   }
@@ -517,7 +522,7 @@ function resolveSubjectSelection(params: {
       ? vectors.findIndex((vector) => vector.subjectId === state.current_subject_id)
       : -1
 
-  if (forceNext) {
+  if (advanceSubject) {
     const baseIndex = currentIndex >= 0 ? currentIndex : -1
     return vectors[(baseIndex + 1 + vectors.length) % vectors.length] ?? null
   }
@@ -527,14 +532,15 @@ function resolveSubjectSelection(params: {
 
 export async function resolveMobileReviewPair(params: {
   deviceId: string
-  forceNext?: boolean
+  advanceSubject?: boolean
+  advancePair?: boolean
   now?: Date
 }): Promise<MobileReviewResolveResult> {
-  const { deviceId, forceNext = false, now = new Date() } = params
+  const { deviceId, advanceSubject = false, advancePair = false, now = new Date() } = params
   const state = await getOrCreateMobileReviewState(deviceId)
   const weekNumber = getBuenosAiresWeekNumber(now)
   const activeVectors = await listSubjectSixDayVectors({ weekNumber, includeInactive: false, now })
-  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, forceNext })
+  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, advanceSubject })
   if (!selectedVector) {
     return { state, activeSlot: null, task: null, pair: null, totalPairs: 0, currentIndex: 0, debugReason: "no_valid_pairs" }
   }
@@ -560,7 +566,7 @@ export async function resolveMobileReviewPair(params: {
     const leftAbstract = Number(left.material_id == null)
     const rightAbstract = Number(right.material_id == null)
     if (leftAbstract !== rightAbstract) return rightAbstract - leftAbstract
-    return right.session_date.localeCompare(left.session_date)
+    return compareSessionDateDesc(left.session_date, right.session_date)
   })
   const anchorPair = anchorCandidates.length > 0 ? mapPairRow(anchorCandidates[0]) : null
 
@@ -586,15 +592,15 @@ export async function resolveMobileReviewPair(params: {
       fallbackPair: anchorPair,
     })
 
-    const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair: anchorPair })
+    const nextState = await updateMobileReviewStatePair({ state, subjectId, weekNumber, pair: null })
     return {
       state: nextState,
       activeSlot,
       task,
-      pair: anchorPair,
-      totalPairs: anchorPair ? 1 : 0,
-      currentIndex: anchorPair ? 1 : 0,
-      debugReason: anchorPair ? undefined : "no_valid_pairs",
+      pair: null,
+      totalPairs: 0,
+      currentIndex: 0,
+      debugReason: "no_valid_pairs",
     }
   }
 
@@ -609,7 +615,8 @@ export async function resolveMobileReviewPair(params: {
       candidates: materialCandidates,
       subjectId,
       weekNumber,
-      forceNext,
+      advancePair,
+      allowStoredPair: !advanceSubject,
     })
     const pair = selection.selectedRow ? mapPairRow(selection.selectedRow) : null
     const task = buildTask({
@@ -764,7 +771,7 @@ export async function getMobileReviewStatus(deviceId: string, now = new Date()) 
   const state = await getOrCreateMobileReviewState(deviceId)
   const weekNumber = getBuenosAiresWeekNumber(now)
   const activeVectors = await listSubjectSixDayVectors({ weekNumber, includeInactive: false, now })
-  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, forceNext: false })
+  const selectedVector = resolveSubjectSelection({ state, vectors: activeVectors, weekNumber, advanceSubject: false })
   const subject = selectedVector ? getSubjectById(selectedVector.subjectId) : null
 
   return {

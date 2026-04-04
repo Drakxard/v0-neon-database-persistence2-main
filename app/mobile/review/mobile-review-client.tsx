@@ -224,16 +224,21 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const ratedTaskKeyRef = useRef("")
 
   const activeTask = payload?.task ?? null
-  const activePair = activeTask?.pair ?? activeTask?.fallbackPair ?? null
+  const activePair = activeTask?.pair ?? null
   const subjectTitle = activeTask?.subjectName || payload?.status.subjectName || "Sin materia"
   const pairCounter = `${payload?.currentIndex ?? 0}/${payload?.totalPairs ?? 0}`
   const activeTaskKey = activeTask
-    ? `${activeTask.kind}:${activeTask.subjectId}:${activeTask.material?.id ?? "none"}:${activeTask.pair?.pairId ?? activeTask.fallbackPair?.pairId ?? "none"}:${activeTask.vectorDay ?? 0}`
+    ? `${activeTask.kind}:${activeTask.subjectId}:${activeTask.material?.id ?? "none"}:${activeTask.pair?.pairId ?? "none"}:${activeTask.vectorDay ?? 0}`
     : ""
   const emptyStateMessage =
     payload?.debugReason === "no_active_slot"
       ? "No hay una materia activa en este momento."
       : activeTask?.instruction || "No hay materias activas para esta semana."
+  const noPairMessage = activeTask
+    ? activeTask.kind === "coverage_gap"
+      ? "No hay dupla/audio disponible para esta materia todavia."
+      : "No hay dupla/audio reproducible para esta materia."
+    : emptyStateMessage
 
   useEffect(() => {
     if (!requiresAccess) return
@@ -264,7 +269,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
           subjectId: task.subjectId,
           weekNumber: task.weekNumber,
           materialId: task.material?.id ?? null,
-          pairId: task.pair?.pairId ?? task.fallbackPair?.pairId ?? null,
+          pairId: task.pair?.pairId ?? null,
           taskKind: task.kind,
           eventType,
           rating,
@@ -411,11 +416,39 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       })
       const nextPayload = (await response.json()) as MobileReviewPayload & { error?: string }
       if (!response.ok) {
-        throw new Error(nextPayload.error || "No se pudo cargar el siguiente audio.")
+        throw new Error(nextPayload.error || "No se pudo cargar la siguiente materia.")
       }
       setPayload(nextPayload)
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "No se pudo cargar el siguiente audio.")
+      setError(nextError instanceof Error ? nextError.message : "No se pudo cargar la siguiente materia.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const loadNextPair = async () => {
+    if (!payload?.totalPairs) return
+    setIsLoading(true)
+    setError("")
+    if (activeTask && activePair && !ratedTaskKeyRef.current) {
+      void postInteractionEvent({ task: activeTask, eventType: "skipped" })
+    }
+    try {
+      const response = await fetch("/api/mobile/review/next-pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: deviceId,
+          sig: signature,
+        }),
+      })
+      const nextPayload = (await response.json()) as MobileReviewPayload & { error?: string }
+      if (!response.ok) {
+        throw new Error(nextPayload.error || "No se pudo cargar la siguiente dupla.")
+      }
+      setPayload(nextPayload)
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "No se pudo cargar la siguiente dupla.")
     } finally {
       setIsLoading(false)
     }
@@ -679,7 +712,7 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
 
             {error ? <p className="text-sm text-red-700">{error}</p> : null}
             {!error && !activePair ? (
-              <p className="text-sm text-black/80">{emptyStateMessage}</p>
+              <p className="text-sm text-black/80">{noPairMessage}</p>
             ) : null}
 
             {activeTask?.staleReason?.length ? (
@@ -698,6 +731,14 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
 
           <div className="grid grid-cols-[1fr_auto] items-end gap-4">
             <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => void loadNext()}
+                disabled={isLoading}
+                className="block text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
+              >
+                {isLoading ? "Cargando..." : "Siguiente materia"}
+              </button>
               {activePair && isAnswerVisible ? (
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -728,11 +769,11 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
               ) : null}
               <button
                 type="button"
-                onClick={() => void loadNext()}
-                disabled={isLoading}
+                onClick={() => void loadNextPair()}
+                disabled={isLoading || !payload?.totalPairs}
                 className="text-left text-[1.9rem] leading-none text-black disabled:opacity-60"
               >
-                {isLoading ? "Cargando..." : "Siguiente materia"}
+                {isLoading ? "Cargando..." : "Siguiente audio"}
               </button>
             </div>
             <p className="text-base leading-none text-black/80">{pairCounter}</p>

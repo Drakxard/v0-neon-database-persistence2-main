@@ -95,3 +95,12 @@ export type DailySessionRecord = {
   completed_subjects: Record<string, boolean>
   show_all_subjects: boolean
 }
+
+export type SubjectSynthesisRecord = {
+  subjectId: string
+  weekNumber: number
+  exerciseSolvedCount: number
+  exerciseTotalCount: number
+  exerciseSkippedText: string | null
+  updatedAt: string | null
+}
