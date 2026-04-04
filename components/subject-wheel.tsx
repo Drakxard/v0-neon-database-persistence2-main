@@ -94,6 +94,11 @@ type SynthesisPlaybackItem = {
   entryId: number
 }
 
+type PendingSynthesisSave = {
+  subjectId: string
+  weekNumber: number
+}
+
 type SynthesisMaterialDraft = {
   exerciseScopeText: string
   exerciseSolvedCount: string
@@ -470,11 +475,12 @@ function getEntryDisplayTitle(entry: Pick<SubjectDayEntry, "display_title" | "cu
 }
 
 function buildContinueGroups(entries: SubjectDayEntry[]) {
+  const chronologicalEntries = sortSubjectDayEntriesChronologically(entries)
   const groups: ContinueGroup[] = []
   const consumedIds = new Set<number>()
   const pairBuckets = new Map<string, SubjectDayEntry[]>()
 
-  for (const entry of entries) {
+  for (const entry of chronologicalEntries) {
     if (entry.pair_id) {
       const bucket = pairBuckets.get(entry.pair_id) ?? []
       bucket.push(entry)
@@ -482,7 +488,7 @@ function buildContinueGroups(entries: SubjectDayEntry[]) {
     }
   }
 
-  for (const entry of entries) {
+  for (const entry of chronologicalEntries) {
     if (consumedIds.has(entry.id)) continue
 
     if (!entry.pair_id) {
@@ -524,8 +530,7 @@ function buildSynthesisPlaybackQueue(
   entriesByMaterialId: Record<number, SubjectDayEntry[]>
 ) {
   return materials.flatMap((material) => {
-    const materialEntries = sortSubjectDayEntries(entriesByMaterialId[material.id] ?? [])
-    const groups = buildContinueGroups(materialEntries)
+    const groups = buildContinueGroups(entriesByMaterialId[material.id] ?? [])
 
     return groups.flatMap((group) => {
       if (group.kind === "pair") {
@@ -595,6 +600,21 @@ function sortSubjectDayEntries(entries: SubjectDayEntry[]) {
       left.order_index - right.order_index ||
       left.id - right.id
   )
+}
+
+function sortSubjectDayEntriesChronologically(entries: SubjectDayEntry[]) {
+  return [...entries].sort((left, right) => {
+    const leftCreatedAt = left.created_at?.trim() ?? ""
+    const rightCreatedAt = right.created_at?.trim() ?? ""
+    if (leftCreatedAt && rightCreatedAt && leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt.localeCompare(rightCreatedAt)
+    }
+    if (leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt ? -1 : 1
+    }
+
+    return left.id - right.id
+  })
 }
 
 function sortSubjectDayMaterials(materials: SubjectDayMaterial[]) {
@@ -911,6 +931,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isSynthesisPlaybackActive, setIsSynthesisPlaybackActive] = useState(false)
   const synthesisPlaybackAudioRef = useRef<HTMLAudioElement | null>(null)
   const synthesisLoadRequestIdRef = useRef(0)
+  const synthesisSubjectStateMapRef = useRef<Record<string, SynthesisSubjectState>>({})
+  const synthesisWeekNumberRef = useRef(0)
+  const synthesisAutosaveTimersRef = useRef<Map<string, number>>(new Map())
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
   const activeShortcutSubject = isDialogOpen && currentSubject
@@ -1034,6 +1057,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         window.clearTimeout(timerId)
       })
       pendingMaterialCheckupTimersRef.current.clear()
+      synthesisAutosaveTimersRef.current.forEach((timerId) => {
+        window.clearTimeout(timerId)
+      })
+      synthesisAutosaveTimersRef.current.clear()
       if (shortcutLongPressTimerRef.current !== null) {
         window.clearTimeout(shortcutLongPressTimerRef.current)
       }
@@ -1043,6 +1070,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   useEffect(() => {
     homeSelectedWeekNumberRef.current = homeSelectedWeekNumber
   }, [homeSelectedWeekNumber])
+
+  useEffect(() => {
+    synthesisSubjectStateMapRef.current = synthesisSubjectStateMap
+  }, [synthesisSubjectStateMap])
+
+  useEffect(() => {
+    synthesisWeekNumberRef.current = synthesisWeekNumber
+  }, [synthesisWeekNumber])
 
 
   useEffect(() => {
@@ -2060,6 +2095,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsUploadingAudio(true)
     setEntriesError("")
     const createdEntryIds: number[] = []
+    const desiredRolesByEntryId = new Map<number, PairRole>()
+
+    for (const role of ["question", "answer"] as const) {
+      const slot = draft.slots[role]
+      if (slot?.entryId != null) {
+        desiredRolesByEntryId.set(slot.entryId, role)
+      }
+    }
 
     try {
       const createdEntries: SubjectDayEntry[] = []
@@ -2121,7 +2164,22 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         )
         setEntries((previousEntries) =>
           sortSubjectDayEntries([
-            ...previousEntries.map((entry) => createdEntriesById.get(entry.id) ?? entry),
+            ...previousEntries.map((entry) => {
+              const updatedEntry = createdEntriesById.get(entry.id) ?? entry
+              const desiredRole = desiredRolesByEntryId.get(entry.id)
+              if (!desiredRole || updatedEntry.pair_id !== draft.pairId) {
+                return updatedEntry
+              }
+
+              if (updatedEntry.pair_role === desiredRole) {
+                return updatedEntry
+              }
+
+              return {
+                ...updatedEntry,
+                pair_role: desiredRole,
+              }
+            }),
             ...createdEntries.filter((entry) => !touchedEntryIds.has(entry.id)),
           ])
         )
@@ -3201,6 +3259,92 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSynthesisPlaybackActive(false)
   }, [])
 
+  const runSynthesisAutosave = useCallback(async (pendingSave: PendingSynthesisSave) => {
+    const currentState = synthesisSubjectStateMapRef.current[pendingSave.subjectId]
+    if (!currentState) return
+
+    setSynthesisSubjectStateMap((previous) => ({
+      ...previous,
+      [pendingSave.subjectId]: {
+        ...(previous[pendingSave.subjectId] ?? buildEmptySynthesisSubjectState(pendingSave.subjectId, pendingSave.weekNumber)),
+        isSaving: true,
+        error: "",
+      },
+    }))
+
+    try {
+      const nextPayload = await saveSubjectSynthesisMaterials({
+        subjectId: pendingSave.subjectId,
+        weekNumber: pendingSave.weekNumber,
+        items: currentState.materials
+          .filter((material) => material.material_type === "practice")
+          .map((material) => {
+            const draft = currentState.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
+            return {
+              subjectDayMaterialId: material.id,
+              exerciseScopeText: draft.exerciseScopeText,
+              exerciseSolvedCount: getSynthesisDraftNumber(draft.exerciseSolvedCount),
+              exerciseTotalCount: getSynthesisDraftNumber(draft.exerciseTotalCount),
+            }
+          }),
+      })
+
+      setSynthesisSubjectStateMap((previous) => {
+        if (synthesisWeekNumberRef.current !== pendingSave.weekNumber) return previous
+        return {
+          ...previous,
+          [pendingSave.subjectId]: buildSynthesisSubjectState(nextPayload),
+        }
+      })
+    } catch (error) {
+      console.error("Failed to autosave synthesis progress:", error)
+      setSynthesisSubjectStateMap((previous) => {
+        if (synthesisWeekNumberRef.current !== pendingSave.weekNumber) return previous
+        return {
+          ...previous,
+          [pendingSave.subjectId]: {
+            ...(previous[pendingSave.subjectId] ?? buildEmptySynthesisSubjectState(pendingSave.subjectId, pendingSave.weekNumber)),
+            isSaving: false,
+            error: error instanceof Error ? error.message : "No se pudo guardar la sintesis por archivo.",
+          },
+        }
+      })
+    }
+  }, [])
+
+  const scheduleSynthesisAutosave = useCallback((pendingSave: PendingSynthesisSave) => {
+    const existingTimerId = synthesisAutosaveTimersRef.current.get(pendingSave.subjectId)
+    if (existingTimerId != null) {
+      window.clearTimeout(existingTimerId)
+    }
+
+    const timerId = window.setTimeout(() => {
+      synthesisAutosaveTimersRef.current.delete(pendingSave.subjectId)
+      void runSynthesisAutosave(pendingSave)
+    }, 10000)
+
+    synthesisAutosaveTimersRef.current.set(pendingSave.subjectId, timerId)
+  }, [runSynthesisAutosave])
+
+  const flushPendingSynthesisAutosaves = useCallback((subjectId?: string) => {
+    const targets = subjectId
+      ? [subjectId]
+      : Array.from(synthesisAutosaveTimersRef.current.keys())
+
+    targets.forEach((targetSubjectId) => {
+      const timerId = synthesisAutosaveTimersRef.current.get(targetSubjectId)
+      if (timerId != null) {
+        window.clearTimeout(timerId)
+        synthesisAutosaveTimersRef.current.delete(targetSubjectId)
+      }
+
+      void runSynthesisAutosave({
+        subjectId: targetSubjectId,
+        weekNumber: synthesisWeekNumberRef.current,
+      })
+    })
+  }, [runSynthesisAutosave])
+
   const openSynthesisModal = useCallback(() => {
     const firstSubject = synthesisSubjects[0] ?? null
     if (!firstSubject) return
@@ -3214,20 +3358,22 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }, [homeSelectedWeekNumber, resetSynthesisPlayback, synthesisSubjects])
 
   const closeSynthesisModal = useCallback(() => {
+    flushPendingSynthesisAutosaves()
     resetSynthesisPlayback()
     setIsSynthesisOpen(false)
     setIsSynthesisWeekSelectorOpen(false)
-  }, [resetSynthesisPlayback])
+  }, [flushPendingSynthesisAutosaves, resetSynthesisPlayback])
 
   const handleSelectSynthesisWeek = useCallback((weekNumber: number) => {
     const firstSubject = synthesisSubjects[0] ?? null
     if (!firstSubject) return
 
+    flushPendingSynthesisAutosaves()
     resetSynthesisPlayback()
     setSynthesisWeekNumber(weekNumber)
     setSynthesisSubjectId(firstSubject.id)
     setIsSynthesisWeekSelectorOpen(false)
-  }, [resetSynthesisPlayback, synthesisSubjects])
+  }, [flushPendingSynthesisAutosaves, resetSynthesisPlayback, synthesisSubjects])
 
   const handleSynthesisPreviousSubject = useCallback(() => {
     if (synthesisSubjectIndex <= 0) {
@@ -3321,85 +3467,29 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           },
         }
       })
-    },
-    [synthesisSelectedSubject, synthesisWeekNumber]
-  )
 
-  const handleSaveSynthesisProgress = useCallback(async () => {
-    if (!synthesisSelectedSubject || !synthesisSelectedState) return
-
-    setSynthesisSubjectStateMap((previous) => ({
-      ...previous,
-      [synthesisSelectedSubject.id]: {
-        ...synthesisSelectedState,
-        isSaving: true,
-        error: "",
-      },
-    }))
-
-    try {
-      const nextPayload = await saveSubjectSynthesisMaterials({
+      scheduleSynthesisAutosave({
         subjectId: synthesisSelectedSubject.id,
         weekNumber: synthesisWeekNumber,
-        items: synthesisSelectedState.materials
-          .filter((material) => material.material_type === "practice")
-          .map((material) => {
-          const draft = synthesisSelectedState.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
-          return {
-            subjectDayMaterialId: material.id,
-            exerciseScopeText: draft.exerciseScopeText,
-            exerciseSolvedCount: getSynthesisDraftNumber(draft.exerciseSolvedCount),
-            exerciseTotalCount: getSynthesisDraftNumber(draft.exerciseTotalCount),
-          }
-          }),
       })
+    },
+    [scheduleSynthesisAutosave, synthesisSelectedSubject, synthesisWeekNumber]
+  )
 
-      setSynthesisSubjectStateMap((previous) => ({
-        ...previous,
-        [synthesisSelectedSubject.id]: buildSynthesisSubjectState(nextPayload),
-      }))
-    } catch (error) {
-      console.error("Failed to save synthesis progress:", error)
-      toast({
-        title: "No se pudo guardar la sintesis",
-        description: error instanceof Error ? error.message : "No se pudo guardar la sintesis por archivo.",
-        variant: "destructive",
-      })
-
-      setSynthesisSubjectStateMap((previous) => ({
-        ...previous,
-        [synthesisSelectedSubject.id]: {
-          ...(previous[synthesisSelectedSubject.id] ?? buildEmptySynthesisSubjectState(synthesisSelectedSubject.id, synthesisWeekNumber)),
-          isSaving: false,
-          error: error instanceof Error ? error.message : "No se pudo guardar la sintesis por archivo.",
-        },
-      }))
-    }
-  }, [synthesisSelectedState, synthesisSelectedSubject, synthesisWeekNumber])
-
-  const handleResetSynthesisDrafts = useCallback(() => {
-    if (!synthesisSelectedSubject || !synthesisSelectedState) return
-
-    const nextDrafts = synthesisSelectedState.materials.reduce<Record<number, SynthesisMaterialDraft>>((accumulator, material) => {
-      accumulator[material.id] = createSynthesisMaterialDraft(synthesisSelectedState.perMaterialProgress[material.id] ?? null)
-      return accumulator
-    }, {})
-
-    setSynthesisSubjectStateMap((previous) => ({
-      ...previous,
-      [synthesisSelectedSubject.id]: {
-        ...synthesisSelectedState,
-        drafts: nextDrafts,
-        error: "",
-      },
-    }))
-  }, [synthesisSelectedState, synthesisSelectedSubject])
+  const handleSynthesisDraftCommit = useCallback(() => {
+    if (!synthesisSelectedSubject) return
+    scheduleSynthesisAutosave({
+      subjectId: synthesisSelectedSubject.id,
+      weekNumber: synthesisWeekNumber,
+    })
+  }, [scheduleSynthesisAutosave, synthesisSelectedSubject, synthesisWeekNumber])
 
   const openSynthesisMaterial = useCallback(async (material: SubjectDayMaterial, mode: ContinueMode) => {
     await flushPendingFeaturedUpdate()
     const subject = synthesisSelectedSubject
     if (!subject) return
 
+    flushPendingSynthesisAutosaves(subject.id)
     resetSynthesisPlayback()
     setCurrentSubject(subject)
     setDialogDateKey(material.session_date)
@@ -3409,7 +3499,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setSelectedPracticeMaterialId(material.id)
     setIsSynthesisOpen(false)
     setIsDialogOpen(true)
-  }, [flushPendingFeaturedUpdate, resetSynthesisPlayback, resetSubjectUiState, synthesisSelectedSubject])
+  }, [flushPendingFeaturedUpdate, flushPendingSynthesisAutosaves, resetSynthesisPlayback, resetSubjectUiState, synthesisSelectedSubject])
 
   // Practice modal functions
   const openPracticeModal = () => {
@@ -4565,15 +4655,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
                       <section className="space-y-4">
                         <p className="text-[1.95rem] font-semibold leading-tight text-foreground sm:text-[2.2rem]">
-                          {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios`}
+                          {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios, vas ${synthesisSelectedSummary?.exerciseSolvedCount ?? 0}/${synthesisSelectedSummary?.exerciseTotalCount ?? 0}`}
                         </p>
 
                         {synthesisExerciseMaterials.length > 0 ? (
                           <div className="space-y-3">
                             {synthesisExerciseMaterials.map((material) => {
                               const draft = synthesisSelectedState?.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
-                              const solvedCount = getSynthesisDraftNumber(draft.exerciseSolvedCount)
-                              const totalCount = getSynthesisDraftNumber(draft.exerciseTotalCount)
 
                               return (
                                 <div key={material.id} className="flex flex-col gap-2 text-[1.02rem] text-foreground sm:text-[1.1rem]">
@@ -4583,13 +4671,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                     <input
                                       value={draft.exerciseScopeText}
                                       onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseScopeText", event.target.value)}
-                                      placeholder="1 a 14 y 18"
+                                      onBlur={handleSynthesisDraftCommit}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          event.preventDefault()
+                                          ;(event.currentTarget as HTMLInputElement).blur()
+                                        }
+                                      }}
+                                      placeholder="Ejercicios seleccionados..."
                                       className="min-w-[14rem] flex-1 border-b border-border bg-transparent px-1 py-0.5 text-foreground outline-none placeholder:text-muted-foreground"
                                     />
                                     <span>realice</span>
                                     <input
                                       value={draft.exerciseSolvedCount}
                                       onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseSolvedCount", event.target.value)}
+                                      onBlur={handleSynthesisDraftCommit}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          event.preventDefault()
+                                          ;(event.currentTarget as HTMLInputElement).blur()
+                                        }
+                                      }}
                                       inputMode="numeric"
                                       className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
                                     />
@@ -4597,13 +4699,17 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                                     <input
                                       value={draft.exerciseTotalCount}
                                       onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseTotalCount", event.target.value)}
+                                      onBlur={handleSynthesisDraftCommit}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                          event.preventDefault()
+                                          ;(event.currentTarget as HTMLInputElement).blur()
+                                        }
+                                      }}
                                       inputMode="numeric"
                                       className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
                                     />
                                   </div>
-                                  {totalCount === 0 && solvedCount === 0 && draft.exerciseScopeText.trim().length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">Sin detalle por archivo cargado todavia.</p>
-                                  ) : null}
                                 </div>
                               )
                             })}
@@ -4617,32 +4723,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             {`Legado: saltaste ${synthesisSelectedState.legacySummary.exerciseSkippedText} por repetitivos.`}
                           </p>
                         ) : null}
-
-                        <div className="flex flex-wrap items-center gap-3 pt-2">
-                          <Button
-                            type="button"
-                            onClick={() => void handleSaveSynthesisProgress()}
-                            disabled={isSynthesisSaving || !synthesisSelectedState}
-                            className="h-10 px-4"
-                          >
-                            {isSynthesisSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                            Guardar materia
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            onClick={handleResetSynthesisDrafts}
-                            disabled={isSynthesisSaving || !synthesisSelectedState}
-                            className="h-10 px-2 text-muted-foreground hover:text-foreground"
-                          >
-                            Descartar cambios
-                          </Button>
-                          {synthesisSelectedSummary ? (
-                            <span className="text-sm text-muted-foreground">
-                              {`Vas ${synthesisSelectedSummary.exerciseSolvedCount}/${synthesisSelectedSummary.exerciseTotalCount} ejercicios`}
-                            </span>
-                          ) : null}
-                        </div>
+                        {isSynthesisSaving ? <p className="text-sm text-muted-foreground">Guardando...</p> : null}
                       </section>
                     </section>
                   ) : null}
