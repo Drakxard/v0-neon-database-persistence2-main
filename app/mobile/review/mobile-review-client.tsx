@@ -4,6 +4,14 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 
 import { SUBJECTS } from "@/lib/subjects"
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{
+    outcome: "accepted" | "dismissed"
+    platform: string
+  }>
+}
+
 type MobileReviewPair = {
   pairId: string
   subjectId: string
@@ -160,6 +168,38 @@ function AudioRow({
   )
 }
 
+function InstallCallout({
+  canInstallApp,
+  isInstallPromptLoading,
+  installStatusMessage,
+  onInstall,
+}: {
+  canInstallApp: boolean
+  isInstallPromptLoading: boolean
+  installStatusMessage: string
+  onInstall: () => void
+}) {
+  return (
+    <section className="space-y-3 border-2 border-black/80 bg-[#f7ecc0] p-3">
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-[0.16em] text-black/70">Instalacion</p>
+        <p className="text-sm leading-relaxed text-black/80">{installStatusMessage}</p>
+      </div>
+
+      {canInstallApp ? (
+        <button
+          type="button"
+          onClick={onInstall}
+          disabled={isInstallPromptLoading}
+          className="w-full border-2 border-black bg-[#f1e4a9] px-3 py-3 text-left text-[1.2rem] leading-none disabled:opacity-60"
+        >
+          {isInstallPromptLoading ? "Abriendo instalacion..." : "Instalar app"}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
 function SlotRow({
   slot,
   onEdit,
@@ -217,6 +257,10 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
   const [scheduleDayIndex, setScheduleDayIndex] = useState(0)
   const [isAnswerVisible, setIsAnswerVisible] = useState(false)
   const [isEventLoading, setIsEventLoading] = useState(false)
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isStandaloneMode, setIsStandaloneMode] = useState(false)
+  const [isInstallPromptLoading, setIsInstallPromptLoading] = useState(false)
+  const [hasBeenInstalled, setHasBeenInstalled] = useState(false)
   const questionAudioRef = useRef<HTMLAudioElement | null>(null)
   const answerAudioRef = useRef<HTMLAudioElement | null>(null)
   const shownTaskKeyRef = useRef("")
@@ -239,6 +283,11 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       ? "No hay dupla/audio disponible para esta materia todavia."
       : "No hay dupla/audio reproducible para esta materia."
     : emptyStateMessage
+  const shouldShowInstallCallout = !isStandaloneMode && !hasBeenInstalled
+  const canInstallApp = shouldShowInstallCallout && Boolean(installPromptEvent)
+  const installStatusMessage = canInstallApp
+    ? "Chrome ya habilito la instalacion real de esta app. Tocala desde aca para instalarla."
+    : "Chrome todavia no habilito la instalacion. Segui usando esta pantalla unos segundos y luego volve a probar."
 
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return
@@ -262,6 +311,48 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       // Ignore localStorage access issues in constrained webviews.
     }
   }, [requiresAccess])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const standaloneMedia = window.matchMedia("(display-mode: standalone)")
+    const applyStandaloneState = () => {
+      const iosNavigator = window.navigator as Navigator & { standalone?: boolean }
+      const isStandalone =
+        standaloneMedia.matches ||
+        window.matchMedia("(display-mode: minimal-ui)").matches ||
+        window.matchMedia("(display-mode: fullscreen)").matches ||
+        iosNavigator.standalone === true
+
+      setIsStandaloneMode(isStandalone)
+      if (isStandalone) {
+        setHasBeenInstalled(true)
+        setInstallPromptEvent(null)
+      }
+    }
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      const installEvent = event as BeforeInstallPromptEvent
+      installEvent.preventDefault()
+      setInstallPromptEvent(installEvent)
+    }
+
+    const handleAppInstalled = () => {
+      setHasBeenInstalled(true)
+      setInstallPromptEvent(null)
+    }
+
+    applyStandaloneState()
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener)
+    window.addEventListener("appinstalled", handleAppInstalled)
+    standaloneMedia.addEventListener("change", applyStandaloneState)
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt as EventListener)
+      window.removeEventListener("appinstalled", handleAppInstalled)
+      standaloneMedia.removeEventListener("change", applyStandaloneState)
+    }
+  }, [])
 
   const postInteractionEvent = useCallback(
     async (params: {
@@ -382,6 +473,22 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
       setAccessError(accessLoadError instanceof Error ? accessLoadError.message : "No se pudo abrir el repaso movil.")
     } finally {
       setIsAccessLoading(false)
+    }
+  }
+
+  const promptInstall = async () => {
+    if (!installPromptEvent) return
+
+    setIsInstallPromptLoading(true)
+    try {
+      await installPromptEvent.prompt()
+      const choice = await installPromptEvent.userChoice.catch(() => null)
+      if (choice?.outcome === "accepted") {
+        setHasBeenInstalled(true)
+      }
+      setInstallPromptEvent(null)
+    } finally {
+      setIsInstallPromptLoading(false)
     }
   }
 
@@ -642,6 +749,15 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
               </label>
 
               {accessError ? <p className="text-sm text-red-700">{accessError}</p> : null}
+
+              {shouldShowInstallCallout ? (
+                <InstallCallout
+                  canInstallApp={canInstallApp}
+                  isInstallPromptLoading={isInstallPromptLoading}
+                  installStatusMessage={installStatusMessage}
+                  onInstall={() => void promptInstall()}
+                />
+              ) : null}
             </div>
 
             <div className="space-y-3 self-end">
@@ -736,6 +852,15 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
                   ))}
                 </div>
               </section>
+            ) : null}
+
+            {shouldShowInstallCallout ? (
+              <InstallCallout
+                canInstallApp={canInstallApp}
+                isInstallPromptLoading={isInstallPromptLoading}
+                installStatusMessage={installStatusMessage}
+                onInstall={() => void promptInstall()}
+              />
             ) : null}
           </div>
 

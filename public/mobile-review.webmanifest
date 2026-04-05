@@ -6,8 +6,10 @@
   "start_url": "/mobile/review",
   "scope": "/mobile/review",
   "display": "standalone",
+  "categories": ["education", "productivity"],
   "background_color": "#f1e4a9",
   "theme_color": "#f1e4a9",
+  "screenshots": [],
   "icons": [
     {
       "src": "/mobile-review-icon-192.png",
