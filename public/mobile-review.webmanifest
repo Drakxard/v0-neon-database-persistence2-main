@@ -10,6 +10,18 @@
   "theme_color": "#f1e4a9",
   "icons": [
     {
+      "src": "/mobile-review-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/mobile-review-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/mobile-review-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml"

@@ -3,6 +3,8 @@ const STATIC_CACHE = `${CACHE_VERSION}-static`
 const SHELL_ASSETS = [
   "/mobile/review",
   "/mobile-review.webmanifest",
+  "/mobile-review-icon-192.png",
+  "/mobile-review-icon-512.png",
   "/mobile-review-icon.svg",
   "/mobile-review-icon-maskable.svg",
 ]
