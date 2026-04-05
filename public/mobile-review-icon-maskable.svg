@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Repaso movil">
+  <rect width="512" height="512" fill="#f1e4a9"/>
+  <circle cx="256" cy="256" r="196" fill="#111111"/>
+  <rect x="156" y="122" width="200" height="268" rx="30" fill="#f7ecc0"/>
+  <path d="M190 188h132M190 234h88M190 280h108" fill="none" stroke="#111111" stroke-linecap="round" stroke-width="18"/>
+  <circle cx="308" cy="232" r="30" fill="#f59e0b"/>
+  <path d="m308 214 11 18 22 4-15 14 4 22-22-11-20 11 4-22-16-14 22-4z" fill="#111111"/>
+  <circle cx="256" cy="348" r="18" fill="#111111"/>
+</svg>

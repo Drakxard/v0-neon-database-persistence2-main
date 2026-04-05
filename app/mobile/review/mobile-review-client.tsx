@@ -241,6 +241,16 @@ export function MobileReviewClient({ deviceId, signature, initialPayload, initia
     : emptyStateMessage
 
   useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return
+    if (!window.location.pathname.startsWith("/mobile/review")) return
+
+    void navigator.serviceWorker
+      .register("/mobile-review-sw.js", { scope: "/mobile/review" })
+      .then((registration) => registration.update().catch(() => undefined))
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
     if (!requiresAccess) return
     try {
       const rememberedDeviceId = window.localStorage.getItem("mobile-review-device-id") || ""

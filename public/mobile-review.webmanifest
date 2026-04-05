@@ -1,0 +1,24 @@
+{
+  "id": "/mobile/review",
+  "name": "Repaso movil",
+  "short_name": "Repaso",
+  "description": "Mini app instalable para repaso movil",
+  "start_url": "/mobile/review",
+  "scope": "/mobile/review",
+  "display": "standalone",
+  "background_color": "#f1e4a9",
+  "theme_color": "#f1e4a9",
+  "icons": [
+    {
+      "src": "/mobile-review-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/mobile-review-icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
