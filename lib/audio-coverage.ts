@@ -1,15 +1,10 @@
 import { neon } from "@neondatabase/serverless"
 
 import { getSubjectById } from "@/lib/subjects"
+import { getSynthesisTheoryWeekday } from "@/lib/synthesis-schedule"
 
 const sql = neon(process.env.DATABASE_URL!)
 const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
-const SUBJECT_THEORY_WEEKDAY: Partial<Record<string, number>> = {
-  calculo3: 0,
-  fisica: 0,
-  probabilidad: 1,
-  logica: 4,
-}
 
 export type PracticeMaterialCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
 export type SubjectVectorSeverity = "green" | "yellow" | "red"
@@ -187,7 +182,7 @@ function buildSubjectVector(params: {
     return null
   }
 
-  const scheduledWeekday = SUBJECT_THEORY_WEEKDAY[subjectId]
+  const scheduledWeekday = getSynthesisTheoryWeekday(subjectId)
   const firstTheoryDate = normalizeSessionDateKey(theoryMaterials[0].session_date)
   const latestTheory = [...theoryMaterials]
     .reverse()

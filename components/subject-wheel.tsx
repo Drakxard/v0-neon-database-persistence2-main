@@ -23,6 +23,7 @@ import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
+import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import type {
   PendingSubjectDayMaterial,
@@ -98,6 +99,8 @@ type PendingSynthesisSave = {
   subjectId: string
   weekNumber: number
 }
+
+type SynthesisViewMode = "overview" | "detail"
 
 type SynthesisMaterialDraft = {
   exerciseScopeText: string
@@ -358,28 +361,11 @@ function getSynthesisSubjects(subjects: Subject[]) {
   return SYNTHESIS_SUBJECT_IDS.map((subjectId) => getSubjectById(subjectId, subjects)).filter(Boolean) as Subject[]
 }
 
-function normalizeWeekdayLabel(label: string) {
-  return label.trim().toLowerCase()
-}
-
 function getSynthesisCountdownLabel(params: {
   subjectId: string
   fromDate: Date
 }) {
-  const { subjectId, fromDate } = params
-
-  for (let offset = 0; offset < 7; offset += 1) {
-    const candidate = new Date(fromDate)
-    candidate.setDate(fromDate.getDate() + offset)
-    if (getScheduledSubjectIdsForDate(candidate).includes(subjectId)) {
-      return {
-        daysUntil: offset,
-        weekdayLabel: normalizeWeekdayLabel(getWeekdayLabel(formatDateKey(candidate))),
-      }
-    }
-  }
-
-  return null
+  return getSynthesisCountdown(params.subjectId, params.fromDate)
 }
 
 function getSynthesisHeaderLabel(params: {
@@ -922,6 +908,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [isReviewOpen, setIsReviewOpen] = useState(false)
   const [reviewSubjectId, setReviewSubjectId] = useState("")
   const [isSynthesisOpen, setIsSynthesisOpen] = useState(false)
+  const [synthesisViewMode, setSynthesisViewMode] = useState<SynthesisViewMode>("overview")
   const [isSynthesisWeekSelectorOpen, setIsSynthesisWeekSelectorOpen] = useState(false)
   const [synthesisSubjectId, setSynthesisSubjectId] = useState<string>("")
   const [synthesisWeekNumber, setSynthesisWeekNumber] = useState(0)
@@ -3353,6 +3340,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setSynthesisWeekNumber(homeSelectedWeekNumber)
     setSynthesisSubjectId(firstSubject.id)
     setSynthesisSubjectStateMap({})
+    setSynthesisViewMode("overview")
     setIsSynthesisWeekSelectorOpen(false)
     setIsSynthesisOpen(true)
   }, [homeSelectedWeekNumber, resetSynthesisPlayback, synthesisSubjects])
@@ -3360,6 +3348,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const closeSynthesisModal = useCallback(() => {
     flushPendingSynthesisAutosaves()
     resetSynthesisPlayback()
+    setSynthesisViewMode("overview")
     setIsSynthesisOpen(false)
     setIsSynthesisWeekSelectorOpen(false)
   }, [flushPendingSynthesisAutosaves, resetSynthesisPlayback])
@@ -3372,6 +3361,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     resetSynthesisPlayback()
     setSynthesisWeekNumber(weekNumber)
     setSynthesisSubjectId(firstSubject.id)
+    setSynthesisViewMode("detail")
     setIsSynthesisWeekSelectorOpen(false)
   }, [flushPendingSynthesisAutosaves, resetSynthesisPlayback, synthesisSubjects])
 
@@ -3391,6 +3381,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     resetSynthesisPlayback()
     setSynthesisSubjectId(synthesisSubjects[synthesisSubjectIndex + 1]?.id ?? synthesisSubjectId)
   }, [resetSynthesisPlayback, synthesisSubjectId, synthesisSubjectIndex, synthesisSubjects])
+
+  const openSynthesisOverviewSubject = useCallback((subjectId: string) => {
+    resetSynthesisPlayback()
+    setSynthesisSubjectId(subjectId)
+    setSynthesisViewMode("detail")
+  }, [resetSynthesisPlayback])
 
   const handleStartSynthesisPlayback = useCallback((mode: ContinueMode) => {
     const entriesByMaterialId = (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -3755,10 +3751,30 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         subject: synthesisSelectedSubject,
         percentage: synthesisSelectedSummary?.percentage ?? 0,
         weekNumber: synthesisWeekNumber,
-        currentWeekNumber: currentCalendarWeek,
+        currentWeekNumber: homeSelectedWeekNumber,
         referenceDate: homeSelectedDate,
       }),
-    [currentCalendarWeek, homeSelectedDate, synthesisSelectedSubject, synthesisSelectedSummary?.percentage, synthesisWeekNumber]
+    [homeSelectedDate, homeSelectedWeekNumber, synthesisSelectedSubject, synthesisSelectedSummary?.percentage, synthesisWeekNumber]
+  )
+  const synthesisOverviewCards = useMemo(
+    () =>
+      synthesisSubjects.map((subject) => {
+        const state = synthesisSubjectStateMap[subject.id]
+        const isLoading = !state || state.isLoading
+        const summary = buildSynthesisSubjectSummary(subject.id, synthesisWeekNumber, state)
+        const countdown = getSynthesisCountdownLabel({
+          subjectId: subject.id,
+          fromDate: homeSelectedDate,
+        })
+
+        return {
+          subject,
+          countdown,
+          isLoading,
+          percentageLabel: isLoading ? "--%" : `${summary.percentage}%`,
+        }
+      }),
+    [homeSelectedDate, synthesisSubjectStateMap, synthesisSubjects, synthesisWeekNumber]
   )
   const synthesisWeekOptions = useMemo(
     () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => currentCalendarWeek - index),
@@ -4242,6 +4258,76 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     )
   }
 
+  const renderSynthesisOverview = () => {
+    const isNightTheme = currentAppTheme === "night"
+    const cardBorderColor = isNightTheme ? "rgba(248, 250, 252, 0.85)" : "rgba(0, 0, 0, 0.85)"
+    const cardTextColor = isNightTheme ? "#f8fafc" : "#000000"
+    const cornerStyles = [
+      {
+        shape: "left-0 top-0 -translate-x-1/2 -translate-y-1/2",
+        label: "left-2 top-2",
+      },
+      {
+        shape: "right-0 top-0 translate-x-1/2 -translate-y-1/2",
+        label: "right-2 top-2",
+      },
+      {
+        shape: "left-0 bottom-0 -translate-x-1/2 translate-y-1/2",
+        label: "left-2 bottom-2",
+      },
+      {
+        shape: "right-0 bottom-0 translate-x-1/2 translate-y-1/2",
+        label: "right-2 bottom-2",
+      },
+    ] as const
+
+    return (
+      <div className="flex-1 overflow-y-auto bg-card px-4 py-4 sm:px-6 sm:py-6">
+        <div className="mx-auto grid min-h-full w-full max-w-6xl grid-cols-1 gap-3 md:grid-cols-2 md:gap-0">
+          {synthesisOverviewCards.map((card, index) => {
+            const corner = cornerStyles[index % cornerStyles.length]
+            const countdownLabel = card.countdown ? `${card.countdown.daysUntil}d` : "--"
+
+            return (
+              <button
+                key={card.subject.id}
+                type="button"
+                onClick={() => openSynthesisOverviewSubject(card.subject.id)}
+                className="relative flex min-h-[12rem] flex-col items-center justify-center overflow-hidden border-[2px] px-6 py-10 text-center transition-transform duration-150 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 md:min-h-[calc(50dvh-5.5rem)]"
+                style={{
+                  backgroundColor: getSubjectVisualColor(card.subject),
+                  borderColor: cardBorderColor,
+                  color: cardTextColor,
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute h-20 w-20 rotate-45 border-[4px] ${corner.shape}`}
+                  style={{ borderColor: cardBorderColor }}
+                />
+                <span className={`pointer-events-none absolute text-[1.1rem] leading-none ${corner.label}`}>
+                  {countdownLabel}
+                </span>
+                <span className="max-w-[18rem] text-balance text-[1.4rem] font-medium leading-tight sm:text-[1.8rem]">
+                  {getSubjectDisplayName(card.subject)}
+                </span>
+                <span className="mt-6 text-[3.3rem] font-normal leading-none sm:text-[4.5rem]">
+                  {card.percentageLabel}
+                </span>
+                {card.isLoading ? (
+                  <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Cargando
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   // Helper function to calculate optimal font size based on text length and segment width
   const calculateFontSize = (text: string, anglePerSegment: number) => {
     const baseSize = 14
@@ -4593,144 +4679,168 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           showCloseButton={false}
           className="flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none border-0 p-0 text-foreground sm:max-w-none"
         >
-          <DialogHeader className="border-b border-border bg-card px-6 py-3 text-left sm:px-8">
-            <div className="flex items-center gap-4">
-              <div className="flex min-w-0 flex-1 items-center gap-3 text-sm sm:text-base">
-                <Button
+          <DialogHeader className="border-b border-border bg-card px-4 py-3 text-left sm:px-8">
+            {synthesisViewMode === "overview" ? (
+              <div className="flex items-center gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-left text-[1rem] font-medium text-foreground sm:text-[1.15rem]">
+                    Sintesis semanal
+                  </p>
+                  <p className="text-sm text-muted-foreground">Selecciona una materia para entrar directo al detalle.</p>
+                </div>
+                <button
                   type="button"
-                  variant="ghost"
-                  onClick={handleSynthesisPreviousSubject}
-                  className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                  onClick={closeSynthesisModal}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Cerrar sintesis"
+                  title="Cerrar"
                 >
-                  {"<"}
-                </Button>
-                <p className="min-w-0 flex-1 text-left text-[1rem] font-medium text-foreground sm:text-[1.15rem]">
-                  {synthesisHeaderLabel || "Sintesis"}
-                </p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleSynthesisNextSubject}
-                  disabled={synthesisSubjectIndex < 0 || synthesisSubjectIndex >= synthesisSubjects.length - 1}
-                  className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground disabled:opacity-35"
-                >
-                  {">"}
-                </Button>
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={closeSynthesisModal}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                aria-label="Cerrar sintesis"
-                title="Cerrar"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+            ) : (
+              <div className="flex items-center gap-4">
+                <div className="flex min-w-0 flex-1 items-center gap-3 text-sm sm:text-base">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={handleSynthesisPreviousSubject}
+                    className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                  >
+                    {"<"}
+                  </Button>
+                  <p className="min-w-0 flex-1 text-left text-[1rem] font-medium text-foreground sm:text-[1.15rem]">
+                    {synthesisHeaderLabel || "Sintesis"}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={handleSynthesisNextSubject}
+                    disabled={synthesisSubjectIndex < 0 || synthesisSubjectIndex >= synthesisSubjects.length - 1}
+                    className="h-8 min-w-8 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground disabled:opacity-35"
+                  >
+                    {">"}
+                  </Button>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeSynthesisModal}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  aria-label="Cerrar sintesis"
+                  title="Cerrar"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            )}
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-              <audio ref={synthesisPlaybackAudioRef} onEnded={handleSynthesisAudioEnded} className="hidden" />
+          <audio ref={synthesisPlaybackAudioRef} onEnded={handleSynthesisAudioEnded} className="hidden" />
 
-              {isSynthesisLoading ? (
-                <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Cargando sintesis...
-                </div>
-              ) : null}
+          {synthesisViewMode === "overview" ? (
+            renderSynthesisOverview()
+          ) : (
+            <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+                {isSynthesisLoading ? (
+                  <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Cargando sintesis...
+                  </div>
+                ) : null}
 
-              {!isSynthesisLoading ? (
-                <>
-                  {synthesisError ? (
-                    <div className="text-sm text-red-700">
-                      {synthesisError}
-                    </div>
-                  ) : null}
+                {!isSynthesisLoading ? (
+                  <>
+                    {synthesisError ? (
+                      <div className="text-sm text-red-700">
+                        {synthesisError}
+                      </div>
+                    ) : null}
 
-                  {synthesisSelectedSubject ? (
-                    <section className="space-y-10 text-foreground">
-                      {renderSynthesisMaterialSection("theory")}
-                      {renderSynthesisMaterialSection("practice")}
+                    {synthesisSelectedSubject ? (
+                      <section className="space-y-10 text-foreground">
+                        {renderSynthesisMaterialSection("theory")}
+                        {renderSynthesisMaterialSection("practice")}
 
-                      <section className="space-y-4">
-                        <p className="text-[1.95rem] font-semibold leading-tight text-foreground sm:text-[2.2rem]">
-                          {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios, vas ${synthesisSelectedSummary?.exerciseSolvedCount ?? 0}/${synthesisSelectedSummary?.exerciseTotalCount ?? 0}`}
-                        </p>
-
-                        {synthesisExerciseMaterials.length > 0 ? (
-                          <div className="space-y-3">
-                            {synthesisExerciseMaterials.map((material) => {
-                              const draft = synthesisSelectedState?.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
-
-                              return (
-                                <div key={material.id} className="flex flex-col gap-2 text-[1.02rem] text-foreground sm:text-[1.1rem]">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span>{material.file_name}</span>
-                                    <span aria-hidden="true">-&gt;</span>
-                                    <input
-                                      value={draft.exerciseScopeText}
-                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseScopeText", event.target.value)}
-                                      onBlur={handleSynthesisDraftCommit}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.preventDefault()
-                                          ;(event.currentTarget as HTMLInputElement).blur()
-                                        }
-                                      }}
-                                      placeholder="Ejercicios seleccionados..."
-                                      className="min-w-[14rem] flex-1 border-b border-border bg-transparent px-1 py-0.5 text-foreground outline-none placeholder:text-muted-foreground"
-                                    />
-                                    <span>realice</span>
-                                    <input
-                                      value={draft.exerciseSolvedCount}
-                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseSolvedCount", event.target.value)}
-                                      onBlur={handleSynthesisDraftCommit}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.preventDefault()
-                                          ;(event.currentTarget as HTMLInputElement).blur()
-                                        }
-                                      }}
-                                      inputMode="numeric"
-                                      className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
-                                    />
-                                    <span>/</span>
-                                    <input
-                                      value={draft.exerciseTotalCount}
-                                      onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseTotalCount", event.target.value)}
-                                      onBlur={handleSynthesisDraftCommit}
-                                      onKeyDown={(event) => {
-                                        if (event.key === "Enter") {
-                                          event.preventDefault()
-                                          ;(event.currentTarget as HTMLInputElement).blur()
-                                        }
-                                      }}
-                                      inputMode="numeric"
-                                      className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
-                                    />
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-muted-foreground">No hay archivos de practica cargados para esta materia en esta semana.</p>
-                        )}
-
-                        {!hasSynthesisPerMaterialProgress && synthesisSelectedState?.legacySummary.exerciseSkippedText?.trim() ? (
-                          <p className="text-sm text-muted-foreground">
-                            {`Legado: saltaste ${synthesisSelectedState.legacySummary.exerciseSkippedText} por repetitivos.`}
+                        <section className="space-y-4">
+                          <p className="text-[1.95rem] font-semibold leading-tight text-foreground sm:text-[2.2rem]">
+                            {`Son ${synthesisSelectedSummary?.exerciseTotalCount ?? 0} ejercicios, vas ${synthesisSelectedSummary?.exerciseSolvedCount ?? 0}/${synthesisSelectedSummary?.exerciseTotalCount ?? 0}`}
                           </p>
-                        ) : null}
-                        {isSynthesisSaving ? <p className="text-sm text-muted-foreground">Guardando...</p> : null}
+
+                          {synthesisExerciseMaterials.length > 0 ? (
+                            <div className="space-y-3">
+                              {synthesisExerciseMaterials.map((material) => {
+                                const draft = synthesisSelectedState?.drafts[material.id] ?? createEmptySynthesisMaterialDraft()
+
+                                return (
+                                  <div key={material.id} className="flex flex-col gap-2 text-[1.02rem] text-foreground sm:text-[1.1rem]">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span>{material.file_name}</span>
+                                      <span aria-hidden="true">-&gt;</span>
+                                      <input
+                                        value={draft.exerciseScopeText}
+                                        onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseScopeText", event.target.value)}
+                                        onBlur={handleSynthesisDraftCommit}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.preventDefault()
+                                            ;(event.currentTarget as HTMLInputElement).blur()
+                                          }
+                                        }}
+                                        placeholder="Ejercicios seleccionados..."
+                                        className="min-w-[14rem] flex-1 border-b border-border bg-transparent px-1 py-0.5 text-foreground outline-none placeholder:text-muted-foreground"
+                                      />
+                                      <span>realice</span>
+                                      <input
+                                        value={draft.exerciseSolvedCount}
+                                        onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseSolvedCount", event.target.value)}
+                                        onBlur={handleSynthesisDraftCommit}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.preventDefault()
+                                            ;(event.currentTarget as HTMLInputElement).blur()
+                                          }
+                                        }}
+                                        inputMode="numeric"
+                                        className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
+                                      />
+                                      <span>/</span>
+                                      <input
+                                        value={draft.exerciseTotalCount}
+                                        onChange={(event) => handleSynthesisDraftChange(material.id, "exerciseTotalCount", event.target.value)}
+                                        onBlur={handleSynthesisDraftCommit}
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter") {
+                                            event.preventDefault()
+                                            ;(event.currentTarget as HTMLInputElement).blur()
+                                          }
+                                        }}
+                                        inputMode="numeric"
+                                        className="w-16 border-b border-border bg-transparent px-1 py-0.5 text-center text-foreground outline-none"
+                                      />
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No hay archivos de practica cargados para esta materia en esta semana.</p>
+                          )}
+
+                          {!hasSynthesisPerMaterialProgress && synthesisSelectedState?.legacySummary.exerciseSkippedText?.trim() ? (
+                            <p className="text-sm text-muted-foreground">
+                              {`Legado: saltaste ${synthesisSelectedState.legacySummary.exerciseSkippedText} por repetitivos.`}
+                            </p>
+                          ) : null}
+                          {isSynthesisSaving ? <p className="text-sm text-muted-foreground">Guardando...</p> : null}
+                        </section>
                       </section>
-                    </section>
-                  ) : null}
-                </>
-              ) : null}
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
             </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
 
