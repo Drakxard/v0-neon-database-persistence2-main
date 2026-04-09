@@ -292,6 +292,25 @@ type ContinueSingleGroup = {
   entry: SubjectDayEntry
 }
 
+type DayStackReturnState = {
+  source: "day-stack"
+  dialogDateKey: string
+  practiceSectionView: "theory" | "exercises"
+  exerciseWeeklyScopeEnabled: boolean
+  subjectViewDateOverride: string | null
+  dialogShowAllSubjectsForDay: boolean
+  selectedPracticeMaterialId: number | null
+}
+
+type SynthesisReturnState = {
+  source: "synthesis"
+  synthesisViewMode: SynthesisViewMode
+  synthesisSubjectId: string
+  synthesisWeekNumber: number
+}
+
+type StackedDayViewReturnState = DayStackReturnState | SynthesisReturnState
+
 type ContinueGroup = ContinuePairGroup | ContinueSingleGroup
 
 type SubjectVisibilityState = {
@@ -897,14 +916,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const wheelStrokeColor = currentAppTheme === "night" ? "#d8dfeb" : "white"
   const wheelTextColor = currentAppTheme === "night" ? "#f2f5fb" : "white"
   const [exampleError, setExampleError] = useState("")
-  const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<{
-    dialogDateKey: string
-    practiceSectionView: "theory" | "exercises"
-    exerciseWeeklyScopeEnabled: boolean
-    subjectViewDateOverride: string | null
-    dialogShowAllSubjectsForDay: boolean
-    selectedPracticeMaterialId: number | null
-  } | null>(null)
+  const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<StackedDayViewReturnState | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
   const [reviewSubjectId, setReviewSubjectId] = useState("")
   const [isSynthesisOpen, setIsSynthesisOpen] = useState(false)
@@ -1632,7 +1644,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setRecordingTarget(null)
   }
 
-  const resetSubjectUiState = () => {
+  const resetSubjectUiState = ({ preserveStackedReturnState = false }: { preserveStackedReturnState?: boolean } = {}) => {
     subjectDayDataRequestIdRef.current += 1
     clearPendingFeaturedSave()
     pendingFeaturedUpdateRef.current = null
@@ -1682,7 +1694,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setContinueMode("practice")
     setContinueError("")
     setContinuePayload(null)
-    setStackedDayViewReturnState(null)
+    if (!preserveStackedReturnState) {
+      setStackedDayViewReturnState(null)
+    }
   }
 
   const cancelReview = () => {
@@ -1784,6 +1798,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const openWeekAudioDay = async (dateKey: string) => {
     await flushPendingFeaturedUpdate()
     setStackedDayViewReturnState({
+      source: "day-stack",
       dialogDateKey,
       practiceSectionView,
       exerciseWeeklyScopeEnabled,
@@ -1807,12 +1822,30 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const closeSubjectDialogOrReturn = async () => {
     if (stackedDayViewReturnState) {
       await flushPendingFeaturedUpdate()
-      setDialogDateKey(stackedDayViewReturnState.dialogDateKey)
-      setPracticeSectionView(stackedDayViewReturnState.practiceSectionView)
-      setExerciseWeeklyScopeEnabled(stackedDayViewReturnState.exerciseWeeklyScopeEnabled)
-      setSubjectViewDateOverride(stackedDayViewReturnState.subjectViewDateOverride)
-      setDialogShowAllSubjectsForDay(stackedDayViewReturnState.dialogShowAllSubjectsForDay)
-      setSelectedPracticeMaterialId(stackedDayViewReturnState.selectedPracticeMaterialId)
+      if (stackedDayViewReturnState.source === "synthesis") {
+        stopAndDiscardRecording()
+        Object.values(audioElementRefs.current).forEach((audioElement) => {
+          audioElement?.pause()
+        })
+        setIsRecording(false)
+        cancelReview()
+        cancelAudioPairReview()
+        setIsDialogOpen(false)
+        setCurrentSubject(null)
+        resetSubjectUiState({ preserveStackedReturnState: true })
+        setIsSynthesisOpen(true)
+        setSynthesisViewMode(stackedDayViewReturnState.synthesisViewMode)
+        setSynthesisSubjectId(stackedDayViewReturnState.synthesisSubjectId)
+        setSynthesisWeekNumber(stackedDayViewReturnState.synthesisWeekNumber)
+        setIsSynthesisWeekSelectorOpen(false)
+      } else {
+        setDialogDateKey(stackedDayViewReturnState.dialogDateKey)
+        setPracticeSectionView(stackedDayViewReturnState.practiceSectionView)
+        setExerciseWeeklyScopeEnabled(stackedDayViewReturnState.exerciseWeeklyScopeEnabled)
+        setSubjectViewDateOverride(stackedDayViewReturnState.subjectViewDateOverride)
+        setDialogShowAllSubjectsForDay(stackedDayViewReturnState.dialogShowAllSubjectsForDay)
+        setSelectedPracticeMaterialId(stackedDayViewReturnState.selectedPracticeMaterialId)
+      }
       setStackedDayViewReturnState(null)
       return
     }
@@ -2082,15 +2115,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsUploadingAudio(true)
     setEntriesError("")
     const createdEntryIds: number[] = []
-    const desiredRolesByEntryId = new Map<number, PairRole>()
-
-    for (const role of ["question", "answer"] as const) {
-      const slot = draft.slots[role]
-      if (slot?.entryId != null) {
-        desiredRolesByEntryId.set(slot.entryId, role)
-      }
-    }
-
     try {
       const createdEntries: SubjectDayEntry[] = []
 
@@ -2143,33 +2167,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       if (currentSubject?.id === draft.target.subjectId && subjectDialogDateKey === draft.target.sessionDate) {
-        const createdEntriesById = new Map(createdEntries.map((entry) => [entry.id, entry]))
-        const touchedEntryIds = new Set(
-          Object.values(draft.slots)
-            .map((slot) => slot?.entryId ?? null)
-            .filter((value): value is number => Number.isInteger(value))
-        )
-        setEntries((previousEntries) =>
-          sortSubjectDayEntries([
-            ...previousEntries.map((entry) => {
-              const updatedEntry = createdEntriesById.get(entry.id) ?? entry
-              const desiredRole = desiredRolesByEntryId.get(entry.id)
-              if (!desiredRole || updatedEntry.pair_id !== draft.pairId) {
-                return updatedEntry
-              }
-
-              if (updatedEntry.pair_role === desiredRole) {
-                return updatedEntry
-              }
-
-              return {
-                ...updatedEntry,
-                pair_role: desiredRole,
-              }
-            }),
-            ...createdEntries.filter((entry) => !touchedEntryIds.has(entry.id)),
-          ])
-        )
+        await loadSubjectDayData()
       }
 
       cancelAudioPairReview()
@@ -2222,6 +2220,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   }
 
   const startAudioPairEdit = (entry: SubjectDayEntry) => {
+    setEntriesError("")
     const pairEntries = entry.pair_id ? entries.filter((item) => item.pair_id === entry.pair_id) : [entry]
     const questionEntry = pairEntries.find((item) => item.pair_role === "question") ?? null
     const answerEntry = pairEntries.find((item) => item.pair_role === "answer") ?? null
@@ -2949,10 +2948,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const loadContinuePayload = async (
     mode: ContinueMode = continueMode,
-    { silent = false }: { silent?: boolean } = {}
+    { silent = false, materialId }: { silent?: boolean; materialId?: number } = {}
   ) => {
     if (!currentSubject) return
-    const localPayload = buildLocalContinuePayload(mode)
+    const explicitMaterial = typeof materialId === "number" ? resolveContinueMaterial(getVisibleMaterialsForMode(mode), materialId) : undefined
+    const localPayload =
+      explicitMaterial !== undefined
+        ? {
+            mode,
+            material: explicitMaterial,
+            previousFeaturedEntry: getLocalContinueFeaturedEntry() ?? continuePayload?.previousFeaturedEntry ?? null,
+          }
+        : buildLocalContinuePayload(mode)
 
     if (!silent && !localPayload) {
       setIsContinueLoading(true)
@@ -2978,7 +2985,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       }
 
       setContinuePayload((previous) => {
-        const resolvedMaterial = localPayload?.material ?? previous?.material ?? serverPayload.material
+        const resolvedMaterial =
+          explicitMaterial !== undefined
+            ? explicitMaterial
+            : localPayload?.material ?? previous?.material ?? serverPayload.material
         const previousFeaturedEntry =
           getLocalContinueFeaturedEntry() ??
           localPayload?.previousFeaturedEntry ??
@@ -3005,9 +3015,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const openContinueModal = async (mode: ContinueMode = continueMode, materialId?: number) => {
     const availableMaterials = getVisibleMaterialsForMode(mode)
     const selectedMaterial = resolveContinueMaterial(availableMaterials, materialId)
+    const requestedMaterialId = typeof materialId === "number" ? materialId : selectedMaterial?.id ?? null
 
     setContinueMode(mode)
-    setSelectedPracticeMaterialId(selectedMaterial?.id ?? null)
+    setSelectedPracticeMaterialId(requestedMaterialId)
 
     const localPayload: ContinuePayload | null = currentSubject
       ? {
@@ -3024,10 +3035,12 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         ? ""
         : selectedMaterial
           ? ""
-          : `No se pudo resolver un PDF de ${getContinueModeLabel(mode)} para continuar.`
+          : typeof materialId === "number"
+            ? `No se encontro el PDF seleccionado de ${getContinueModeLabel(mode)} para continuar.`
+            : `No se pudo resolver un PDF de ${getContinueModeLabel(mode)} para continuar.`
     )
 
-    void loadContinuePayload(mode, { silent: Boolean(localPayload) })
+    void loadContinuePayload(mode, { silent: Boolean(localPayload), materialId })
   }
 
   const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
@@ -3487,15 +3500,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     flushPendingSynthesisAutosaves(subject.id)
     resetSynthesisPlayback()
+    setStackedDayViewReturnState({
+      source: "synthesis",
+      synthesisViewMode,
+      synthesisSubjectId: subject.id,
+      synthesisWeekNumber: synthesisWeekNumberRef.current,
+    })
     setCurrentSubject(subject)
     setDialogDateKey(material.session_date)
-    resetSubjectUiState()
+    resetSubjectUiState({ preserveStackedReturnState: true })
     setPracticeSectionView(mode === "theory" ? "theory" : "exercises")
     setExerciseWeeklyScopeEnabled(false)
     setSelectedPracticeMaterialId(material.id)
     setIsSynthesisOpen(false)
     setIsDialogOpen(true)
-  }, [flushPendingFeaturedUpdate, flushPendingSynthesisAutosaves, resetSynthesisPlayback, resetSubjectUiState, synthesisSelectedSubject])
+  }, [flushPendingFeaturedUpdate, flushPendingSynthesisAutosaves, resetSynthesisPlayback, resetSubjectUiState, synthesisSelectedSubject, synthesisViewMode])
 
   // Practice modal functions
   const openPracticeModal = () => {
@@ -6053,6 +6072,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   Invertir roles
                 </Button>
               </div>
+              {entriesError ? <p className="text-sm text-red-600">{entriesError}</p> : null}
               {(["question", "answer"] as const).map((role) => {
                 const slot = audioPairDraft.slots[role]
                 const isThisRecording = isRecording && audioPairRecordingRole === role
