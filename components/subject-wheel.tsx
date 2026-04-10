@@ -382,6 +382,8 @@ function getSpeechSynthesisInstance() {
   return window.speechSynthesis
 }
 
+const SOCRATIC_TTS_VOICE_STORAGE_KEY = "socratic-review-voice-uri"
+
 function getRecorderMimeType() {
   if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
 
@@ -1025,6 +1027,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [socraticSelectedModelId, setSocraticSelectedModelId] = useState("")
   const [isSocraticModelSaving, setIsSocraticModelSaving] = useState(false)
   const [socraticModelStatusMessage, setSocraticModelStatusMessage] = useState("")
+  const [socraticVoices, setSocraticVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [socraticSelectedVoiceUri, setSocraticSelectedVoiceUri] = useState("")
   const [isSocraticQueueLoading, setIsSocraticQueueLoading] = useState(false)
   const [socraticCurrentIndex, setSocraticCurrentIndex] = useState(0)
   const [socraticTurn, setSocraticTurn] = useState<SocraticReviewGeneratedTurn | null>(null)
@@ -3798,6 +3802,45 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }, [])
 
+  const loadSocraticVoices = useCallback(() => {
+    const speechSynthesisInstance = getSpeechSynthesisInstance()
+    if (!speechSynthesisInstance) {
+      setSocraticVoices([])
+      setSocraticSelectedVoiceUri("")
+      return
+    }
+
+    const availableVoices = speechSynthesisInstance
+      .getVoices()
+      .filter((voice, index, collection) => collection.findIndex((item) => item.voiceURI === voice.voiceURI) === index)
+
+    setSocraticVoices(availableVoices)
+
+    if (availableVoices.length === 0) {
+      setSocraticSelectedVoiceUri("")
+      return
+    }
+
+    const savedVoiceUri = typeof window !== "undefined"
+      ? window.localStorage.getItem(SOCRATIC_TTS_VOICE_STORAGE_KEY) || ""
+      : ""
+    const matchedVoice = savedVoiceUri
+      ? availableVoices.find((voice) => voice.voiceURI === savedVoiceUri) ?? null
+      : null
+    const currentVoice = socraticSelectedVoiceUri
+      ? availableVoices.find((voice) => voice.voiceURI === socraticSelectedVoiceUri) ?? null
+      : null
+    const spanishVoice = availableVoices.find((voice) => voice.lang.toLowerCase().startsWith("es")) ?? null
+    const fallbackVoice = matchedVoice ?? currentVoice ?? spanishVoice ?? availableVoices[0] ?? null
+
+    if (fallbackVoice) {
+      setSocraticSelectedVoiceUri(fallbackVoice.voiceURI)
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SOCRATIC_TTS_VOICE_STORAGE_KEY, fallbackVoice.voiceURI)
+      }
+    }
+  }, [socraticSelectedVoiceUri])
+
   const loadSocraticTurnForPair = useCallback(
     async (pair: SocraticReviewQueueItem) => {
       const effectiveModelId = String(socraticSelectedModelId || "").trim()
@@ -3905,7 +3948,13 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
 
     const utterance = new SpeechSynthesisUtterance(questionText)
-    utterance.lang = "es-AR"
+    const selectedVoice = socraticVoices.find((voice) => voice.voiceURI === socraticSelectedVoiceUri) ?? null
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+      utterance.lang = selectedVoice.lang || "es-AR"
+    } else {
+      utterance.lang = "es-AR"
+    }
     utterance.rate = 0.95
     utterance.onend = () => {
       setIsSocraticSpeaking(false)
@@ -3921,7 +3970,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSocraticSpeaking(true)
     setSocraticSpeakingQuestionIndex(questionIndex)
     speechSynthesisInstance.speak(utterance)
-  }, [isSocraticSpeaking, socraticSpeakingQuestionIndex, socraticTurn])
+  }, [isSocraticSpeaking, socraticSelectedVoiceUri, socraticSpeakingQuestionIndex, socraticTurn, socraticVoices])
 
   const handleSocraticRevealAnswer = useCallback(async () => {
     if (!socraticTurn || isSocraticRevealing) return
@@ -3973,6 +4022,25 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (!isSocraticReviewOpen) return
     void loadSocraticModelPreferences()
   }, [isSocraticReviewOpen, loadSocraticModelPreferences])
+
+  useEffect(() => {
+    if (!isSocraticReviewOpen) return
+
+    const speechSynthesisInstance = getSpeechSynthesisInstance()
+    if (!speechSynthesisInstance) {
+      setSocraticVoices([])
+      setSocraticSelectedVoiceUri("")
+      return
+    }
+
+    loadSocraticVoices()
+    const handleVoicesChanged = () => loadSocraticVoices()
+    speechSynthesisInstance.addEventListener("voiceschanged", handleVoicesChanged)
+
+    return () => {
+      speechSynthesisInstance.removeEventListener("voiceschanged", handleVoicesChanged)
+    }
+  }, [isSocraticReviewOpen, loadSocraticVoices])
 
   const loadReviewEntries = async (subjectId: string) => {
     setReviewSubjectId(subjectId)
@@ -4424,6 +4492,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const socraticSelectedModel = useMemo(
     () => socraticModels.find((model) => model.id === socraticSelectedModelId) ?? null,
     [socraticModels, socraticSelectedModelId]
+  )
+  const socraticSelectedVoice = useMemo(
+    () => socraticVoices.find((voice) => voice.voiceURI === socraticSelectedVoiceUri) ?? null,
+    [socraticSelectedVoiceUri, socraticVoices]
   )
   const socraticCurrentPair = socraticQueue[socraticCurrentIndex] ?? null
   const socraticCounterLabel = socraticQueue.length > 0 ? `${Math.min(socraticCurrentIndex + 1, socraticQueue.length)}/${socraticQueue.length}` : "0/0"
@@ -6820,7 +6892,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Elegi una materia</h2>
                 </div>
                 <div className="rounded-3xl border border-border bg-card p-5 shadow-sm">
-                  <div className="space-y-2">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <Select
                       value={socraticSelectedModelId || undefined}
                       onValueChange={(value) => {
@@ -6830,7 +6902,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       disabled={isSocraticModelsLoading || isSocraticModelSaving || socraticModels.length === 0}
                     >
                       <SelectTrigger className="h-12 text-sm">
-                        <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Seleccionar modelo"} />
+                        <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Modelo"} />
                       </SelectTrigger>
                       <SelectContent>
                         {socraticModels.map((model) => (
@@ -6840,8 +6912,34 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         ))}
                       </SelectContent>
                     </Select>
+                    <Select
+                      value={socraticSelectedVoiceUri || undefined}
+                      onValueChange={(value) => {
+                        setSocraticSelectedVoiceUri(value)
+                        if (typeof window !== "undefined") {
+                          window.localStorage.setItem(SOCRATIC_TTS_VOICE_STORAGE_KEY, value)
+                        }
+                      }}
+                      disabled={!canUseSocraticSpeech || socraticVoices.length === 0}
+                    >
+                      <SelectTrigger className="h-12 text-sm">
+                        <SelectValue placeholder={canUseSocraticSpeech ? "Voz" : "Sin TTS"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {socraticVoices.map((voice) => (
+                          <SelectItem key={voice.voiceURI} value={voice.voiceURI}>
+                            {`${voice.name} · ${voice.lang}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="mt-2 space-y-1">
                     {socraticSelectedModel ? (
                       <p className="text-xs text-muted-foreground">{socraticSelectedModel.label}</p>
+                    ) : null}
+                    {socraticSelectedVoice ? (
+                      <p className="text-xs text-muted-foreground">{`${socraticSelectedVoice.name} · ${socraticSelectedVoice.lang}`}</p>
                     ) : null}
                     {isSocraticModelSaving ? (
                       <p className="text-xs text-muted-foreground">Guardando modelo...</p>
@@ -6881,25 +6979,48 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       <span>{socraticCounterLabel}</span>
                     </div>
                     <div className="max-w-md space-y-1">
-                      <Select
-                        value={socraticSelectedModelId || undefined}
-                        onValueChange={(value) => {
-                          setSocraticSelectedModelId(value)
-                          void persistSocraticModelSelection(value)
-                        }}
-                        disabled={isSocraticModelsLoading || isSocraticModelSaving || socraticModels.length === 0}
-                      >
-                        <SelectTrigger className="h-11 text-sm">
-                          <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Seleccionar modelo"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {socraticModels.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              {model.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Select
+                          value={socraticSelectedModelId || undefined}
+                          onValueChange={(value) => {
+                            setSocraticSelectedModelId(value)
+                            void persistSocraticModelSelection(value)
+                          }}
+                          disabled={isSocraticModelsLoading || isSocraticModelSaving || socraticModels.length === 0}
+                        >
+                          <SelectTrigger className="h-11 text-sm">
+                            <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Modelo"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {socraticModels.map((model) => (
+                              <SelectItem key={model.id} value={model.id}>
+                                {model.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={socraticSelectedVoiceUri || undefined}
+                          onValueChange={(value) => {
+                            setSocraticSelectedVoiceUri(value)
+                            if (typeof window !== "undefined") {
+                              window.localStorage.setItem(SOCRATIC_TTS_VOICE_STORAGE_KEY, value)
+                            }
+                          }}
+                          disabled={!canUseSocraticSpeech || socraticVoices.length === 0}
+                        >
+                          <SelectTrigger className="h-11 text-sm">
+                            <SelectValue placeholder={canUseSocraticSpeech ? "Voz" : "Sin TTS"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {socraticVoices.map((voice) => (
+                              <SelectItem key={voice.voiceURI} value={voice.voiceURI}>
+                                {`${voice.name} · ${voice.lang}`}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                       {isSocraticModelSaving ? (
                         <p className="text-xs text-muted-foreground">Guardando modelo...</p>
                       ) : null}
