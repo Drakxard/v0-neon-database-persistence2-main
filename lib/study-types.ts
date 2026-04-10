@@ -131,3 +131,35 @@ export type SubjectSynthesisSubjectPayload = {
   legacySummary: SubjectSynthesisRecord
   materialProgress: SubjectMaterialSynthesisRecord[]
 }
+
+export type SocraticReviewQueueItem = {
+  pairId: string
+  subjectId: string
+  subjectName: string
+  weekNumber: number
+  sessionDate: string
+  orderIndex: number
+  questionEntryId: number
+  questionTitle: string
+  questionTranscript: string
+  answerEntryId: number
+  answerTitle: string
+  answerTranscript: string
+}
+
+export type SocraticReviewQueuePayload = {
+  subjectId: string
+  subjectName: string
+  weekNumber: number
+  items: SocraticReviewQueueItem[]
+}
+
+export type SocraticReviewGeneratedTurn = {
+  turnId: number
+  pairId: string
+  subjectId: string
+  weekNumber: number
+  answerEntryId: number
+  questions: string[]
+  fallbackUsed: boolean
+}
