@@ -129,6 +129,18 @@ function getMissingMetadataColumnResponse(body: Record<string, unknown>) {
   )
 }
 
+function getInvalidAudioPairStateResponse(
+  message = "La dupla tiene metadata inconsistente y no se puede invertir hasta corregirla."
+) {
+  return NextResponse.json(
+    {
+      error: message,
+      code: "INVALID_AUDIO_PAIR_STATE",
+    },
+    { status: 409 }
+  )
+}
+
 async function withLinks(row: EntryRow | null) {
   if (!row) return null
 
@@ -218,32 +230,55 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           return NextResponse.json({ error: "Solo se puede cambiar el sentido dentro de una dupla." }, { status: 400 })
         }
         if (!pairScope.pair_role) {
-          return NextResponse.json(
-            {
-              error: "La dupla tiene metadata inconsistente y no se puede invertir hasta corregirla.",
-              code: "INVALID_AUDIO_PAIR_STATE",
-            },
-            { status: 409 }
-          )
+          return getInvalidAudioPairStateResponse()
         }
 
-        if (pairScope.pair_role === pairRole) {
+        const pairRows = await sql`
+          SELECT id, pair_id, pair_role
+          FROM subject_day_entries
+          WHERE pair_id = ${pairScope.pair_id}
+          ORDER BY id ASC
+        ` as Array<{ id: number; pair_id: string | null; pair_role: "question" | "answer" | null }>
+
+        const targetPairRow = pairRows.find((row) => row.id === entryId) ?? null
+        if (!targetPairRow?.pair_id || !targetPairRow.pair_role) {
+          return getInvalidAudioPairStateResponse()
+        }
+        if (pairRows.length === 0 || pairRows.length > 2) {
+          return getInvalidAudioPairStateResponse("La dupla tiene mas de dos audios activos y no se puede invertir en forma segura.")
+        }
+        if (pairRows.some((row) => !row.pair_role)) {
+          return getInvalidAudioPairStateResponse()
+        }
+
+        const siblingRows = pairRows.filter((row) => row.id !== entryId)
+        if (siblingRows.length > 1) {
+          return getInvalidAudioPairStateResponse("La dupla tiene mas de un audio hermano y no se puede invertir en forma segura.")
+        }
+
+        const sibling = siblingRows[0] ?? null
+        const distinctRoles = new Set(pairRows.map((row) => row.pair_role))
+        const isCompletePair = pairRows.length === 2
+
+        if (isCompletePair && distinctRoles.size !== 2) {
+          return getInvalidAudioPairStateResponse("La dupla tiene roles duplicados o incompletos y no se puede invertir automaticamente.")
+        }
+
+        if (targetPairRow.pair_role === pairRole) {
           rows = await sql`
             SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
             FROM subject_day_entries
             WHERE id = ${entryId}
           ` as EntryRow[]
         } else {
-          const siblingRows = await sql`
-            SELECT id, pair_role
-            FROM subject_day_entries
-            WHERE pair_id = ${pairScope.pair_id}
-              AND id <> ${entryId}
-            ORDER BY id ASC
-          ` as Array<{ id: number; pair_role: "question" | "answer" | null }>
+          if (isCompletePair) {
+            if (!sibling) {
+              return getInvalidAudioPairStateResponse()
+            }
+            if (sibling.pair_role !== pairRole) {
+              return getInvalidAudioPairStateResponse("La dupla completa no quedo en un estado intercambiable.")
+            }
 
-          const conflictingSibling = siblingRows.find((row) => row.pair_role === pairRole) ?? null
-          if (conflictingSibling) {
             const temporaryPairId = `${pairScope.pair_id}::swap::${entryId}::${Date.now()}`
             rows = await sql`
               WITH moved_target AS (
@@ -255,17 +290,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
               updated_sibling AS (
                 UPDATE subject_day_entries
                 SET pair_role = ${pairScope.pair_role}, updated_at = NOW()
-                WHERE id = ${conflictingSibling.id}
+                WHERE id = ${sibling.id}
+                  AND EXISTS (SELECT 1 FROM moved_target WHERE moved_target.id = ${entryId})
                 RETURNING id
+              ),
+              restored_target AS (
+                UPDATE subject_day_entries
+                SET
+                  pair_id = ${pairScope.pair_id},
+                  pair_role = ${pairRole},
+                  updated_at = NOW()
+                WHERE id = ${entryId}
+                  AND EXISTS (SELECT 1 FROM updated_sibling WHERE updated_sibling.id = ${sibling.id})
+                RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
               )
-              UPDATE subject_day_entries
-              SET
-                pair_id = ${pairScope.pair_id},
-                pair_role = ${pairRole},
-                updated_at = NOW()
-              WHERE id = ${entryId}
-              RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
+              SELECT *
+              FROM restored_target
             ` as EntryRow[]
+
+            if (!rows[0]) {
+              return getInvalidAudioPairStateResponse("No se pudo completar el intercambio porque la dupla cambio mientras se actualizaba.")
+            }
           } else {
             rows = await sql`
               UPDATE subject_day_entries
@@ -275,10 +320,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             ` as EntryRow[]
           }
 
-          const updatedTarget = rows.find((row) => row.id === entryId)
-          if (updatedTarget) {
-            rows = [updatedTarget]
-          }
+          rows = rows.filter((row) => row.id === entryId)
         }
       } else if (targetMaterialId !== undefined) {
         const targetMaterialRows = await sql`
