@@ -33,6 +33,30 @@ export function getAdminSession() {
   }
 }
 
+export async function getCurrentSessionForEmail(email: string): Promise<AuthSession | null> {
+  const normalizedEmail = email.trim().toLowerCase()
+  if (!normalizedEmail) return null
+
+  if (normalizedEmail === getAdminEmail()) {
+    return {
+      email: normalizedEmail,
+      ...getAdminSession(),
+      expiresAtMs: 0,
+    }
+  }
+
+  const allowedAccount = await getAllowedAccountByEmail(normalizedEmail)
+  const allowedSubjectIds = allowedAccount?.allowed_subject_ids ?? []
+  if (allowedSubjectIds.length === 0) return null
+
+  return {
+    email: normalizedEmail,
+    isAdmin: false,
+    allowedSubjectIds,
+    expiresAtMs: 0,
+  }
+}
+
 export async function getAllowedAccountByEmail(email: string) {
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) return null
@@ -100,7 +124,16 @@ export async function getRequestAuthSession(): Promise<AuthSession | null> {
   if (!token) return null
 
   const { sessionSecret } = getAppAuthConfig()
-  return verifySessionToken(token, sessionSecret)
+  const tokenSession = await verifySessionToken(token, sessionSecret)
+  if (!tokenSession) return null
+
+  const currentSession = await getCurrentSessionForEmail(tokenSession.email)
+  if (!currentSession) return null
+
+  return {
+    ...currentSession,
+    expiresAtMs: tokenSession.expiresAtMs,
+  }
 }
 
 export async function requireAuthSession() {

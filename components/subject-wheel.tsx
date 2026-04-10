@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { BarChart3, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { useTheme } from "next-themes"
+import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -810,9 +811,11 @@ function buildSynthesisSubjectSummary(subjectId: string, weekNumber: number, sta
 }
 
 export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
+  const router = useRouter()
+  const [session, setSession] = useState<AuthSession>(authSession)
   const visibleSubjects = useMemo<Subject[]>(
-    () => SUBJECTS.filter((subject) => authSession.isAdmin || authSession.allowedSubjectIds.includes(subject.id)),
-    [authSession.allowedSubjectIds, authSession.isAdmin]
+    () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
+    [session.allowedSubjectIds, session.isAdmin]
   )
   const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
@@ -918,6 +921,84 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<StackedDayViewReturnState | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
+
+  useEffect(() => {
+    setSession(authSession)
+  }, [authSession])
+
+  useEffect(() => {
+    let isCancelled = false
+
+    const syncSession = async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          cache: "no-store",
+          credentials: "same-origin",
+        })
+
+        if (response.status === 401) {
+          if (!isCancelled) {
+            window.location.href = "/login"
+          }
+          return
+        }
+
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(payload?.error || "No se pudo sincronizar la sesion.")
+        }
+
+        if (isCancelled) return
+
+        let hasSessionChanged = false
+
+        setSession((current) => {
+          const sameSession =
+            current.email === payload.email &&
+            current.isAdmin === payload.isAdmin &&
+            current.allowedSubjectIds.length === payload.allowedSubjectIds.length &&
+            current.allowedSubjectIds.every((subjectId, index) => subjectId === payload.allowedSubjectIds[index])
+
+          hasSessionChanged = !sameSession
+          if (sameSession) return current
+
+          return {
+            ...current,
+            email: payload.email,
+            isAdmin: Boolean(payload.isAdmin),
+            allowedSubjectIds: Array.isArray(payload.allowedSubjectIds) ? payload.allowedSubjectIds : [],
+          }
+        })
+
+        if (hasSessionChanged) {
+          router.refresh()
+        }
+      } catch (error) {
+        console.error("Failed to sync auth session:", error)
+      }
+    }
+
+    void syncSession()
+
+    const intervalId = window.setInterval(() => {
+      void syncSession()
+    }, 30000)
+
+    const handleFocus = () => {
+      if (document.visibilityState === "hidden") return
+      void syncSession()
+    }
+
+    window.addEventListener("focus", handleFocus)
+    document.addEventListener("visibilitychange", handleFocus)
+
+    return () => {
+      isCancelled = true
+      window.clearInterval(intervalId)
+      window.removeEventListener("focus", handleFocus)
+      document.removeEventListener("visibilitychange", handleFocus)
+    }
+  }, [router])
   const [reviewSubjectId, setReviewSubjectId] = useState("")
   const [isSynthesisOpen, setIsSynthesisOpen] = useState(false)
   const [synthesisViewMode, setSynthesisViewMode] = useState<SynthesisViewMode>("overview")
@@ -4641,7 +4722,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         <p>Las materias se reiniciarán mañana</p>
       </footer>
 
-      {authSession.isAdmin ? (
+      {session.isAdmin ? (
         <AdminAccessModal open={isAdminModalOpen} onOpenChange={setIsAdminModalOpen} subjectOptions={SUBJECTS} />
       ) : null}
 
@@ -6443,7 +6524,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             </div>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
-            {(authSession.isAdmin || practiceLaunchView === "exercises") && (
+            {(session.isAdmin || practiceLaunchView === "exercises") && (
               <div className="mx-auto mb-4 flex w-full max-w-5xl items-center justify-between gap-3">
                 {practiceLaunchView === "exercises" ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -6457,7 +6538,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 ) : (
                   <div />
                 )}
-                {authSession.isAdmin ? (
+                {session.isAdmin ? (
                   <Button
                     onClick={() => setIsAdminModalOpen(true)}
                     variant="outline"
