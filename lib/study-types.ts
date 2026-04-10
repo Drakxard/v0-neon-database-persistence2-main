@@ -154,6 +154,16 @@ export type SocraticReviewQueuePayload = {
   items: SocraticReviewQueueItem[]
 }
 
+export type GroqModelOption = {
+  id: string
+  ownedBy: string
+  label: string
+}
+
+export type SocraticReviewSettings = {
+  selectedModel: string | null
+}
+
 export type SocraticReviewGeneratedTurn = {
   turnId: number
   pairId: string
@@ -162,4 +172,5 @@ export type SocraticReviewGeneratedTurn = {
   answerEntryId: number
   questions: string[]
   fallbackUsed: boolean
+  modelId: string | null
 }

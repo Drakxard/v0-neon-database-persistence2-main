@@ -22,12 +22,20 @@ import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
-import { fetchSocraticReviewQueue, generateSocraticReviewTurn, revealSocraticReviewTurn } from "@/lib/socratic-review-client"
+import {
+  fetchGroqModels,
+  fetchSocraticReviewQueue,
+  fetchSocraticReviewSettings,
+  generateSocraticReviewTurn,
+  revealSocraticReviewTurn,
+  saveSocraticReviewSettings,
+} from "@/lib/socratic-review-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import type {
+  GroqModelOption,
   PendingSubjectDayMaterial,
   PracticeCoverageStatus,
   SocraticReviewGeneratedTurn,
@@ -1012,12 +1020,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [socraticSubjectId, setSocraticSubjectId] = useState("")
   const [socraticQueue, setSocraticQueue] = useState<SocraticReviewQueueItem[]>([])
   const [socraticReviewError, setSocraticReviewError] = useState("")
+  const [socraticModels, setSocraticModels] = useState<GroqModelOption[]>([])
+  const [isSocraticModelsLoading, setIsSocraticModelsLoading] = useState(false)
+  const [socraticSelectedModelId, setSocraticSelectedModelId] = useState("")
+  const [isSocraticModelSaving, setIsSocraticModelSaving] = useState(false)
+  const [socraticModelStatusMessage, setSocraticModelStatusMessage] = useState("")
   const [isSocraticQueueLoading, setIsSocraticQueueLoading] = useState(false)
   const [socraticCurrentIndex, setSocraticCurrentIndex] = useState(0)
   const [socraticTurn, setSocraticTurn] = useState<SocraticReviewGeneratedTurn | null>(null)
   const [isSocraticTurnLoading, setIsSocraticTurnLoading] = useState(false)
   const [isSocraticTextVisible, setIsSocraticTextVisible] = useState(false)
   const [isSocraticSpeaking, setIsSocraticSpeaking] = useState(false)
+  const [socraticSpeakingQuestionIndex, setSocraticSpeakingQuestionIndex] = useState<number | null>(null)
   const [isSocraticRevealing, setIsSocraticRevealing] = useState(false)
   const [hasSocraticAnswerBeenRevealed, setHasSocraticAnswerBeenRevealed] = useState(false)
   const [isSocraticFinished, setIsSocraticFinished] = useState(false)
@@ -3696,6 +3710,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const speechSynthesisInstance = getSpeechSynthesisInstance()
     speechSynthesisInstance?.cancel()
     setIsSocraticSpeaking(false)
+    setSocraticSpeakingQuestionIndex(null)
 
     const audio = socraticAnswerAudioRef.current
     if (audio) {
@@ -3711,6 +3726,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setSocraticSubjectId("")
     setSocraticQueue([])
     setSocraticReviewError("")
+    setSocraticModelStatusMessage("")
     setIsSocraticQueueLoading(false)
     setSocraticCurrentIndex(0)
     setSocraticTurn(null)
@@ -3721,8 +3737,75 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     setIsSocraticFinished(false)
   }, [stopSocraticPlayback])
 
+  const persistSocraticModelSelection = useCallback(
+    async (nextModelId: string) => {
+      const normalizedModelId = String(nextModelId || "").trim()
+      if (!normalizedModelId) return
+
+      setIsSocraticModelSaving(true)
+      setSocraticModelStatusMessage("")
+      try {
+        const savedSettings = await saveSocraticReviewSettings(normalizedModelId)
+        setSocraticSelectedModelId(savedSettings.selectedModel || normalizedModelId)
+      } catch (error) {
+        setSocraticReviewError(error instanceof Error ? error.message : "No se pudo guardar el modelo socratico.")
+      } finally {
+        setIsSocraticModelSaving(false)
+      }
+    },
+    []
+  )
+
+  const loadSocraticModelPreferences = useCallback(async () => {
+    setIsSocraticModelsLoading(true)
+    setSocraticModelStatusMessage("")
+    setSocraticReviewError("")
+
+    try {
+      const [modelsPayload, settingsPayload] = await Promise.all([
+        fetchGroqModels(),
+        fetchSocraticReviewSettings(),
+      ])
+
+      const availableModels = Array.isArray(modelsPayload.models) ? modelsPayload.models : []
+      setSocraticModels(availableModels)
+
+      if (availableModels.length === 0) {
+        setSocraticSelectedModelId("")
+        setSocraticModelStatusMessage("Groq no devolvio modelos utilizables para este flujo.")
+        return
+      }
+
+      const savedModelId = String(settingsPayload.selectedModel || "").trim()
+      const matchedModel = savedModelId
+        ? availableModels.find((model) => model.id === savedModelId) ?? null
+        : null
+      const fallbackModel = availableModels[0] ?? null
+      const effectiveModelId = matchedModel?.id || fallbackModel?.id || ""
+
+      setSocraticSelectedModelId(effectiveModelId)
+
+      if (savedModelId && !matchedModel && fallbackModel) {
+        setSocraticModelStatusMessage("El modelo guardado ya no existe en Groq. Se uso el primero disponible.")
+        void saveSocraticReviewSettings(fallbackModel.id).catch(() => undefined)
+      }
+    } catch (error) {
+      setSocraticModels([])
+      setSocraticSelectedModelId("")
+      setSocraticReviewError(error instanceof Error ? error.message : "No se pudieron cargar los modelos de Groq.")
+    } finally {
+      setIsSocraticModelsLoading(false)
+    }
+  }, [])
+
   const loadSocraticTurnForPair = useCallback(
     async (pair: SocraticReviewQueueItem) => {
+      const effectiveModelId = String(socraticSelectedModelId || "").trim()
+      if (!effectiveModelId) {
+        setSocraticReviewError("Selecciona un modelo de Groq antes de generar preguntas.")
+        return
+      }
+
       socraticActivePairIdRef.current = pair.pairId
       stopSocraticPlayback()
       setSocraticReviewError("")
@@ -3733,7 +3816,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       setHasSocraticAnswerBeenRevealed(false)
 
       try {
-        const generatedTurn = await generateSocraticReviewTurn(pair.pairId)
+        const generatedTurn = await generateSocraticReviewTurn({
+          pairId: pair.pairId,
+          modelId: effectiveModelId,
+        })
         if (socraticActivePairIdRef.current !== pair.pairId) return
         setSocraticTurn(generatedTurn)
       } catch (error) {
@@ -3745,7 +3831,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         }
       }
     },
-    [stopSocraticPlayback]
+    [socraticSelectedModelId, stopSocraticPlayback]
   )
 
   const loadSocraticQueue = useCallback(
@@ -3801,8 +3887,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     }
   }
 
-  const handleSocraticSpeechToggle = useCallback(() => {
-    if (!socraticTurn?.questions.length) return
+  const handleSocraticSpeechToggle = useCallback((questionIndex: number) => {
+    const questionText = socraticTurn?.questions[questionIndex]
+    if (!questionText) return
 
     const speechSynthesisInstance = getSpeechSynthesisInstance()
     if (!speechSynthesisInstance) {
@@ -3810,25 +3897,31 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
       return
     }
 
-    if (isSocraticSpeaking) {
+    if (isSocraticSpeaking && socraticSpeakingQuestionIndex === questionIndex) {
       speechSynthesisInstance.cancel()
       setIsSocraticSpeaking(false)
+      setSocraticSpeakingQuestionIndex(null)
       return
     }
 
-    const utterance = new SpeechSynthesisUtterance(socraticTurn.questions.join(" "))
+    const utterance = new SpeechSynthesisUtterance(questionText)
     utterance.lang = "es-AR"
     utterance.rate = 0.95
-    utterance.onend = () => setIsSocraticSpeaking(false)
+    utterance.onend = () => {
+      setIsSocraticSpeaking(false)
+      setSocraticSpeakingQuestionIndex(null)
+    }
     utterance.onerror = () => {
       setIsSocraticSpeaking(false)
+      setSocraticSpeakingQuestionIndex(null)
       setIsSocraticTextVisible(true)
     }
 
     speechSynthesisInstance.cancel()
     setIsSocraticSpeaking(true)
+    setSocraticSpeakingQuestionIndex(questionIndex)
     speechSynthesisInstance.speak(utterance)
-  }, [isSocraticSpeaking, socraticTurn])
+  }, [isSocraticSpeaking, socraticSpeakingQuestionIndex, socraticTurn])
 
   const handleSocraticRevealAnswer = useCallback(async () => {
     if (!socraticTurn || isSocraticRevealing) return
@@ -3875,6 +3968,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (isSocraticReviewOpen) return
     stopSocraticPlayback()
   }, [isSocraticReviewOpen, stopSocraticPlayback])
+
+  useEffect(() => {
+    if (!isSocraticReviewOpen) return
+    void loadSocraticModelPreferences()
+  }, [isSocraticReviewOpen, loadSocraticModelPreferences])
 
   const loadReviewEntries = async (subjectId: string) => {
     setReviewSubjectId(subjectId)
@@ -4322,6 +4420,10 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const socraticSelectedSubject = useMemo(
     () => getSubjectById(socraticSubjectId, visibleSubjects),
     [socraticSubjectId, visibleSubjects]
+  )
+  const socraticSelectedModel = useMemo(
+    () => socraticModels.find((model) => model.id === socraticSelectedModelId) ?? null,
+    [socraticModels, socraticSelectedModelId]
   )
   const socraticCurrentPair = socraticQueue[socraticCurrentIndex] ?? null
   const socraticCounterLabel = socraticQueue.length > 0 ? `${Math.min(socraticCurrentIndex + 1, socraticQueue.length)}/${socraticQueue.length}` : "0/0"
@@ -6695,11 +6797,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
         >
           <DialogHeader className="border-b border-border bg-card px-6 py-5 sm:px-8">
             <div className="flex items-start justify-between gap-4">
-              <div className="space-y-1">
+              <div>
                 <DialogTitle>Repaso socratico</DialogTitle>
-                <DialogDescription>
-                  Elige una materia y recorre los conceptos de la semana actual con 2 preguntas generadas sobre cada audio-respuesta.
-                </DialogDescription>
               </div>
               <DialogClose asChild>
                 <button
@@ -6716,10 +6815,41 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           <div className="flex-1 overflow-y-auto bg-muted/30 px-6 py-6 sm:px-8">
             {socraticSubjectId === "" ? (
               <div className="mx-auto flex h-full w-full max-w-4xl flex-col justify-center gap-8">
-                <div className="space-y-2">
-                  <p className="text-sm font-medium uppercase tracking-[0.24em] text-muted-foreground">Semana actual</p>
-                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Elige una materia</h2>
-                  <p className="text-sm text-muted-foreground">Se toma solo la semana {currentCalendarWeek} y se recorre de la primera dupla a la ultima.</p>
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Semana {currentCalendarWeek}</p>
+                  <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">Elegi una materia</h2>
+                </div>
+                <div className="rounded-3xl border border-border bg-card p-5 shadow-sm">
+                  <div className="space-y-2">
+                    <Select
+                      value={socraticSelectedModelId || undefined}
+                      onValueChange={(value) => {
+                        setSocraticSelectedModelId(value)
+                        void persistSocraticModelSelection(value)
+                      }}
+                      disabled={isSocraticModelsLoading || isSocraticModelSaving || socraticModels.length === 0}
+                    >
+                      <SelectTrigger className="h-12 text-sm">
+                        <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Seleccionar modelo"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {socraticModels.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {socraticSelectedModel ? (
+                      <p className="text-xs text-muted-foreground">{socraticSelectedModel.label}</p>
+                    ) : null}
+                    {isSocraticModelSaving ? (
+                      <p className="text-xs text-muted-foreground">Guardando modelo...</p>
+                    ) : null}
+                    {socraticModelStatusMessage ? (
+                      <p className="text-xs text-amber-700">{socraticModelStatusMessage}</p>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {visibleSubjects.map((subject) => (
@@ -6727,6 +6857,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                       key={subject.id}
                       type="button"
                       onClick={() => void loadSocraticQueue(subject.id)}
+                      disabled={isSocraticModelsLoading || !socraticSelectedModelId}
                       className="rounded-3xl border border-border bg-card px-5 py-6 text-left shadow-sm transition hover:border-primary/40 hover:bg-accent"
                     >
                       <p className="text-base font-semibold text-foreground">{subject.name.replace("\n", " ")}</p>
@@ -6741,14 +6872,40 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             ) : (
               <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
                 <div className="flex flex-col gap-4 rounded-3xl border border-border bg-card px-5 py-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Materia</p>
+                  <div className="space-y-2">
                     <h2 className="text-2xl font-semibold text-foreground">
                       {getSubjectDisplayName(socraticSelectedSubject)}
                     </h2>
                     <div className="flex flex-wrap gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
                       <span>Semana {currentCalendarWeek}</span>
                       <span>{socraticCounterLabel}</span>
+                    </div>
+                    <div className="max-w-md space-y-1">
+                      <Select
+                        value={socraticSelectedModelId || undefined}
+                        onValueChange={(value) => {
+                          setSocraticSelectedModelId(value)
+                          void persistSocraticModelSelection(value)
+                        }}
+                        disabled={isSocraticModelsLoading || isSocraticModelSaving || socraticModels.length === 0}
+                      >
+                        <SelectTrigger className="h-11 text-sm">
+                          <SelectValue placeholder={isSocraticModelsLoading ? "Cargando modelos..." : "Seleccionar modelo"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {socraticModels.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {isSocraticModelSaving ? (
+                        <p className="text-xs text-muted-foreground">Guardando modelo...</p>
+                      ) : null}
+                      {socraticModelStatusMessage ? (
+                        <p className="text-xs text-amber-700">{socraticModelStatusMessage}</p>
+                      ) : null}
                     </div>
                   </div>
                   <Button
@@ -6767,12 +6924,11 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
                 {socraticQueue.length === 0 ? (
                   <div className="rounded-3xl border border-border bg-card px-6 py-10 text-center shadow-sm">
-                    <p className="text-sm text-muted-foreground">No hay duplas completas con audio y transcripcion util en esta semana.</p>
+                    <p className="text-sm text-muted-foreground">No hay duplas listas esta semana.</p>
                   </div>
                 ) : isSocraticFinished ? (
                   <div className="rounded-3xl border border-border bg-card px-6 py-10 text-center shadow-sm">
                     <p className="mb-2 text-3xl font-semibold text-foreground">Terminaste</p>
-                    <p className="mb-6 text-sm text-muted-foreground">Recorriste los {socraticQueue.length} conceptos disponibles de esta materia.</p>
                     <div className="flex flex-wrap justify-center gap-2">
                       <Button
                         variant="outline"
@@ -6786,7 +6942,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                   <div className="space-y-5">
                     <section className="rounded-3xl border border-border bg-card px-6 py-6 shadow-sm">
                       <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                        <span>Concepto base</span>
                         <span>{socraticCurrentPair.questionTitle}</span>
                         <span>{socraticCurrentPair.sessionDate}</span>
                       </div>
@@ -6801,13 +6956,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                           <>
                             <div className="space-y-3">
                               <div className="flex flex-wrap gap-2">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={handleSocraticSpeechToggle}
-                                >
-                                  {isSocraticSpeaking ? "Detener lectura" : "Leer"}
-                                </Button>
+                                {socraticTurn.questions.map((question, index) => (
+                                  <Button
+                                    key={`${socraticTurn.turnId}-play-${index}`}
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => handleSocraticSpeechToggle(index)}
+                                  >
+                                    {isSocraticSpeaking && socraticSpeakingQuestionIndex === index
+                                      ? `Detener ${index + 1}`
+                                      : `Pregunta ${index + 1}`}
+                                  </Button>
+                                ))}
                                 <Button
                                   type="button"
                                   variant="outline"
@@ -6818,23 +6978,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                               </div>
 
                               {!canUseSocraticSpeech ? (
-                                <p className="text-sm text-muted-foreground">
-                                  Este navegador no expone `speechSynthesis`; el repaso sigue disponible en texto.
-                                </p>
-                              ) : null}
-
-                              {socraticTurn.fallbackUsed ? (
-                                <p className="text-sm text-muted-foreground">
-                                  Se uso fallback local para no frenar el flujo.
-                                </p>
+                                <p className="text-sm text-muted-foreground">Sin TTS del navegador.</p>
                               ) : null}
 
                               {isSocraticTextVisible || !canUseSocraticSpeech ? (
                                 <div className="space-y-3 rounded-3xl border border-dashed border-border bg-muted/40 p-5">
                                   {socraticTurn.questions.map((question, index) => (
-                                    <p key={`${socraticTurn.turnId}-${index}`} className="text-base leading-7 text-foreground">
-                                      {question}
-                                    </p>
+                                    <div key={`${socraticTurn.turnId}-${index}`} className="space-y-1">
+                                      <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                                        {`Pregunta ${index + 1}`}
+                                      </p>
+                                      <p className="text-base leading-7 text-foreground">{question}</p>
+                                    </div>
                                   ))}
                                 </div>
                               ) : null}
@@ -6843,7 +6998,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                             <div className="space-y-3 rounded-3xl border border-border bg-muted/40 p-5">
                               <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div>
-                                  <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Respuesta grabada</p>
                                   <p className="text-sm text-foreground">{socraticCurrentPair.answerTitle}</p>
                                 </div>
                                 <Button

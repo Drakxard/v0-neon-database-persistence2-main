@@ -1,17 +1,16 @@
-import Groq from "groq-sdk"
 import { neon } from "@neondatabase/serverless"
 
+import { listGroqGenerationModels, requireGroqClient, validateGroqModelId } from "@/lib/groq-models"
 import { getSubjectById } from "@/lib/subjects"
 import { getCurrentWeekNumber } from "@/lib/subject-utils"
 import type {
   SocraticReviewGeneratedTurn,
   SocraticReviewQueueItem,
   SocraticReviewQueuePayload,
+  SocraticReviewSettings,
 } from "@/lib/study-types"
 
 const sql = neon(process.env.DATABASE_URL!)
-const groqApiKey = process.env.GROQ_API_KEY || ""
-const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null
 
 type PairRow = {
   pair_id: string
@@ -35,6 +34,7 @@ type TurnRow = {
   answer_entry_id: number
   generated_questions_json: unknown
   fallback_used: boolean
+  model_id: string | null
 }
 
 function normalizeSessionDateKey(value: string | Date) {
@@ -47,6 +47,10 @@ function normalizeSessionDateKey(value: string | Date) {
 
 function isMissingTable(error: unknown) {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01")
+}
+
+function isMissingColumn(error: unknown) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "42703")
 }
 
 function normalizeEntryTitle(value: string | null, fallback: string) {
@@ -72,7 +76,10 @@ function stripJsonFence(value: string) {
 
 function normalizeStoredQuestions(value: unknown) {
   if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
   }
 
   if (value && typeof value === "object" && "questions" in value) {
@@ -92,7 +99,7 @@ function normalizeStoredQuestions(value: unknown) {
 
 function sanitizeQuestion(value: string) {
   const trimmed = value.trim().replace(/\s+/g, " ")
-  return trimmed.replace(/^[-*•\d.)\s]+/, "").trim()
+  return trimmed.replace(/^[-*\d.)\s]+/, "").trim()
 }
 
 function isValidQuestionList(value: unknown): value is string[] {
@@ -102,7 +109,7 @@ function isValidQuestionList(value: unknown): value is string[] {
     if (typeof item !== "string") return false
     const normalized = item.trim()
     if (!normalized) return false
-    return !/^[-*•]|\d+\./.test(normalized)
+    return !/^[-*]|\d+\./.test(normalized)
   })
 }
 
@@ -110,8 +117,8 @@ function buildFallbackQuestions(answerTranscript: string) {
   const conceptSnippet = answerTranscript.replace(/\s+/g, " ").trim().slice(0, 140)
 
   return [
-    `Si cambias uno de los supuestos centrales de esta conclusion sobre "${conceptSnippet}", ¿que parte de tu razonamiento deja de sostenerse y por que?`,
-    `Si alguien defendiera la posicion contraria a "${conceptSnippet}", ¿como la refutarias sin repetir tu conclusion original?`,
+    `Si cambias uno de los supuestos centrales de esta conclusion sobre "${conceptSnippet}", que parte de tu razonamiento deja de sostenerse y por que?`,
+    `Si alguien defendiera la posicion contraria a "${conceptSnippet}", como la refutarias sin repetir tu conclusion original?`,
   ]
 }
 
@@ -184,7 +191,9 @@ async function selectEligiblePairs(subjectId: string, weekNumber: number) {
     ORDER BY question.session_date ASC, question.order_index ASC, question.id ASC
   ` as PairRow[]
 
-  return rows.map(mapPairRow).filter((item) => hasUsableTranscript(item.questionTranscript) && hasUsableTranscript(item.answerTranscript))
+  return rows
+    .map(mapPairRow)
+    .filter((item) => hasUsableTranscript(item.questionTranscript) && hasUsableTranscript(item.answerTranscript))
 }
 
 async function getPairById(pairId: string) {
@@ -223,36 +232,39 @@ export async function getSocraticReviewPair(pairId: string) {
 async function generateQuestionsWithGroq(params: {
   pair: SocraticReviewQueueItem
   recentQuestions: string[]
+  modelId: string
 }) {
-  if (!groq) {
-    throw new Error("Missing GROQ_API_KEY")
-  }
-
+  const groq = requireGroqClient()
   const recentQuestionsText =
     params.recentQuestions.length > 0
       ? params.recentQuestions.map((question, index) => `${index + 1}. ${question}`).join("\n")
       : "Sin preguntas previas."
 
+  const contextualText = [
+    `Pregunta original: ${params.pair.questionTranscript}`,
+    `Respuesta o conclusion del alumno: ${params.pair.answerTranscript}`,
+  ].join("\n")
+
   const completionPromise = groq.chat.completions.create({
-    model: process.env.GROQ_SOCRATIC_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct",
+    model: params.modelId,
     temperature: 0.2,
     max_completion_tokens: 350,
     messages: [
       {
         role: "system",
         content:
-          "Eres un tutor socratico riguroso. Nunca ensenas contenido nuevo ni das la respuesta correcta. Solo formulas exactamente 2 preguntas abiertas, discursivas y desafiantes para tensionar la conclusion del alumno. No uses vietas, numeracion, saludos ni introducciones. Debes responder exclusivamente con JSON valido usando la forma {\"questions\":[\"...\",\"...\"]}.",
+          "Eres un tutor socratico riguroso. Nunca enseñas contenido nuevo ni das respuestas correctas. Analizas solo la dupla actual del alumno. Tu tarea es tensar la conclusion del alumno con exactamente 2 preguntas nuevas, abiertas y discursivas. Revisa el historial reciente para no repetir angulos. No uses viñetas, numeracion, saludos ni introducciones. Responde exclusivamente con JSON valido usando la forma {\"questions\":[\"...\",\"...\"]}.",
       },
       {
         role: "user",
         content: [
           `Materia: ${params.pair.subjectName}`,
           `Semana: ${params.pair.weekNumber}`,
-          `Marco original: ${params.pair.questionTranscript}`,
-          `Conclusion del alumno: ${params.pair.answerTranscript}`,
-          `Preguntas recientes a evitar:`,
+          "[Contextual_Text]",
+          contextualText,
+          "[Dialogue_Buffer]",
           recentQuestionsText,
-          "Formula 2 preguntas estilo 'y si...' o 'pero si...' que obliguen a defender causalidad, limites o supuestos.",
+          "Formula exactamente 2 preguntas nuevas estilo 'y si...' o 'pero si...' que obliguen a defender causalidad, limites o supuestos sin poder responderse con si/no.",
         ].join("\n\n"),
       },
     ],
@@ -277,8 +289,11 @@ async function generateQuestionsWithGroq(params: {
             })
             .join("")
         : ""
+
   const parsed = JSON.parse(stripJsonFence(normalizedContent))
-  const questions = Array.isArray(parsed?.questions) ? parsed.questions.map((item: string) => sanitizeQuestion(item)) : []
+  const questions = Array.isArray(parsed?.questions)
+    ? parsed.questions.map((item: string) => sanitizeQuestion(item))
+    : []
 
   if (!isValidQuestionList(questions)) {
     throw new Error("INVALID_QUESTION_LIST")
@@ -303,8 +318,21 @@ export async function getSocraticReviewQueue(params: {
   }
 }
 
-export async function generateSocraticReviewTurn(pairId: string): Promise<SocraticReviewGeneratedTurn> {
-  const pair = await getPairById(pairId)
+export async function generateSocraticReviewTurn(params: {
+  pairId: string
+  modelId: string
+}): Promise<SocraticReviewGeneratedTurn> {
+  const normalizedModelId = String(params.modelId || "").trim()
+  if (!normalizedModelId) {
+    throw new Error("MODEL_ID_REQUIRED")
+  }
+
+  const validatedModel = await validateGroqModelId(normalizedModelId)
+  if (!validatedModel) {
+    throw new Error("MODEL_ID_INVALID")
+  }
+
+  const pair = await getPairById(params.pairId)
   if (!pair) {
     throw new Error("PAIR_NOT_FOUND")
   }
@@ -318,7 +346,11 @@ export async function generateSocraticReviewTurn(pairId: string): Promise<Socrat
 
   try {
     const recentQuestions = await listRecentBufferQuestions(pair.pairId)
-    questions = await generateQuestionsWithGroq({ pair, recentQuestions })
+    questions = await generateQuestionsWithGroq({
+      pair,
+      recentQuestions,
+      modelId: validatedModel.id,
+    })
     fallbackUsed = false
   } catch (error) {
     console.error("Socratic review generation failed, using fallback:", error)
@@ -332,7 +364,8 @@ export async function generateSocraticReviewTurn(pairId: string): Promise<Socrat
       question_entry_id,
       answer_entry_id,
       generated_questions_json,
-      fallback_used
+      fallback_used,
+      model_id
     ) VALUES (
       ${pair.pairId},
       ${pair.subjectId},
@@ -340,9 +373,10 @@ export async function generateSocraticReviewTurn(pairId: string): Promise<Socrat
       ${pair.questionEntryId},
       ${pair.answerEntryId},
       CAST(${JSON.stringify(questions)} AS JSONB),
-      ${fallbackUsed}
+      ${fallbackUsed},
+      ${validatedModel.id}
     )
-    RETURNING id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used
+    RETURNING id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used, model_id
   ` as TurnRow[]
 
   const row = rows[0]
@@ -354,6 +388,7 @@ export async function generateSocraticReviewTurn(pairId: string): Promise<Socrat
     answerEntryId: Number(row.answer_entry_id),
     questions: normalizeStoredQuestions(row.generated_questions_json),
     fallbackUsed: Boolean(row.fallback_used),
+    modelId: row.model_id ?? null,
   }
 }
 
@@ -362,7 +397,7 @@ export async function revealSocraticReviewTurn(turnId: number) {
     UPDATE socratic_review_turns
     SET revealed_at = COALESCE(revealed_at, NOW())
     WHERE id = ${turnId}
-    RETURNING id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used
+    RETURNING id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used, model_id
   ` as TurnRow[]
 
   return rows[0] ?? null
@@ -370,7 +405,7 @@ export async function revealSocraticReviewTurn(turnId: number) {
 
 export async function getSocraticReviewTurn(turnId: number) {
   const rows = await sql`
-    SELECT id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used
+    SELECT id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used, model_id
     FROM socratic_review_turns
     WHERE id = ${turnId}
     LIMIT 1
@@ -379,6 +414,67 @@ export async function getSocraticReviewTurn(turnId: number) {
   return rows[0] ?? null
 }
 
+export async function getSocraticReviewSettings(email: string): Promise<SocraticReviewSettings> {
+  const normalizedEmail = String(email || "").trim().toLowerCase()
+  if (!normalizedEmail) {
+    return { selectedModel: null }
+  }
+
+  const rows = await sql`
+    SELECT selected_model
+    FROM user_socratic_review_settings
+    WHERE email = ${normalizedEmail}
+    LIMIT 1
+  ` as Array<{ selected_model: string | null }>
+
+  return {
+    selectedModel: rows[0]?.selected_model?.trim() || null,
+  }
+}
+
+export async function updateSocraticReviewSettings(params: {
+  email: string
+  selectedModel: string
+}): Promise<SocraticReviewSettings> {
+  const normalizedEmail = String(params.email || "").trim().toLowerCase()
+  const normalizedModelId = String(params.selectedModel || "").trim()
+
+  if (!normalizedEmail) {
+    throw new Error("SETTINGS_EMAIL_REQUIRED")
+  }
+  if (!normalizedModelId) {
+    throw new Error("MODEL_ID_REQUIRED")
+  }
+
+  const validatedModel = await validateGroqModelId(normalizedModelId)
+  if (!validatedModel) {
+    throw new Error("MODEL_ID_INVALID")
+  }
+
+  const rows = await sql`
+    INSERT INTO user_socratic_review_settings (
+      email,
+      selected_model
+    ) VALUES (
+      ${normalizedEmail},
+      ${validatedModel.id}
+    )
+    ON CONFLICT (email)
+    DO UPDATE SET
+      selected_model = EXCLUDED.selected_model,
+      updated_at = NOW()
+    RETURNING selected_model
+  ` as Array<{ selected_model: string | null }>
+
+  return {
+    selectedModel: rows[0]?.selected_model?.trim() || null,
+  }
+}
+
+export async function listSocraticReviewModels() {
+  return listGroqGenerationModels()
+}
+
 export function isMissingSocraticReviewTable(error: unknown) {
-  return isMissingTable(error)
+  return isMissingTable(error) || isMissingColumn(error)
 }
