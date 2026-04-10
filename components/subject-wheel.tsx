@@ -2117,11 +2117,42 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const createdEntryIds: number[] = []
     try {
       const createdEntries: SubjectDayEntry[] = []
+      const slotEntries = (["question", "answer"] as const)
+        .map((role) => ({ role, slot: draft.slots[role] }))
+        .filter((item): item is { role: PairRole; slot: AudioPairSlot } => Boolean(item.slot))
+      const persistedRoleChanges = slotEntries.filter(
+        ({ role, slot }) =>
+          slot.source === "persisted" &&
+          !slot.blob &&
+          slot.entryId != null &&
+          slot.originalRole != null &&
+          slot.originalRole !== role
+      )
+      const shouldUseSinglePersistedSwap =
+        persistedRoleChanges.length === 2 &&
+        slotEntries.every(({ slot }) => slot.source === "persisted" && !slot.blob)
+
+      if (shouldUseSinglePersistedSwap) {
+        const swapTrigger = persistedRoleChanges.find(({ role }) => role === "question") ?? persistedRoleChanges[0]
+        const response = await fetch(`/api/subject-day-entries/${swapTrigger.slot.entryId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pairRole: swapTrigger.role }),
+        })
+        const payload = await response.json()
+        if (!response.ok) {
+          throw new Error(getErrorMessage(payload, "No se pudo actualizar el sentido de la dupla."))
+        }
+        createdEntries.push(payload as SubjectDayEntry)
+      }
 
       for (const role of ["question", "answer"] as const) {
         const slot = draft.slots[role]
         if (!slot) continue
         if (slot.source === "persisted" && !slot.blob) {
+          if (shouldUseSinglePersistedSwap) {
+            continue
+          }
           if (slot.entryId != null && slot.originalRole && slot.originalRole !== role) {
             const response = await fetch(`/api/subject-day-entries/${slot.entryId}`, {
               method: "PATCH",
