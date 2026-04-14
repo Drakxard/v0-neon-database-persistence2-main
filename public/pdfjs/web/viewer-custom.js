@@ -24,6 +24,7 @@
     hasUnsyncedChanges: false,
     pendingExitSync: false,
     exitSyncTimer: null,
+    statusTimer: null,
     enhancedPdfReadability: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
@@ -251,11 +252,29 @@
 
   function showStatus(message) {
     ensureUi();
+    if (state.statusTimer) {
+      window.clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
     state.statusNode.textContent = message;
     state.statusNode.dataset.visible = "true";
   }
 
+  function scheduleHideStatus(delay = 2200) {
+    if (state.statusTimer) {
+      window.clearTimeout(state.statusTimer);
+    }
+    state.statusTimer = window.setTimeout(() => {
+      state.statusTimer = null;
+      hideStatus();
+    }, delay);
+  }
+
   function hideStatus() {
+    if (state.statusTimer) {
+      window.clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
     if (state.statusNode) {
       state.statusNode.dataset.visible = "false";
     }
@@ -789,7 +808,6 @@
     state.isSyncing = true;
     state.pendingExitSync = false;
     refreshSyncButtons();
-    showBusy("Sincronizando PDF...");
     showStatus("Sincronizando...");
 
     try {
@@ -812,22 +830,21 @@
           ? payload.file_name.trim()
           : fileName;
 
-      updateBusy("Actualizando visor...");
       markDocumentAsSynced();
       refreshMaterialViewerMetadata();
       notifySubjectDayMaterialsRefresh();
       showStatus("Puedes salir, sincronizado.");
-      showToast("Puedes salir, sincronizado.", "success", 3600);
+      scheduleHideStatus();
       return true;
     } catch (error) {
       console.error("Custom PDF.js sync failed:", error);
       showStatus("La sincronizacion fallo.");
+      scheduleHideStatus(3200);
       showToast(error instanceof Error ? error.message : "No se pudo sincronizar el PDF anotado.", "error", 4200);
       return false;
     } finally {
       state.isSyncing = false;
       refreshSyncButtons();
-      hideBusy();
     }
   }
 
