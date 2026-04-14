@@ -19,7 +19,6 @@
     syncButton: null,
     secondarySyncButton: null,
     syncStatePoller: null,
-    pendingViewRestore: null,
     isSyncing: false,
     isSynced: false,
     hasUnsyncedChanges: false,
@@ -756,21 +755,17 @@
     refreshSyncButtons();
   }
 
-  async function reopenSyncedMaterial({ pageNumber, scaleValue }) {
+  function refreshMaterialViewerMetadata() {
     if (!state.app) return;
 
-    const syncedUrl = getMaterialFileUrl(true);
-    state.pendingViewRestore = {
-      pageNumber,
-      scaleValue,
-    };
-    state.sourcePdfBytes = null;
-    state.sourcePdfLibDoc = null;
-
-    await state.app.open({
-      url: syncedUrl,
-      originalUrl: syncedUrl,
-    });
+    const materialUrl = getMaterialFileUrl();
+    if (materialUrl) {
+      state.app.setTitleUsingUrl(materialUrl, materialUrl);
+    }
+    if (state.query.fileName) {
+      state.app._contentDispositionFilename = state.query.fileName;
+      state.app.setTitle(state.query.fileName);
+    }
   }
 
   async function syncAnnotatedPdf() {
@@ -798,8 +793,6 @@
     showStatus("Sincronizando...");
 
     try {
-      const currentPageNumber = state.app.pdfViewer?.currentPageNumber || 1;
-      const currentScaleValue = state.app.pdfViewer?.currentScaleValue || "auto";
       const pdfBytes = await state.app.pdfDocument.saveDocument();
       const fileName = normalizePdfFileName(state.query.fileName || state.app._docFilename || "material");
       const formData = new FormData();
@@ -819,12 +812,9 @@
           ? payload.file_name.trim()
           : fileName;
 
-      updateBusy("Recargando PDF sincronizado...");
+      updateBusy("Actualizando visor...");
       markDocumentAsSynced();
-      await reopenSyncedMaterial({
-        pageNumber: currentPageNumber,
-        scaleValue: currentScaleValue,
-      });
+      refreshMaterialViewerMetadata();
       notifySubjectDayMaterialsRefresh();
       showStatus("Puedes salir, sincronizado.");
       showToast("Puedes salir, sincronizado.", "success", 3600);
@@ -959,15 +949,6 @@
     state.sourcePdfLibDoc = null;
     clearSelections();
     leaveSelectionMode();
-    if (state.pendingViewRestore && state.app?.pdfViewer) {
-      const restore = state.pendingViewRestore;
-      state.pendingViewRestore = null;
-      window.setTimeout(() => {
-        if (!state.app?.pdfViewer) return;
-        state.app.pdfViewer.currentScaleValue = restore.scaleValue;
-        state.app.pdfViewer.currentPageNumber = restore.pageNumber;
-      }, 0);
-    }
     updateDraftOverlay();
     applyEnhancedPdfReadability();
     refreshSyncButtons();
