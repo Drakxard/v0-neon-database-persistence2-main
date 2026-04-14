@@ -254,3 +254,39 @@
   font: 600 14px/1 system-ui, sans-serif;
   cursor: pointer;
 }
+
+.pdfjs-custom-sync-button {
+  min-width: 116px;
+}
+
+.pdfjs-custom-sync-button[data-sync-state="idle"] span::before {
+  content: "Sincronizar";
+}
+
+.pdfjs-custom-sync-button[data-sync-state="dirty"] span::before {
+  content: "Sincronizar";
+}
+
+.pdfjs-custom-sync-button[data-sync-state="syncing"] span::before {
+  content: "Sincronizando...";
+}
+
+.pdfjs-custom-sync-button[data-sync-state="synced"] span::before {
+  content: "Sincronizado";
+}
+
+.pdfjs-custom-sync-button[data-sync-state] span {
+  font-size: 0;
+}
+
+.pdfjs-custom-sync-button[data-sync-state] span::before {
+  font-size: 12px;
+}
+
+.pdfjs-custom-sync-button[data-sync-state="dirty"] {
+  color: #f97316;
+}
+
+.pdfjs-custom-sync-button[data-sync-state="synced"] {
+  color: #16a34a;
+}

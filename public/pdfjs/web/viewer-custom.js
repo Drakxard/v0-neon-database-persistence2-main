@@ -16,6 +16,15 @@
     busy: null,
     busyText: null,
     draftOverlay: null,
+    syncButton: null,
+    secondarySyncButton: null,
+    syncStatePoller: null,
+    pendingViewRestore: null,
+    isSyncing: false,
+    isSynced: false,
+    hasUnsyncedChanges: false,
+    pendingExitSync: false,
+    exitSyncTimer: null,
     enhancedPdfReadability: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
@@ -43,6 +52,24 @@
         "input, textarea, select, button, [contenteditable='true'], .dialog, #secondaryToolbar, #findbar, .dropdownToolbarButton"
       )
     );
+  }
+
+  function isDraftMode() {
+    return !Number.isInteger(state.query?.materialId);
+  }
+
+  function canSyncMaterial() {
+    return !isDraftMode() && Number.isInteger(state.query?.materialId);
+  }
+
+  function hasUnsyncedAnnotations() {
+    return Boolean(state.app?.pdfDocument?.annotationStorage?.size > 0 && state.app?._annotationStorageModified);
+  }
+
+  function getMaterialFileUrl(cacheBust = false) {
+    if (!canSyncMaterial()) return "";
+    const baseUrl = `/api/subject-day-materials/${state.query.materialId}/file`;
+    return cacheBust ? `${baseUrl}?t=${Date.now()}` : baseUrl;
   }
 
   function ensureUi() {
@@ -123,6 +150,80 @@
       overlay.querySelector("#pdfjs-custom-draft-open").addEventListener("click", () => {
         state.app?.eventBus?.dispatch("openfile", { source: window });
       });
+    }
+  }
+
+  function bindSyncButtons() {
+    if (!state.syncButton) {
+      state.syncButton = document.getElementById("syncButton");
+      if (state.syncButton) {
+        state.syncButton.addEventListener("click", () => {
+          void syncAnnotatedPdf();
+        });
+      }
+    }
+
+    if (!state.secondarySyncButton) {
+      state.secondarySyncButton = document.getElementById("secondarySyncButton");
+      if (state.secondarySyncButton) {
+        state.secondarySyncButton.addEventListener("click", () => {
+          void syncAnnotatedPdf();
+        });
+      }
+    }
+
+    refreshSyncButtons();
+  }
+
+  function setSyncButtonState(button) {
+    if (!(button instanceof HTMLElement)) return;
+
+    if (!canSyncMaterial()) {
+      button.hidden = true;
+      return;
+    }
+
+    button.hidden = false;
+    let nextState = "idle";
+    if (state.isSyncing) {
+      nextState = "syncing";
+    } else if (state.hasUnsyncedChanges) {
+      nextState = "dirty";
+    } else if (state.isSynced) {
+      nextState = "synced";
+    }
+
+    button.dataset.syncState = nextState;
+    button.toggleAttribute("disabled", state.isSyncing || !state.hasUnsyncedChanges);
+    button.setAttribute(
+      "title",
+      state.isSyncing
+        ? "Sincronizando cambios"
+        : state.hasUnsyncedChanges
+          ? "Sincronizar cambios"
+          : state.isSynced
+            ? "Sincronizado"
+            : "Sin cambios para sincronizar"
+    );
+  }
+
+  function refreshSyncButtons() {
+    if (!state.app) return;
+
+    const hasUnsyncedChanges = hasUnsyncedAnnotations();
+    state.hasUnsyncedChanges = hasUnsyncedChanges;
+    if (hasUnsyncedChanges) {
+      state.isSynced = false;
+    }
+
+    setSyncButtonState(state.syncButton);
+    setSyncButtonState(state.secondarySyncButton);
+  }
+
+  function clearExitSyncTimer() {
+    if (state.exitSyncTimer) {
+      window.clearTimeout(state.exitSyncTimer);
+      state.exitSyncTimer = null;
     }
   }
 
@@ -208,10 +309,6 @@
     );
   }
 
-  function isDraftMode() {
-    return !Number.isInteger(state.query.materialId);
-  }
-
   function updateDraftOverlay() {
     if (!state.draftOverlay) return;
     const shouldShow = isDraftMode() && !state.app?.pdfDocument;
@@ -236,10 +333,13 @@
   }
 
   function leaveSelectionMode(message) {
+    const wasSelectionMode = state.selectionMode;
     state.selectionMode = false;
     state.drag = null;
     refreshLayers();
-    hideStatus();
+    if (wasSelectionMode) {
+      hideStatus();
+    }
     if (message) {
       showToast(message, "info");
     }
@@ -648,6 +748,124 @@
     } catch {}
   }
 
+  function markDocumentAsSynced() {
+    state.app?.pdfDocument?.annotationStorage?.resetModified?.();
+    state.hasUnsyncedChanges = false;
+    state.isSynced = true;
+    state.pendingExitSync = false;
+    refreshSyncButtons();
+  }
+
+  async function reopenSyncedMaterial({ pageNumber, scaleValue }) {
+    if (!state.app) return;
+
+    const syncedUrl = getMaterialFileUrl(true);
+    state.pendingViewRestore = {
+      pageNumber,
+      scaleValue,
+    };
+    state.sourcePdfBytes = null;
+    state.sourcePdfLibDoc = null;
+
+    await state.app.open({
+      url: syncedUrl,
+      originalUrl: syncedUrl,
+    });
+  }
+
+  async function syncAnnotatedPdf() {
+    if (!canSyncMaterial()) {
+      showToast("La sincronizacion solo esta disponible para materiales guardados.", "info");
+      return false;
+    }
+    if (!state.app?.pdfDocument) {
+      showToast("Primero carga un PDF.", "info");
+      return false;
+    }
+    if (state.isSyncing) {
+      return false;
+    }
+    if (!hasUnsyncedAnnotations()) {
+      showToast("No hay cambios pendientes para sincronizar.", "info");
+      refreshSyncButtons();
+      return false;
+    }
+
+    state.isSyncing = true;
+    state.pendingExitSync = false;
+    refreshSyncButtons();
+    showBusy("Sincronizando PDF...");
+    showStatus("Sincronizando...");
+
+    try {
+      const currentPageNumber = state.app.pdfViewer?.currentPageNumber || 1;
+      const currentScaleValue = state.app.pdfViewer?.currentScaleValue || "auto";
+      const pdfBytes = await state.app.pdfDocument.saveDocument();
+      const fileName = normalizePdfFileName(state.query.fileName || state.app._docFilename || "material");
+      const formData = new FormData();
+      formData.set("file", new Blob([pdfBytes], { type: "application/pdf" }), fileName);
+      formData.set("fileName", fileName);
+
+      const payload = await requireOkJson(
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/sync`, {
+          method: "POST",
+          body: formData,
+        }),
+        "No se pudo sincronizar el PDF anotado."
+      );
+
+      state.query.fileName =
+        payload && typeof payload === "object" && typeof payload.file_name === "string" && payload.file_name.trim()
+          ? payload.file_name.trim()
+          : fileName;
+
+      updateBusy("Recargando PDF sincronizado...");
+      markDocumentAsSynced();
+      await reopenSyncedMaterial({
+        pageNumber: currentPageNumber,
+        scaleValue: currentScaleValue,
+      });
+      notifySubjectDayMaterialsRefresh();
+      showStatus("Puedes salir, sincronizado.");
+      showToast("Puedes salir, sincronizado.", "success", 3600);
+      return true;
+    } catch (error) {
+      console.error("Custom PDF.js sync failed:", error);
+      showStatus("La sincronizacion fallo.");
+      showToast(error instanceof Error ? error.message : "No se pudo sincronizar el PDF anotado.", "error", 4200);
+      return false;
+    } finally {
+      state.isSyncing = false;
+      refreshSyncButtons();
+      hideBusy();
+    }
+  }
+
+  function handleBeforeUnload(event) {
+    if (!canSyncMaterial() || state.isSyncing || !hasUnsyncedAnnotations()) {
+      return;
+    }
+
+    state.pendingExitSync = true;
+    refreshSyncButtons();
+    showStatus("Sincronizando...");
+    clearExitSyncTimer();
+    state.exitSyncTimer = window.setTimeout(() => {
+      state.exitSyncTimer = null;
+      if (state.pendingExitSync && document.visibilityState === "visible" && !state.isSyncing) {
+        void syncAnnotatedPdf();
+      }
+    }, 120);
+
+    event.preventDefault();
+    event.returnValue = "";
+  }
+
+  function handlePageHide() {
+    state.pendingExitSync = false;
+    clearExitSyncTimer();
+  }
+
   function openModal() {
     if (!state.app?.pdfDocument) {
       showToast("Primero carga un PDF.", "info");
@@ -741,8 +959,18 @@
     state.sourcePdfLibDoc = null;
     clearSelections();
     leaveSelectionMode();
+    if (state.pendingViewRestore && state.app?.pdfViewer) {
+      const restore = state.pendingViewRestore;
+      state.pendingViewRestore = null;
+      window.setTimeout(() => {
+        if (!state.app?.pdfViewer) return;
+        state.app.pdfViewer.currentScaleValue = restore.scaleValue;
+        state.app.pdfViewer.currentPageNumber = restore.pageNumber;
+      }, 0);
+    }
     updateDraftOverlay();
     applyEnhancedPdfReadability();
+    refreshSyncButtons();
   }
 
   function handleKeyDown(event) {
@@ -789,6 +1017,7 @@
     state.app = app;
     state.query = parseQuery();
     ensureUi();
+    bindSyncButtons();
     refreshLayers();
     updateDraftOverlay();
 
@@ -796,13 +1025,23 @@
     eventBus.on("pagerendered", () => {
       refreshLayers();
       applyEnhancedPdfReadability();
+      refreshSyncButtons();
     });
     eventBus.on("pagechanging", refreshLayers);
     eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
     eventBus.on("documentloaded", onDocumentLoaded);
-    eventBus.on("documenterror", updateDraftOverlay);
+    eventBus.on("documenterror", () => {
+      updateDraftOverlay();
+      refreshSyncButtons();
+    });
     document.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handlePageHide);
+
+    if (!state.syncStatePoller) {
+      state.syncStatePoller = window.setInterval(refreshSyncButtons, 400);
+    }
 
     if (!window.PDFLib?.PDFDocument) {
       showToast("No se pudo cargar pdf-lib localmente. Ctrl+M no estara disponible.", "error", 5000);
