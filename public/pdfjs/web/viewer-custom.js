@@ -767,7 +767,13 @@
   }
 
   function markDocumentAsSynced() {
-    state.app?.pdfDocument?.annotationStorage?.resetModified?.();
+    const annotationStorage = state.app?.pdfDocument?.annotationStorage;
+    annotationStorage?.resetModified?.();
+    annotationStorage?.resetModifiedIds?.();
+    if (state.app) {
+      state.app._annotationStorageModified = false;
+      delete state.app._annotationStorageModified;
+    }
     state.hasUnsyncedChanges = false;
     state.isSynced = true;
     state.pendingExitSync = false;
