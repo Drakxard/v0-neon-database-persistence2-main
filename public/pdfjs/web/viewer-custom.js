@@ -1625,10 +1625,18 @@
     );
 
     const baseDescription = `${preview.candidateFileName || "PDF nuevo"}: ${preview.summary.autoMatches} automaticos, ${preview.summary.reviewMatches} para revisar y ${preview.summary.unmatched} no migrables.`;
+    const sourceDescription =
+      preview?.migrationSource === "viewer"
+        ? "Usando highlights del visor abierto."
+        : preview?.migrationSource === "database"
+          ? "Usando highlights guardados previamente."
+          : preview?.migrationSource === "storage"
+            ? "Usando highlights reconstruidos desde el PDF actual."
+            : "";
     state.replacementDescription.textContent =
-      preview && typeof preview.migrationWarning === "string" && preview.migrationWarning.trim()
-        ? `${baseDescription} ${preview.migrationWarning.trim()}`
-        : baseDescription;
+      [baseDescription, sourceDescription, typeof preview?.migrationWarning === "string" ? preview.migrationWarning.trim() : ""]
+        .filter(Boolean)
+        .join(" ");
     state.replacementAutoCount.textContent = String(preview.summary.autoMatches || 0);
     state.replacementReviewCount.textContent = String(preview.summary.reviewMatches || 0);
     state.replacementUnmatchedCount.textContent = String(preview.summary.unmatched || 0);
@@ -1714,9 +1722,27 @@
 
     try {
       const fileName = normalizePdfFileName(file.name || state.query.fileName || "material");
+      let sourceSnapshot = {
+        sourcePdfFingerprint: "",
+        snapshot: [],
+      };
+
+      try {
+        updateBusy("Leyendo highlights del visor...");
+        const nextSourceSnapshot = await buildSourceHighlightSnapshotForReplacement();
+        sourceSnapshot = {
+          sourcePdfFingerprint: nextSourceSnapshot.sourcePdfFingerprint || "",
+          snapshot: Array.isArray(nextSourceSnapshot.snapshot) ? nextSourceSnapshot.snapshot : [],
+        };
+      } catch (error) {
+        console.warn("Custom PDF.js could not build viewer replacement snapshot:", error);
+      }
+
       const formData = new FormData();
       formData.set("file", file, fileName);
       formData.set("fileName", fileName);
+      formData.set("sourcePdfFingerprint", sourceSnapshot.sourcePdfFingerprint || "");
+      formData.set("sourceHighlightSnapshot", JSON.stringify(sourceSnapshot.snapshot));
 
       updateBusy("Subiendo PDF candidato...");
       const preview = await requireOkJson(

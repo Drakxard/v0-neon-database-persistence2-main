@@ -40,6 +40,8 @@ type SubjectDayMaterialRow = {
   snapshot_highlights_json: unknown
 }
 
+type ReplacementPreviewSource = "viewer" | "database" | "storage" | "none"
+
 function isMissingSubjectDayMaterialsTable(error: unknown) {
   return Boolean(
     error &&
@@ -63,6 +65,42 @@ function looksLikePdf(bytes: Uint8Array) {
   if (bytes.byteLength === 0) return false
   const headerWindow = Buffer.from(bytes.subarray(0, Math.min(bytes.byteLength, 1024))).toString("latin1")
   return headerWindow.includes("%PDF-")
+}
+
+function parseUploadedSourceHighlightSnapshot(value: FormDataEntryValue | null) {
+  if (value == null) return []
+
+  try {
+    return parseHighlightSnapshot(value)
+  } catch {
+    throw new Error("Invalid sourceHighlightSnapshot payload")
+  }
+}
+
+function resolveSourceFingerprint(explicitFingerprint: string, sourceHighlights: HighlightSnapshotItem[]) {
+  if (explicitFingerprint) return explicitFingerprint
+  return String(sourceHighlights[0]?.sourceFingerprint || "").trim()
+}
+
+function buildEmptyPreview(params: {
+  candidateFileName: string
+  sourceFingerprint: string
+  legacyUnmatched: HighlightMigrationUnmatched[]
+}) {
+  return {
+    candidateFileName: params.candidateFileName,
+    sourceFingerprint: params.sourceFingerprint,
+    candidateFingerprint: "",
+    autoMatches: [],
+    reviewMatches: [],
+    unmatched: params.legacyUnmatched,
+    summary: {
+      totalHighlights: params.legacyUnmatched.length,
+      autoMatches: 0,
+      reviewMatches: 0,
+      unmatched: params.legacyUnmatched.length,
+    },
+  } satisfies HighlightMigrationPreview
 }
 
 async function cleanupExpiredReplacementSessions(materialId: number) {
@@ -175,10 +213,22 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest("El archivo seleccionado no es un PDF valido.")
     }
 
-    let sourceHighlights = parseHighlightSnapshot(material.snapshot_highlights_json)
-    let sourceFingerprint = String(material.snapshot_source_pdf_fingerprint || "").trim()
+    const viewerSourceHighlights = parseUploadedSourceHighlightSnapshot(formData.get("sourceHighlightSnapshot"))
+    const viewerSourceFingerprint = String(formData.get("sourcePdfFingerprint") || "").trim()
+    const persistedSourceHighlights = parseHighlightSnapshot(material.snapshot_highlights_json)
+    const persistedSourceFingerprint = String(material.snapshot_source_pdf_fingerprint || "").trim()
+
+    let sourceHighlights = viewerSourceHighlights
+    let sourceFingerprint = resolveSourceFingerprint(viewerSourceFingerprint, viewerSourceHighlights)
     let legacyUnmatched: HighlightMigrationUnmatched[] = []
     let migrationWarning = ""
+    let migrationSource: ReplacementPreviewSource = sourceHighlights.length > 0 ? "viewer" : "none"
+
+    if (sourceHighlights.length === 0 && persistedSourceHighlights.length > 0) {
+      sourceHighlights = persistedSourceHighlights
+      sourceFingerprint = resolveSourceFingerprint(persistedSourceFingerprint, persistedSourceHighlights)
+      migrationSource = "database"
+    }
 
     if (sourceHighlights.length === 0) {
       const currentFile = await downloadSubjectDayMaterialFileOrAutocleanup({
@@ -199,32 +249,26 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         sourceHighlights = legacySnapshot.snapshot
         sourceFingerprint = legacySnapshot.sourceFingerprint
         legacyUnmatched = legacySnapshot.unmatched
+        migrationSource = sourceHighlights.length > 0 ? "storage" : "none"
       } catch (error) {
         if (!isPdfMigrationDocumentReadError(error)) {
           throw error
         }
 
         migrationWarning =
-          "No se pudieron leer los resaltados del PDF actual. El reemplazo seguira sin migrarlos."
+          viewerSourceHighlights.length > 0
+            ? ""
+            : "No se pudieron leer los resaltados del PDF actual. El reemplazo seguira sin migrarlos."
       }
     }
 
     const preview =
       sourceHighlights.length === 0
-        ? {
+        ? buildEmptyPreview({
             candidateFileName,
             sourceFingerprint,
-            candidateFingerprint: "",
-            autoMatches: [],
-            reviewMatches: [],
-            unmatched: legacyUnmatched,
-            summary: {
-              totalHighlights: legacyUnmatched.length,
-              autoMatches: 0,
-              reviewMatches: 0,
-              unmatched: legacyUnmatched.length,
-            },
-          }
+            legacyUnmatched,
+          })
         : mergePreviewUnmatched(
             await buildHighlightMigrationPreview({
               sourceHighlights,
@@ -235,6 +279,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             legacyUnmatched,
             sourceHighlights
           )
+
+    if (sourceHighlights.length === 0 && !migrationWarning) {
+      migrationWarning = "No se encontraron highlights migrables. El reemplazo seguira sin migrarlos."
+    }
 
     const subjectName = getSubjectById(material.subject_id)?.name.replace(/\n/g, " ") || material.subject_id
     temporaryObjectKey = buildR2ObjectKey({
@@ -283,6 +331,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     return NextResponse.json({
       replacementToken,
+      migrationSource,
       migrationWarning,
       ...preview,
     })
@@ -312,7 +361,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         ? error.message
         : "Failed to prepare replacement preview"
     const status =
-      isPdfMigrationDocumentReadError(error) || message.includes("texto seleccionable") ? 400 : 500
+      isPdfMigrationDocumentReadError(error) ||
+      message.includes("texto seleccionable") ||
+      message.includes("sourceHighlightSnapshot")
+        ? 400
+        : 500
     return NextResponse.json({ error: message }, { status })
   }
 }
