@@ -1624,7 +1624,11 @@
       (preview.reviewMatches || []).map((match) => [match.highlight.annotationId, "skip"])
     );
 
-    state.replacementDescription.textContent = `${preview.candidateFileName || "PDF nuevo"}: ${preview.summary.autoMatches} automaticos, ${preview.summary.reviewMatches} para revisar y ${preview.summary.unmatched} no migrables.`;
+    const baseDescription = `${preview.candidateFileName || "PDF nuevo"}: ${preview.summary.autoMatches} automaticos, ${preview.summary.reviewMatches} para revisar y ${preview.summary.unmatched} no migrables.`;
+    state.replacementDescription.textContent =
+      preview && typeof preview.migrationWarning === "string" && preview.migrationWarning.trim()
+        ? `${baseDescription} ${preview.migrationWarning.trim()}`
+        : baseDescription;
     state.replacementAutoCount.textContent = String(preview.summary.autoMatches || 0);
     state.replacementReviewCount.textContent = String(preview.summary.reviewMatches || 0);
     state.replacementUnmatchedCount.textContent = String(preview.summary.unmatched || 0);

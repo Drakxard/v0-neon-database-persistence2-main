@@ -59,6 +59,12 @@ function normalizeUploadedPdfFileName(fileName: string) {
   return trimmed.toLowerCase().endsWith(".pdf") ? trimmed : `${trimmed}.pdf`
 }
 
+function looksLikePdf(bytes: Uint8Array) {
+  if (bytes.byteLength === 0) return false
+  const headerWindow = Buffer.from(bytes.subarray(0, Math.min(bytes.byteLength, 1024))).toString("latin1")
+  return headerWindow.includes("%PDF-")
+}
+
 async function cleanupExpiredReplacementSessions(materialId: number) {
   const rows = await sql`
     DELETE FROM subject_day_material_replacement_sessions
@@ -164,41 +170,71 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest("Missing fileName for replacement PDF")
     }
 
-    const currentFile = await downloadSubjectDayMaterialFileOrAutocleanup({
-      id: material.id,
-      drive_file_id: material.drive_file_id,
-    })
-    if (currentFile.status === "missing") {
-      return NextResponse.json({ error: "El PDF actual ya no existe en el storage." }, { status: 404 })
-    }
-    if (currentFile.status === "unavailable") {
-      const message =
-        currentFile.error instanceof Error ? currentFile.error.message : "No se pudo leer el PDF actual."
-      return NextResponse.json({ error: message }, { status: 500 })
+    const candidatePdfBytes = new Uint8Array(await fileEntry.arrayBuffer())
+    if (!looksLikePdf(candidatePdfBytes)) {
+      return badRequest("El archivo seleccionado no es un PDF valido.")
     }
 
-    const candidatePdfBytes = new Uint8Array(await fileEntry.arrayBuffer())
     let sourceHighlights = parseHighlightSnapshot(material.snapshot_highlights_json)
     let sourceFingerprint = String(material.snapshot_source_pdf_fingerprint || "").trim()
     let legacyUnmatched: HighlightMigrationUnmatched[] = []
+    let migrationWarning = ""
 
     if (sourceHighlights.length === 0) {
-      const legacySnapshot = await extractHighlightSnapshotFromPdfBytes(currentFile.value.buffer)
-      sourceHighlights = legacySnapshot.snapshot
-      sourceFingerprint = legacySnapshot.sourceFingerprint
-      legacyUnmatched = legacySnapshot.unmatched
+      const currentFile = await downloadSubjectDayMaterialFileOrAutocleanup({
+        id: material.id,
+        drive_file_id: material.drive_file_id,
+      })
+      if (currentFile.status === "missing") {
+        return NextResponse.json({ error: "El PDF actual ya no existe en el storage." }, { status: 404 })
+      }
+      if (currentFile.status === "unavailable") {
+        const message =
+          currentFile.error instanceof Error ? currentFile.error.message : "No se pudo leer el PDF actual."
+        return NextResponse.json({ error: message }, { status: 500 })
+      }
+
+      try {
+        const legacySnapshot = await extractHighlightSnapshotFromPdfBytes(currentFile.value.buffer)
+        sourceHighlights = legacySnapshot.snapshot
+        sourceFingerprint = legacySnapshot.sourceFingerprint
+        legacyUnmatched = legacySnapshot.unmatched
+      } catch (error) {
+        if (!isPdfMigrationDocumentReadError(error)) {
+          throw error
+        }
+
+        migrationWarning =
+          "No se pudieron leer los resaltados del PDF actual. El reemplazo seguira sin migrarlos."
+      }
     }
 
-    const preview = mergePreviewUnmatched(
-      await buildHighlightMigrationPreview({
-        sourceHighlights,
-        candidatePdfBytes,
-        candidateFileName,
-        sourceFingerprint,
-      }),
-      legacyUnmatched,
-      sourceHighlights
-    )
+    const preview =
+      sourceHighlights.length === 0
+        ? {
+            candidateFileName,
+            sourceFingerprint,
+            candidateFingerprint: "",
+            autoMatches: [],
+            reviewMatches: [],
+            unmatched: legacyUnmatched,
+            summary: {
+              totalHighlights: legacyUnmatched.length,
+              autoMatches: 0,
+              reviewMatches: 0,
+              unmatched: legacyUnmatched.length,
+            },
+          }
+        : mergePreviewUnmatched(
+            await buildHighlightMigrationPreview({
+              sourceHighlights,
+              candidatePdfBytes,
+              candidateFileName,
+              sourceFingerprint,
+            }),
+            legacyUnmatched,
+            sourceHighlights
+          )
 
     const subjectName = getSubjectById(material.subject_id)?.name.replace(/\n/g, " ") || material.subject_id
     temporaryObjectKey = buildR2ObjectKey({
@@ -247,6 +283,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     return NextResponse.json({
       replacementToken,
+      migrationWarning,
       ...preview,
     })
   } catch (error) {
