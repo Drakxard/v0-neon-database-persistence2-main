@@ -2,7 +2,11 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
-import { extractHighlightSnapshotFromPdfBytes, parseHighlightSnapshot } from "@/lib/pdf-highlight-migration"
+import {
+  extractHighlightSnapshotFromPdfBytes,
+  isPdfMigrationDocumentReadError,
+  parseHighlightSnapshot,
+} from "@/lib/pdf-highlight-migration"
 import { buildR2ObjectKey, uploadR2Object } from "@/lib/r2"
 import { getSubjectById } from "@/lib/subjects"
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
@@ -213,7 +217,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       )
     }
 
-    const message = error instanceof Error ? error.message : "Failed to sync material"
+    const message = isPdfMigrationDocumentReadError(error)
+      ? "No se pudo leer el PDF sincronizado para extraer resaltados."
+      : error instanceof Error
+        ? error.message
+        : "Failed to sync material"
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

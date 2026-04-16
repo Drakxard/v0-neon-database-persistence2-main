@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import {
   applyHighlightMigrationToPdf,
+  isPdfMigrationDocumentReadError,
   type HighlightMigrationDecision,
   type HighlightMigrationMatch,
   type HighlightMigrationPreview,
@@ -307,7 +308,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       )
     }
 
-    const message = error instanceof Error ? error.message : "Failed to commit replacement"
+    const message = isPdfMigrationDocumentReadError(error)
+      ? "No se pudo leer el PDF para confirmar el reemplazo."
+      : error instanceof Error
+        ? error.message
+        : "Failed to commit replacement"
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

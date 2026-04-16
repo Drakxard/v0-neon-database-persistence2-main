@@ -7,6 +7,7 @@ import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import {
   buildHighlightMigrationPreview,
   extractHighlightSnapshotFromPdfBytes,
+  isPdfMigrationDocumentReadError,
   parseHighlightSnapshot,
   type HighlightMigrationPreview,
   type HighlightMigrationUnmatched,
@@ -268,8 +269,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       )
     }
 
-    const message = error instanceof Error ? error.message : "Failed to prepare replacement preview"
-    const status = message.includes("texto seleccionable") ? 400 : 500
+    const message = isPdfMigrationDocumentReadError(error)
+      ? "No se pudo leer el PDF para preparar la migracion."
+      : error instanceof Error
+        ? error.message
+        : "Failed to prepare replacement preview"
+    const status =
+      isPdfMigrationDocumentReadError(error) || message.includes("texto seleccionable") ? 400 : 500
     return NextResponse.json({ error: message }, { status })
   }
 }

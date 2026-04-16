@@ -1,6 +1,8 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+export type PdfBinaryInput = Uint8Array | ArrayBuffer | ArrayBufferView
+
 type PdfJsModule = {
   getDocument: (params: Record<string, unknown>) => {
     promise: Promise<PdfDocumentProxyLike>
@@ -110,6 +112,20 @@ const runtimeImport = new Function("moduleUrl", "return import(moduleUrl)") as (
   moduleUrl: string
 ) => Promise<PdfJsModule>
 
+export class PdfMigrationDocumentReadError extends Error {
+  cause?: unknown
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message)
+    this.name = "PdfMigrationDocumentReadError"
+    this.cause = options?.cause
+  }
+}
+
+export function isPdfMigrationDocumentReadError(error: unknown): error is PdfMigrationDocumentReadError {
+  return error instanceof PdfMigrationDocumentReadError
+}
+
 function installPdfJsNodePolyfills() {
   const promiseCtor = Promise as PromiseConstructor & {
     try?: <T>(fn: (...args: never[]) => T | Promise<T>) => Promise<T>
@@ -190,16 +206,40 @@ async function getPdfJsModule() {
   return cachedPdfJsModule
 }
 
-async function openPdfDocument(pdfBytes: Uint8Array) {
-  const pdfjs = await getPdfJsModule()
-  const loadingTask = pdfjs.getDocument({
-    data: pdfBytes,
-    disableWorker: true,
-    isEvalSupported: false,
-    useSystemFonts: false,
-  })
-  const document = (await loadingTask.promise) as PdfDocumentProxyLike
-  return { pdfjs, document }
+export function toPlainUint8Array(input: PdfBinaryInput) {
+  if (input instanceof Uint8Array && input.constructor === Uint8Array) {
+    return input
+  }
+
+  if (input instanceof ArrayBuffer) {
+    return new Uint8Array(input.slice(0))
+  }
+
+  if (ArrayBuffer.isView(input)) {
+    const slice = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength)
+    return new Uint8Array(slice)
+  }
+
+  throw new PdfMigrationDocumentReadError("Unsupported binary input for PDF migration.")
+}
+
+async function openPdfDocument(pdfBytes: PdfBinaryInput) {
+  try {
+    const pdfjs = await getPdfJsModule()
+    const normalizedPdfBytes = toPlainUint8Array(pdfBytes)
+    const loadingTask = pdfjs.getDocument({
+      data: normalizedPdfBytes,
+      disableWorker: true,
+      isEvalSupported: false,
+      useSystemFonts: false,
+    })
+    const document = (await loadingTask.promise) as PdfDocumentProxyLike
+    return { pdfjs, document }
+  } catch (error) {
+    throw new PdfMigrationDocumentReadError("PDF.js could not open the provided binary data.", {
+      cause: error,
+    })
+  }
 }
 
 function normalizeText(value: string) {
@@ -515,7 +555,7 @@ export function parseHighlightSnapshot(value: unknown) {
   })
 }
 
-export async function extractHighlightSnapshotFromPdfBytes(pdfBytes: Uint8Array, explicitFingerprint?: string): Promise<ExtractedSnapshot> {
+export async function extractHighlightSnapshotFromPdfBytes(pdfBytes: PdfBinaryInput, explicitFingerprint?: string): Promise<ExtractedSnapshot> {
   const { document } = await openPdfDocument(pdfBytes)
   try {
     const sourceFingerprint = explicitFingerprint || document.fingerprints?.[0] || ""
@@ -573,7 +613,7 @@ export async function extractHighlightSnapshotFromPdfBytes(pdfBytes: Uint8Array,
 
 export async function buildHighlightMigrationPreview(params: {
   sourceHighlights: HighlightSnapshotItem[]
-  candidatePdfBytes: Uint8Array
+  candidatePdfBytes: PdfBinaryInput
   candidateFileName: string
   sourceFingerprint: string
 }): Promise<HighlightMigrationPreview> {
@@ -666,13 +706,13 @@ function getHighlightBoxesFromQuadPoints(
 }
 
 export async function applyHighlightMigrationToPdf(params: {
-  candidatePdfBytes: Uint8Array
+  candidatePdfBytes: PdfBinaryInput
   matches: HighlightMigrationMatch[]
   candidateFingerprint?: string
 }) {
   if (params.matches.length === 0) {
     return {
-      pdfBytes: params.candidatePdfBytes,
+      pdfBytes: toPlainUint8Array(params.candidatePdfBytes),
       snapshot: [] as HighlightSnapshotItem[],
       candidateFingerprint: params.candidateFingerprint || "",
     }
