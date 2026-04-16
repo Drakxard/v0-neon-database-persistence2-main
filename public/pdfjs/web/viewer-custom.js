@@ -31,6 +31,7 @@
     replacementConfirm: null,
     replacementCancel: null,
     replacementPreview: null,
+    replacementCandidateBytes: null,
     replacementDecisions: new Map(),
     pageTextModels: new Map(),
     syncStatePoller: null,
@@ -46,6 +47,7 @@
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
   const DEFAULT_HIGHLIGHT_OPACITY = 1;
   const MAX_CONTEXT_LENGTH = 64;
+  const MIN_SELECTABLE_TEXT = 24;
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -986,12 +988,7 @@
     return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
   }
 
-  async function getPageTextModel(pageIndex) {
-    if (state.pageTextModels.has(pageIndex)) {
-      return state.pageTextModels.get(pageIndex);
-    }
-
-    const page = await state.app.pdfDocument.getPage(pageIndex + 1);
+  async function buildPageTextModelFromPage(pageIndex, page) {
     const textContent = await page.getTextContent();
     const tokens = [];
     let text = "";
@@ -1018,9 +1015,31 @@
       });
     }
 
-    const model = { text, tokens };
-    state.pageTextModels.set(pageIndex, model);
+    return {
+      pageIndex,
+      text,
+      tokens,
+      pageRect: Array.isArray(page.view) ? [page.view[0], page.view[1], page.view[2], page.view[3]] : [0, 0, 0, 0],
+    };
+  }
+
+  async function getDocumentPageTextModel(pdfDocument, pageIndex, cache = null) {
+    if (cache?.has(pageIndex)) {
+      return cache.get(pageIndex);
+    }
+
+    const page = await pdfDocument.getPage(pageIndex + 1);
+    const model = await buildPageTextModelFromPage(pageIndex, page);
+    cache?.set(pageIndex, model);
     return model;
+  }
+
+  async function getPageTextModel(pageIndex) {
+    if (!state.app?.pdfDocument) {
+      throw new Error("Primero carga un PDF.");
+    }
+
+    return getDocumentPageTextModel(state.app.pdfDocument, pageIndex, state.pageTextModels);
   }
 
   function getHighlightTokenIndexesFromQuads(pageModel, quadPoints) {
@@ -1054,6 +1073,82 @@
     };
   }
 
+  function buildSnapshotItem({
+    annotationId,
+    pageIndex,
+    rect,
+    quadPoints,
+    color,
+    opacity,
+    exactQuote,
+    prefixQuote,
+    suffixQuote,
+    sourceFingerprint,
+  }) {
+    return {
+      annotationId: String(annotationId),
+      pageIndex,
+      rect: normalizeNumberArray(rect).slice(0, 4),
+      quadPoints: [...quadPoints],
+      color: normalizeColor(color),
+      opacity: clampOpacity(opacity),
+      exactQuote: normalizeText(exactQuote),
+      prefixQuote: normalizeContextSnippet(prefixQuote, true),
+      suffixQuote: normalizeContextSnippet(suffixQuote),
+      sourceFingerprint: String(sourceFingerprint || ""),
+    };
+  }
+
+  async function extractHighlightSnapshotFromDocument(pdfDocument, explicitFingerprint = "", cache = null) {
+    const sourcePdfFingerprint = explicitFingerprint || pdfDocument?.fingerprints?.[0] || "";
+    const snapshot = [];
+    const unmatched = [];
+
+    for (let pageIndex = 0; pageIndex < (pdfDocument?.numPages || 0); pageIndex += 1) {
+      const page = await pdfDocument.getPage(pageIndex + 1);
+      const pageModel = await getDocumentPageTextModel(pdfDocument, pageIndex, cache);
+      const annotations = await page.getAnnotations();
+
+      annotations.forEach((annotation, annotationIndex) => {
+        const subtype = String(annotation.subtype || "").toLowerCase();
+        const quadPoints = normalizeNumberArray(annotation.quadPoints);
+        if (subtype !== "highlight" || !quadPoints.length) {
+          return;
+        }
+
+        const quote = extractQuoteFromTokenIndexes(pageModel, getHighlightTokenIndexesFromQuads(pageModel, quadPoints));
+        const snapshotItem = buildSnapshotItem({
+          annotationId: annotation.id || `legacy-${pageIndex + 1}-${annotationIndex + 1}`,
+          pageIndex,
+          rect: annotation.rect,
+          quadPoints,
+          color: annotation.color,
+          opacity: annotation.opacity,
+          exactQuote: quote?.exactQuote || "",
+          prefixQuote: quote?.prefixQuote || "",
+          suffixQuote: quote?.suffixQuote || "",
+          sourceFingerprint: sourcePdfFingerprint,
+        });
+
+        if (!quote?.exactQuote) {
+          unmatched.push({
+            highlight: snapshotItem,
+            reason: "No se pudo reconstruir texto confiable desde el PDF actual.",
+          });
+          return;
+        }
+
+        snapshot.push(snapshotItem);
+      });
+    }
+
+    return {
+      sourcePdfFingerprint,
+      snapshot,
+      unmatched,
+    };
+  }
+
   async function buildHighlightSnapshot() {
     const serializableMap = state.app?.pdfDocument?.annotationStorage?.serializable?.map;
     const entries = serializableMap instanceof Map ? Array.from(serializableMap.entries()) : [];
@@ -1071,24 +1166,353 @@
 
       const pageModel = await getPageTextModel(pageIndex);
       const quote = extractQuoteFromTokenIndexes(pageModel, getHighlightTokenIndexesFromQuads(pageModel, quadPoints));
-      snapshot.push({
-        annotationId: String(annotationId),
-        pageIndex,
-        rect: normalizeNumberArray(rawValue.rect).slice(0, 4),
-        quadPoints,
-        color: normalizeColor(rawValue.color),
-        opacity: clampOpacity(rawValue.opacity),
-        exactQuote: quote?.exactQuote || "",
-        prefixQuote: quote?.prefixQuote || "",
-        suffixQuote: quote?.suffixQuote || "",
-        sourceFingerprint: sourcePdfFingerprint,
-      });
+      snapshot.push(
+        buildSnapshotItem({
+          annotationId,
+          pageIndex,
+          rect: rawValue.rect,
+          quadPoints,
+          color: rawValue.color,
+          opacity: rawValue.opacity,
+          exactQuote: quote?.exactQuote || "",
+          prefixQuote: quote?.prefixQuote || "",
+          suffixQuote: quote?.suffixQuote || "",
+          sourceFingerprint: sourcePdfFingerprint,
+        })
+      );
     }
 
     return {
       sourcePdfFingerprint,
       snapshot,
+      unmatched: [],
     };
+  }
+
+  async function buildSourceHighlightSnapshotForReplacement() {
+    const draftSnapshot = await buildHighlightSnapshot();
+    if (draftSnapshot.snapshot.length) {
+      return draftSnapshot;
+    }
+
+    if (!state.app?.pdfDocument) {
+      throw new Error("Primero carga un PDF.");
+    }
+
+    return extractHighlightSnapshotFromDocument(
+      state.app.pdfDocument,
+      state.app.pdfDocument?.fingerprints?.[0] || "",
+      new Map()
+    );
+  }
+
+  function pageDistanceScore(distance) {
+    if (distance === 0) return 10;
+    if (distance === 1) return 8;
+    return 0;
+  }
+
+  function buildCandidateReason(prefixMatch, suffixMatch, pageDistance) {
+    const pageReason = pageDistance === 0 ? "misma pagina" : pageDistance === 1 ? "pagina cercana" : "pagina distinta";
+    if (prefixMatch && suffixMatch) return `Coincide el texto exacto y ambos contextos en ${pageReason}.`;
+    if (prefixMatch || suffixMatch) return `Coincide el texto exacto y un contexto en ${pageReason}.`;
+    return `Coincide el texto exacto sin contexto fuerte en ${pageReason}.`;
+  }
+
+  function buildOccurrenceCandidate(highlight, pageModel, occurrenceIndex) {
+    const occurrenceEnd = occurrenceIndex + highlight.exactQuote.length;
+    const tokenIndexes = pageModel.tokens.flatMap((token, tokenIndex) =>
+      token.end <= occurrenceIndex || token.start >= occurrenceEnd ? [] : [tokenIndex]
+    );
+
+    if (!tokenIndexes.length) {
+      return null;
+    }
+
+    const tokenRects = tokenIndexes.map((tokenIndex) => pageModel.tokens[tokenIndex].rect);
+    const lineRects = [];
+    for (const rect of tokenRects) {
+      const centerY = (rect[1] + rect[3]) / 2;
+      const existingLine = lineRects.find(
+        (lineRect) => Math.abs((lineRect[1] + lineRect[3]) / 2 - centerY) <= Math.max(4, (rect[3] - rect[1]) * 0.75)
+      );
+      if (existingLine) {
+        existingLine[0] = Math.min(existingLine[0], rect[0]);
+        existingLine[1] = Math.min(existingLine[1], rect[1]);
+        existingLine[2] = Math.max(existingLine[2], rect[2]);
+        existingLine[3] = Math.max(existingLine[3], rect[3]);
+      } else {
+        lineRects.push([...rect]);
+      }
+    }
+
+    lineRects.sort((left, right) => right[3] - left[3] || left[0] - right[0]);
+    const quadPoints = lineRects.flatMap(([x1, y1, x2, y2]) => [x1, y2, x2, y2, x1, y1, x2, y1]);
+    const rect = [
+      Math.min(...lineRects.map((lineRect) => lineRect[0])),
+      Math.min(...lineRects.map((lineRect) => lineRect[1])),
+      Math.max(...lineRects.map((lineRect) => lineRect[2])),
+      Math.max(...lineRects.map((lineRect) => lineRect[3])),
+    ];
+    const pageDistance = Math.abs(pageModel.pageIndex - highlight.pageIndex);
+    const prefixSample = normalizeContextSnippet(
+      pageModel.text.slice(Math.max(0, occurrenceIndex - highlight.prefixQuote.length), occurrenceIndex),
+      true
+    );
+    const suffixSample = normalizeContextSnippet(
+      pageModel.text.slice(occurrenceEnd, occurrenceEnd + highlight.suffixQuote.length)
+    );
+    const prefixMatch = Boolean(highlight.prefixQuote) && prefixSample === highlight.prefixQuote;
+    const suffixMatch = Boolean(highlight.suffixQuote) && suffixSample === highlight.suffixQuote;
+
+    return {
+      highlight,
+      candidate: {
+        pageIndex: pageModel.pageIndex,
+        rect,
+        quadPoints,
+        exactQuote: highlight.exactQuote,
+        prefixMatch,
+        suffixMatch,
+        pageDistance,
+      },
+      score: 50 + (prefixMatch ? 15 : 0) + (suffixMatch ? 15 : 0) + pageDistanceScore(pageDistance),
+      reason: buildCandidateReason(prefixMatch, suffixMatch, pageDistance),
+    };
+  }
+
+  function listSearchPageIndexes(totalPages, pageIndex) {
+    const preferred = [pageIndex, pageIndex - 1, pageIndex + 1].filter(
+      (candidatePageIndex) => candidatePageIndex >= 0 && candidatePageIndex < totalPages
+    );
+    const rest = Array.from({ length: totalPages }, (_, index) => index).filter((index) => !preferred.includes(index));
+    return [...preferred, ...rest];
+  }
+
+  function findMatchesForHighlight(highlight, pageModels) {
+    const searchPageIndexes = listSearchPageIndexes(pageModels.length, highlight.pageIndex);
+    const matches = [];
+
+    for (const pageIndex of searchPageIndexes) {
+      const model = pageModels[pageIndex];
+      if (!model?.text) continue;
+
+      let searchOffset = 0;
+      while (true) {
+        const occurrenceIndex = model.text.indexOf(highlight.exactQuote, searchOffset);
+        if (occurrenceIndex === -1) break;
+        const candidate = buildOccurrenceCandidate(highlight, model, occurrenceIndex);
+        if (candidate) {
+          matches.push(candidate);
+        }
+        searchOffset = occurrenceIndex + highlight.exactQuote.length;
+      }
+    }
+
+    matches.sort((left, right) => right.score - left.score || left.candidate.pageDistance - right.candidate.pageDistance);
+    return matches;
+  }
+
+  function isSelectablePdf(pageModels) {
+    const textLength = pageModels.reduce((total, model) => total + model.text.length, 0);
+    return textLength >= MIN_SELECTABLE_TEXT && pageModels.some((model) => model.tokens.length > 0);
+  }
+
+  function mergePreviewUnmatched(preview, legacyUnmatched, sourceHighlights) {
+    const unmatched = [...legacyUnmatched, ...(preview.unmatched || [])];
+    return {
+      ...preview,
+      unmatched,
+      summary: {
+        totalHighlights: sourceHighlights.length + legacyUnmatched.length,
+        autoMatches: preview.autoMatches.length,
+        reviewMatches: preview.reviewMatches.length,
+        unmatched: unmatched.length,
+      },
+    };
+  }
+
+  async function openPdfDocumentInMemory(pdfBytes) {
+    const pdfjsLib = window.pdfjsLib;
+    if (!pdfjsLib?.getDocument) {
+      throw new Error("PDF.js no esta disponible para analizar el reemplazo.");
+    }
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: pdfBytes,
+      disableWorker: true,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    });
+    const pdfDocument = await loadingTask.promise;
+    return { pdfjsLib, pdfDocument };
+  }
+
+  async function buildReplacementPreviewInMemory({ sourceHighlights, candidatePdfBytes, candidateFileName, sourceFingerprint }) {
+    const { pdfDocument } = await openPdfDocumentInMemory(candidatePdfBytes);
+
+    try {
+      const pageTextCache = new Map();
+      const pageModels = await Promise.all(
+        Array.from({ length: pdfDocument.numPages }, (_, pageIndex) =>
+          getDocumentPageTextModel(pdfDocument, pageIndex, pageTextCache)
+        )
+      );
+
+      if (!isSelectablePdf(pageModels)) {
+        throw new Error("El PDF nuevo no tiene texto seleccionable suficiente para migrar resaltados.");
+      }
+
+      const autoMatches = [];
+      const reviewMatches = [];
+      const unmatched = [];
+      const candidateFingerprint = pdfDocument.fingerprints?.[0] || "";
+
+      for (const highlight of sourceHighlights) {
+        if (!highlight.exactQuote) {
+          unmatched.push({
+            highlight,
+            reason: "El highlight no tiene texto base para buscar en la nueva version.",
+          });
+          continue;
+        }
+
+        const bestMatch = findMatchesForHighlight(highlight, pageModels)[0];
+        if (!bestMatch) {
+          unmatched.push({
+            highlight,
+            reason: "No se encontro el texto exacto en el PDF nuevo.",
+          });
+          continue;
+        }
+
+        if (bestMatch.score >= 85) {
+          autoMatches.push(bestMatch);
+        } else if (bestMatch.score >= 60) {
+          reviewMatches.push(bestMatch);
+        } else {
+          unmatched.push({
+            highlight,
+            reason: bestMatch.reason,
+          });
+        }
+      }
+
+      return {
+        candidateFileName,
+        sourceFingerprint,
+        candidateFingerprint,
+        autoMatches,
+        reviewMatches,
+        unmatched,
+        summary: {
+          totalHighlights: sourceHighlights.length,
+          autoMatches: autoMatches.length,
+          reviewMatches: reviewMatches.length,
+          unmatched: unmatched.length,
+        },
+      };
+    } finally {
+      await pdfDocument.destroy?.();
+    }
+  }
+
+  function getHighlightBoxesFromQuadPoints(quadPoints, pageRect) {
+    const pageWidth = pageRect[2] - pageRect[0];
+    const pageHeight = pageRect[3] - pageRect[1];
+    const boxes = [];
+
+    for (let index = 0; index + 7 < quadPoints.length; index += 8) {
+      const left = quadPoints[index];
+      const top = quadPoints[index + 1];
+      const right = quadPoints[index + 2];
+      const bottom = quadPoints[index + 5];
+      boxes.push({
+        x: (left - pageRect[0]) / pageWidth,
+        y: 1 - (top - pageRect[1]) / pageHeight,
+        width: (right - left) / pageWidth,
+        height: (top - bottom) / pageHeight,
+      });
+    }
+
+    return boxes;
+  }
+
+  function buildMigratedSnapshot(matches, candidateFingerprint) {
+    return matches.map((match) =>
+      buildSnapshotItem({
+        annotationId: match.highlight.annotationId,
+        pageIndex: match.candidate.pageIndex,
+        rect: match.candidate.rect,
+        quadPoints: match.candidate.quadPoints,
+        color: match.highlight.color,
+        opacity: match.highlight.opacity,
+        exactQuote: match.highlight.exactQuote,
+        prefixQuote: match.highlight.prefixQuote,
+        suffixQuote: match.highlight.suffixQuote,
+        sourceFingerprint: candidateFingerprint,
+      })
+    );
+  }
+
+  async function applyHighlightMigrationInMemory({ candidatePdfBytes, matches, candidateFingerprint }) {
+    if (!matches.length) {
+      return {
+        pdfBytes: candidatePdfBytes,
+        snapshot: [],
+        candidateFingerprint: candidateFingerprint || "",
+      };
+    }
+
+    const { pdfjsLib, pdfDocument } = await openPdfDocumentInMemory(candidatePdfBytes);
+
+    try {
+      const annotationStorage = pdfDocument.annotationStorage;
+      const HighlightOutliner = globalThis._pdfjsTestingUtils?.HighlightOutliner;
+      if (
+        !annotationStorage ||
+        typeof annotationStorage.setValue !== "function" ||
+        typeof pdfDocument.saveDocument !== "function" ||
+        typeof HighlightOutliner !== "function"
+      ) {
+        throw new Error("PDF.js no expone la serializacion necesaria para reaplicar highlights.");
+      }
+
+      const pageRects = new Map();
+      for (const match of matches) {
+        if (!pageRects.has(match.candidate.pageIndex)) {
+          const page = await pdfDocument.getPage(match.candidate.pageIndex + 1);
+          pageRects.set(match.candidate.pageIndex, [page.view[0], page.view[1], page.view[2], page.view[3]]);
+        }
+
+        const pageRect = pageRects.get(match.candidate.pageIndex);
+        const boxes = getHighlightBoxesFromQuadPoints(match.candidate.quadPoints, pageRect);
+        const outliner = new HighlightOutliner(boxes, 0.001);
+        const outlines = outliner.getOutlines().serialize(match.candidate.rect, 0);
+        annotationStorage.setValue(`migrated-${match.highlight.annotationId}`, {
+          annotationType: pdfjsLib.AnnotationEditorType.HIGHLIGHT,
+          color: match.highlight.color,
+          opacity: match.highlight.opacity,
+          thickness: 12,
+          quadPoints: Float32Array.from(match.candidate.quadPoints),
+          outlines,
+          pageIndex: match.candidate.pageIndex,
+          rect: match.candidate.rect,
+          rotation: 0,
+          id: null,
+          deleted: false,
+        });
+      }
+
+      const nextCandidateFingerprint = candidateFingerprint || pdfDocument.fingerprints?.[0] || "";
+      return {
+        pdfBytes: await pdfDocument.saveDocument(),
+        snapshot: buildMigratedSnapshot(matches, nextCandidateFingerprint),
+        candidateFingerprint: nextCandidateFingerprint,
+      };
+    } finally {
+      await pdfDocument.destroy?.();
+    }
   }
 
   async function syncAnnotatedPdf() {
@@ -1182,6 +1606,7 @@
       state.replacementBackdrop.dataset.open = "false";
     }
     state.replacementPreview = null;
+    state.replacementCandidateBytes = null;
     state.replacementDecisions = new Map();
   }
 
@@ -1272,23 +1697,30 @@
   }
 
   async function previewReplacement(file) {
-    showBusy("Analizando PDF nuevo...");
+    showBusy("Analizando PDF nuevo en RAM...");
     closeReplacementModal();
 
     try {
       const fileName = normalizePdfFileName(file.name || state.query.fileName || "material");
-      const formData = new FormData();
-      formData.set("file", file, fileName);
-      formData.set("fileName", fileName);
+      updateBusy("Leyendo resaltados actuales...");
+      const sourceSnapshot = await buildSourceHighlightSnapshotForReplacement();
 
-      const preview = await requireOkJson(
-        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-preview`, {
-          method: "POST",
-          body: formData,
+      updateBusy("Leyendo PDF candidato...");
+      const candidatePdfBytes = new Uint8Array(await file.arrayBuffer());
+
+      updateBusy("Comparando textos...");
+      const preview = mergePreviewUnmatched(
+        await buildReplacementPreviewInMemory({
+          sourceHighlights: sourceSnapshot.snapshot,
+          candidatePdfBytes,
+          candidateFileName: fileName,
+          sourceFingerprint: sourceSnapshot.sourcePdfFingerprint || "",
         }),
-        "No se pudo generar la vista previa del reemplazo."
+        sourceSnapshot.unmatched || [],
+        sourceSnapshot.snapshot
       );
 
+      state.replacementCandidateBytes = candidatePdfBytes;
       renderReplacementPreview(preview);
     } catch (error) {
       console.error("Custom PDF.js replacement preview failed:", error);
@@ -1299,33 +1731,48 @@
   }
 
   async function commitReplacement() {
-    if (!state.replacementPreview?.replacementToken) {
+    if (!state.replacementPreview || !state.replacementCandidateBytes) {
       showToast("Falta la vista previa del reemplazo.", "error", 3200);
       return;
     }
 
-    showBusy("Aplicando reemplazo...");
+    showBusy("Aplicando reemplazo en RAM...");
 
     try {
-      const decisions = Array.from(state.replacementDecisions.entries()).map(([annotationId, action]) => ({
-        annotationId,
-        action,
-      }));
+      const acceptedReviewMatches = (state.replacementPreview.reviewMatches || []).filter(
+        (match) => state.replacementDecisions.get(match.highlight.annotationId) === "accept"
+      );
+      const acceptedMatches = [...(state.replacementPreview.autoMatches || []), ...acceptedReviewMatches];
+
+      updateBusy("Preparando PDF final...");
+      const migrationResult = await applyHighlightMigrationInMemory({
+        candidatePdfBytes: state.replacementCandidateBytes,
+        matches: acceptedMatches,
+        candidateFingerprint: state.replacementPreview.candidateFingerprint || "",
+      });
+
+      updateBusy("Subiendo PDF reemplazado...");
+      const fileName = normalizePdfFileName(
+        state.replacementPreview.candidateFileName || state.query.fileName || state.app?._docFilename || "material"
+      );
+      const formData = new FormData();
+      formData.set("file", new Blob([migrationResult.pdfBytes], { type: "application/pdf" }), fileName);
+      formData.set("fileName", fileName);
+      formData.set("sourcePdfFingerprint", migrationResult.candidateFingerprint || "");
+      formData.set("highlightSnapshot", JSON.stringify(migrationResult.snapshot));
 
       const payload = await requireOkJson(
-        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-commit`, {
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/sync`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            replacementToken: state.replacementPreview.replacementToken,
-            decisions,
-          }),
+          body: formData,
         }),
         "No se pudo confirmar el reemplazo del PDF."
       );
 
       if (payload && typeof payload === "object" && payload.material?.file_name) {
         state.query.fileName = String(payload.material.file_name).trim() || state.query.fileName;
+      } else if (payload && typeof payload === "object" && typeof payload.file_name === "string") {
+        state.query.fileName = payload.file_name.trim() || state.query.fileName;
       }
 
       closeReplacementModal();

@@ -161,9 +161,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     const previousDriveFileId = material.drive_file_id
     const requestedSourceFingerprint = String(formData.get("sourcePdfFingerprint") || "").trim()
+    const hasExplicitHighlightSnapshot = formData.has("highlightSnapshot")
     const parsedHighlightSnapshot = parseHighlightSnapshot(formData.get("highlightSnapshot"))
     const extractedSnapshot =
-      parsedHighlightSnapshot.length > 0
+      hasExplicitHighlightSnapshot
         ? {
             sourceFingerprint:
               requestedSourceFingerprint ||
