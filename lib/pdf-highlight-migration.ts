@@ -106,6 +106,9 @@ const MAX_CONTEXT_LENGTH = 64
 const MIN_SELECTABLE_TEXT = 24
 
 let cachedPdfJsModule: Promise<PdfJsModule> | null = null
+const runtimeImport = new Function("moduleUrl", "return import(moduleUrl)") as (
+  moduleUrl: string
+) => Promise<PdfJsModule>
 
 function installPdfJsNodePolyfills() {
   const promiseCtor = Promise as PromiseConstructor & {
@@ -180,7 +183,7 @@ async function getPdfJsModule() {
     cachedPdfJsModule = (async () => {
       installPdfJsNodePolyfills()
       const moduleUrl = pathToFileURL(path.join(process.cwd(), "public", "pdfjs", "build", "pdf.mjs")).href
-      return import(moduleUrl) as Promise<PdfJsModule>
+      return runtimeImport(moduleUrl)
     })()
   }
 
