@@ -253,10 +253,28 @@ function normalizeContextSnippet(value: string, takeFromEnd = false) {
 }
 
 function normalizeNumberArray(value: unknown) {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((item) => Number(item))
-    .filter((item) => Number.isFinite(item))
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item))
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    if (!("length" in value) || typeof value.length !== "number") {
+      return []
+    }
+    const numbers: number[] = []
+    const typedArray = value as unknown as ArrayLike<unknown>
+    for (let index = 0; index < typedArray.length; index += 1) {
+      const numeric = Number(typedArray[index])
+      if (Number.isFinite(numeric)) {
+        numbers.push(numeric)
+      }
+    }
+    return numbers
+  }
+
+  return []
 }
 
 function normalizeRect(value: unknown): [number, number, number, number] {

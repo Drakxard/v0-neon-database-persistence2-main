@@ -939,8 +939,13 @@
   }
 
   function normalizeNumberArray(value) {
-    if (!Array.isArray(value)) return [];
-    return value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
+    if (Array.isArray(value)) {
+      return value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return Array.from(value, (item) => Number(item)).filter((item) => Number.isFinite(item));
+    }
+    return [];
   }
 
   function normalizeColor(value) {
