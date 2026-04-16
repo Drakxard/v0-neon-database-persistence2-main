@@ -67,6 +67,12 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
 }
 
+function looksLikePdf(buffer: Buffer) {
+  if (buffer.byteLength === 0) return false
+  const headerWindow = buffer.subarray(0, Math.min(buffer.byteLength, 1024)).toString("latin1")
+  return headerWindow.includes("%PDF-")
+}
+
 async function upsertHighlightSnapshot(params: {
   materialId: number
   sourcePdfFingerprint: string
@@ -144,6 +150,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     const arrayBuffer = await fileEntry.arrayBuffer()
     const pdfBuffer = Buffer.from(arrayBuffer)
+    if (pdfBuffer.byteLength === 0) {
+      return badRequest("El PDF recibido esta vacio.")
+    }
+
+    if (!looksLikePdf(pdfBuffer)) {
+      return badRequest("El archivo recibido no es un PDF valido.")
+    }
+
     await uploadR2Object({
       objectKey,
       mimeType,

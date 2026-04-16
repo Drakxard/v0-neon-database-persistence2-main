@@ -31,6 +31,7 @@
     replacementConfirm: null,
     replacementCancel: null,
     replacementPreview: null,
+    replacementToken: "",
     replacementCandidateBytes: null,
     replacementDecisions: new Map(),
     pageTextModels: new Map(),
@@ -38,6 +39,7 @@
     isSyncing: false,
     isSynced: false,
     hasUnsyncedChanges: false,
+    suppressUnloadSync: false,
     pendingExitSync: false,
     exitSyncTimer: null,
     statusTimer: null,
@@ -1611,6 +1613,7 @@
       state.replacementBackdrop.dataset.open = "false";
     }
     state.replacementPreview = null;
+    state.replacementToken = "";
     state.replacementCandidateBytes = null;
     state.replacementDecisions = new Map();
   }
@@ -1702,30 +1705,32 @@
   }
 
   async function previewReplacement(file) {
-    showBusy("Analizando PDF nuevo en RAM...");
+    showBusy("Analizando PDF nuevo...");
     closeReplacementModal();
 
     try {
       const fileName = normalizePdfFileName(file.name || state.query.fileName || "material");
-      updateBusy("Leyendo resaltados actuales...");
-      const sourceSnapshot = await buildSourceHighlightSnapshotForReplacement();
+      const formData = new FormData();
+      formData.set("file", file, fileName);
+      formData.set("fileName", fileName);
 
-      updateBusy("Leyendo PDF candidato...");
-      const candidatePdfBytes = new Uint8Array(await file.arrayBuffer());
-
-      updateBusy("Comparando textos...");
-      const preview = mergePreviewUnmatched(
-        await buildReplacementPreviewInMemory({
-          sourceHighlights: sourceSnapshot.snapshot,
-          candidatePdfBytes,
-          candidateFileName: fileName,
-          sourceFingerprint: sourceSnapshot.sourcePdfFingerprint || "",
+      updateBusy("Subiendo PDF candidato...");
+      const preview = await requireOkJson(
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-preview`, {
+          method: "POST",
+          body: formData,
         }),
-        sourceSnapshot.unmatched || [],
-        sourceSnapshot.snapshot
+        "No se pudo preparar el reemplazo del PDF."
       );
 
-      state.replacementCandidateBytes = candidatePdfBytes;
+      state.replacementToken =
+        preview && typeof preview === "object" && typeof preview.replacementToken === "string"
+          ? preview.replacementToken.trim()
+          : "";
+      if (!state.replacementToken) {
+        throw new Error("El servidor no devolvio el token del reemplazo.");
+      }
+
       renderReplacementPreview(preview);
     } catch (error) {
       console.error("Custom PDF.js replacement preview failed:", error);
@@ -1736,40 +1741,30 @@
   }
 
   async function commitReplacement() {
-    if (!state.replacementPreview || !state.replacementCandidateBytes) {
+    if (!state.replacementPreview || !state.replacementToken) {
       showToast("Falta la vista previa del reemplazo.", "error", 3200);
       return;
     }
 
-    showBusy("Aplicando reemplazo en RAM...");
+    showBusy("Aplicando reemplazo...");
 
     try {
-      const acceptedReviewMatches = (state.replacementPreview.reviewMatches || []).filter(
-        (match) => state.replacementDecisions.get(match.highlight.annotationId) === "accept"
-      );
-      const acceptedMatches = [...(state.replacementPreview.autoMatches || []), ...acceptedReviewMatches];
+      const decisions = Array.from(state.replacementDecisions.entries()).map(([annotationId, action]) => ({
+        annotationId,
+        action,
+      }));
 
-      updateBusy("Preparando PDF final...");
-      const migrationResult = await applyHighlightMigrationInMemory({
-        candidatePdfBytes: state.replacementCandidateBytes,
-        matches: acceptedMatches,
-        candidateFingerprint: state.replacementPreview.candidateFingerprint || "",
-      });
-
-      updateBusy("Subiendo PDF reemplazado...");
-      const fileName = normalizePdfFileName(
-        state.replacementPreview.candidateFileName || state.query.fileName || state.app?._docFilename || "material"
-      );
-      const formData = new FormData();
-      formData.set("file", new Blob([migrationResult.pdfBytes], { type: "application/pdf" }), fileName);
-      formData.set("fileName", fileName);
-      formData.set("sourcePdfFingerprint", migrationResult.candidateFingerprint || "");
-      formData.set("highlightSnapshot", JSON.stringify(migrationResult.snapshot));
-
+      updateBusy("Guardando PDF reemplazado...");
       const payload = await requireOkJson(
-        await fetch(`/api/subject-day-materials/${state.query.materialId}/sync`, {
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-commit`, {
           method: "POST",
-          body: formData,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            replacementToken: state.replacementToken,
+            decisions,
+          }),
         }),
         "No se pudo confirmar el reemplazo del PDF."
       );
@@ -1780,6 +1775,9 @@
         state.query.fileName = payload.file_name.trim() || state.query.fileName;
       }
 
+      state.suppressUnloadSync = true;
+      markDocumentAsSynced();
+      refreshMaterialViewerMetadata();
       closeReplacementModal();
       notifySubjectDayMaterialsRefresh();
       showStatus("PDF reemplazado.");
@@ -1796,7 +1794,7 @@
   }
 
   function handleBeforeUnload(event) {
-    if (!canSyncMaterial() || state.isSyncing || !hasUnsyncedAnnotations()) {
+    if (state.suppressUnloadSync || !canSyncMaterial() || state.isSyncing || !hasUnsyncedAnnotations()) {
       return;
     }
 

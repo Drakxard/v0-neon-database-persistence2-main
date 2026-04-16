@@ -118,6 +118,11 @@ export async function uploadR2Object(params: {
 }) {
   const client = createR2Client()
   const metadata = normalizeUploadMetadata(params.metadata)
+  const bodySize = typeof params.body === "string" ? Buffer.byteLength(params.body) : params.body.byteLength
+
+  if (bodySize === 0) {
+    throw new Error(`Refusing to upload empty object to R2: ${params.objectKey}`)
+  }
 
   await client.send(
     new PutObjectCommand({
@@ -250,6 +255,10 @@ export async function downloadR2Object(objectKey: string) {
   }
 
   const bytes = await response.Body.transformToByteArray()
+  if (bytes.byteLength === 0) {
+    throw new Error("R2 object download returned an empty payload.")
+  }
+
   return {
     buffer: Buffer.from(bytes),
     mimeType: response.ContentType || "application/octet-stream",
