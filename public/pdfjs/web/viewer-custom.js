@@ -18,6 +18,21 @@
     draftOverlay: null,
     syncButton: null,
     secondarySyncButton: null,
+    replaceButton: null,
+    secondaryReplaceButton: null,
+    replaceInput: null,
+    replacementBackdrop: null,
+    replacementDescription: null,
+    replacementAutoCount: null,
+    replacementReviewCount: null,
+    replacementUnmatchedCount: null,
+    replacementReviewList: null,
+    replacementUnmatchedList: null,
+    replacementConfirm: null,
+    replacementCancel: null,
+    replacementPreview: null,
+    replacementDecisions: new Map(),
+    pageTextModels: new Map(),
     syncStatePoller: null,
     isSyncing: false,
     isSynced: false,
@@ -28,6 +43,9 @@
     enhancedPdfReadability: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
+  const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
+  const DEFAULT_HIGHLIGHT_OPACITY = 1;
+  const MAX_CONTEXT_LENGTH = 64;
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -46,7 +64,12 @@
 
   function isEditableTarget(target) {
     if (!(target instanceof HTMLElement)) return false;
-    if (target.closest(".pdfjs-custom-modal-backdrop[data-open='true']")) return true;
+    if (
+      target.closest(".pdfjs-custom-modal-backdrop[data-open='true']") ||
+      target.closest(".pdfjs-custom-replacement-backdrop[data-open='true']")
+    ) {
+      return true;
+    }
     return Boolean(
       target.closest(
         "input, textarea, select, button, [contenteditable='true'], .dialog, #secondaryToolbar, #findbar, .dropdownToolbarButton"
@@ -151,6 +174,71 @@
         state.app?.eventBus?.dispatch("openfile", { source: window });
       });
     }
+
+    if (!state.replaceInput) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/pdf,.pdf";
+      input.hidden = true;
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (file) {
+          void previewReplacement(file);
+        }
+        input.value = "";
+      });
+      document.body.appendChild(input);
+      state.replaceInput = input;
+    }
+
+    if (!state.replacementBackdrop) {
+      const backdrop = document.createElement("div");
+      backdrop.className = "pdfjs-custom-replacement-backdrop";
+      backdrop.innerHTML = [
+        '<div class="pdfjs-custom-replacement-modal" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-replacement-title">',
+        '<div class="pdfjs-custom-replacement-header">',
+        '<h2 id="pdfjs-custom-replacement-title">Reemplazar PDF</h2>',
+        '<p id="pdfjs-custom-replacement-description">Se analizara el PDF nuevo y se migraran solo los resaltados seguros.</p>',
+        "</div>",
+        '<div class="pdfjs-custom-replacement-summary">',
+        '<article class="pdfjs-custom-replacement-stat" data-tone="auto"><strong id="pdfjs-custom-replacement-auto">0</strong><span>Migran automatico</span></article>',
+        '<article class="pdfjs-custom-replacement-stat" data-tone="review"><strong id="pdfjs-custom-replacement-review">0</strong><span>Requieren revision</span></article>',
+        '<article class="pdfjs-custom-replacement-stat" data-tone="unmatched"><strong id="pdfjs-custom-replacement-unmatched">0</strong><span>No migrables</span></article>',
+        "</div>",
+        '<section class="pdfjs-custom-replacement-section">',
+        "<h3>Revision manual</h3>",
+        '<div class="pdfjs-custom-replacement-list" id="pdfjs-custom-replacement-review-list"></div>',
+        "</section>",
+        '<section class="pdfjs-custom-replacement-section">',
+        "<h3>No migrables</h3>",
+        '<div class="pdfjs-custom-replacement-unmatched-list" id="pdfjs-custom-replacement-unmatched-list"></div>',
+        "</section>",
+        '<div class="pdfjs-custom-modal-actions">',
+        '<button type="button" data-variant="ghost" id="pdfjs-custom-replacement-cancel">Cancelar</button>',
+        '<button type="button" data-variant="primary" id="pdfjs-custom-replacement-confirm">Confirmar reemplazo</button>',
+        "</div>",
+        "</div>",
+      ].join("");
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) {
+          closeReplacementModal();
+        }
+      });
+      document.body.appendChild(backdrop);
+      state.replacementBackdrop = backdrop;
+      state.replacementDescription = backdrop.querySelector("#pdfjs-custom-replacement-description");
+      state.replacementAutoCount = backdrop.querySelector("#pdfjs-custom-replacement-auto");
+      state.replacementReviewCount = backdrop.querySelector("#pdfjs-custom-replacement-review");
+      state.replacementUnmatchedCount = backdrop.querySelector("#pdfjs-custom-replacement-unmatched");
+      state.replacementReviewList = backdrop.querySelector("#pdfjs-custom-replacement-review-list");
+      state.replacementUnmatchedList = backdrop.querySelector("#pdfjs-custom-replacement-unmatched-list");
+      state.replacementConfirm = backdrop.querySelector("#pdfjs-custom-replacement-confirm");
+      state.replacementCancel = backdrop.querySelector("#pdfjs-custom-replacement-cancel");
+      state.replacementCancel.addEventListener("click", () => closeReplacementModal());
+      state.replacementConfirm.addEventListener("click", () => {
+        void commitReplacement();
+      });
+    }
   }
 
   function bindSyncButtons() {
@@ -168,6 +256,24 @@
       if (state.secondarySyncButton) {
         state.secondarySyncButton.addEventListener("click", () => {
           void syncAnnotatedPdf();
+        });
+      }
+    }
+
+    if (!state.replaceButton) {
+      state.replaceButton = document.getElementById("replaceButton");
+      if (state.replaceButton) {
+        state.replaceButton.addEventListener("click", () => {
+          openReplacementPicker();
+        });
+      }
+    }
+
+    if (!state.secondaryReplaceButton) {
+      state.secondaryReplaceButton = document.getElementById("secondaryReplaceButton");
+      if (state.secondaryReplaceButton) {
+        state.secondaryReplaceButton.addEventListener("click", () => {
+          openReplacementPicker();
         });
       }
     }
@@ -218,6 +324,29 @@
 
     setSyncButtonState(state.syncButton);
     setSyncButtonState(state.secondarySyncButton);
+    setReplaceButtonState(state.replaceButton);
+    setReplaceButtonState(state.secondaryReplaceButton);
+  }
+
+  function setReplaceButtonState(button) {
+    if (!(button instanceof HTMLElement)) return;
+
+    if (!canSyncMaterial()) {
+      button.hidden = true;
+      return;
+    }
+
+    button.hidden = false;
+    const disabled = state.isSyncing || state.hasUnsyncedChanges;
+    button.toggleAttribute("disabled", disabled);
+    button.setAttribute(
+      "title",
+      state.isSyncing
+        ? "Espera a que termine la sincronizacion"
+        : state.hasUnsyncedChanges
+          ? "Sincroniza antes de reemplazar el PDF"
+          : "Reemplazar PDF"
+    );
   }
 
   function clearExitSyncTimer() {
@@ -336,6 +465,10 @@
   function clearSelections() {
     state.selections = [];
     refreshLayers();
+  }
+
+  function clearPageTextModels() {
+    state.pageTextModels = new Map();
   }
 
   function enterSelectionMode() {
@@ -793,6 +926,171 @@
     }
   }
 
+  function normalizeText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeContextSnippet(value, takeFromEnd = false) {
+    const normalized = normalizeText(value);
+    if (!normalized) return "";
+    return takeFromEnd ? normalized.slice(-MAX_CONTEXT_LENGTH) : normalized.slice(0, MAX_CONTEXT_LENGTH);
+  }
+
+  function normalizeNumberArray(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => Number(item)).filter((item) => Number.isFinite(item));
+  }
+
+  function normalizeColor(value) {
+    const numbers = normalizeNumberArray(value).slice(0, 3);
+    if (numbers.length !== 3) return [...DEFAULT_HIGHLIGHT_COLOR];
+    return numbers;
+  }
+
+  function clampOpacity(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_HIGHLIGHT_OPACITY;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  function quadPointsToRects(quadPoints) {
+    const rects = [];
+    for (let index = 0; index + 7 < quadPoints.length; index += 8) {
+      const xs = [quadPoints[index], quadPoints[index + 2], quadPoints[index + 4], quadPoints[index + 6]];
+      const ys = [quadPoints[index + 1], quadPoints[index + 3], quadPoints[index + 5], quadPoints[index + 7]];
+      rects.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+    }
+    return rects;
+  }
+
+  function rectsIntersect(left, right) {
+    return !(left[2] < right[0] || right[2] < left[0] || left[3] < right[1] || right[3] < left[1]);
+  }
+
+  function getTokenRect(item) {
+    const transform = Array.isArray(item.transform) ? item.transform.map((entry) => Number(entry)) : [];
+    const width = Number(item.width);
+    const height = Number(item.height);
+    if (transform.length < 6 || !Number.isFinite(width) || !Number.isFinite(height)) {
+      return null;
+    }
+
+    const x1 = transform[4];
+    const y2 = transform[5];
+    const x2 = x1 + width;
+    const y1 = y2 - height;
+    if (![x1, y1, x2, y2].every((entry) => Number.isFinite(entry))) {
+      return null;
+    }
+
+    return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+  }
+
+  async function getPageTextModel(pageIndex) {
+    if (state.pageTextModels.has(pageIndex)) {
+      return state.pageTextModels.get(pageIndex);
+    }
+
+    const page = await state.app.pdfDocument.getPage(pageIndex + 1);
+    const textContent = await page.getTextContent();
+    const tokens = [];
+    let text = "";
+
+    for (const item of textContent.items || []) {
+      const tokenText = normalizeText(item.str || "");
+      const rect = getTokenRect(item);
+      if (!tokenText || !rect) {
+        continue;
+      }
+
+      if (text.length > 0) {
+        text += " ";
+      }
+
+      const start = text.length;
+      text += tokenText;
+      const end = text.length;
+      tokens.push({
+        text: tokenText,
+        start,
+        end,
+        rect,
+      });
+    }
+
+    const model = { text, tokens };
+    state.pageTextModels.set(pageIndex, model);
+    return model;
+  }
+
+  function getHighlightTokenIndexesFromQuads(pageModel, quadPoints) {
+    const quadRects = quadPointsToRects(quadPoints);
+    const indexes = [];
+    pageModel.tokens.forEach((token, index) => {
+      if (quadRects.some((quadRect) => rectsIntersect(quadRect, token.rect))) {
+        indexes.push(index);
+      }
+    });
+    return indexes;
+  }
+
+  function extractQuoteFromTokenIndexes(pageModel, tokenIndexes) {
+    if (!tokenIndexes.length) return null;
+
+    const startToken = pageModel.tokens[tokenIndexes[0]];
+    const endToken = pageModel.tokens[tokenIndexes[tokenIndexes.length - 1]];
+    if (!startToken || !endToken) return null;
+
+    const exactQuote = normalizeText(tokenIndexes.map((index) => pageModel.tokens[index]?.text || "").join(" "));
+    if (!exactQuote) return null;
+
+    return {
+      exactQuote,
+      prefixQuote: normalizeContextSnippet(
+        pageModel.text.slice(Math.max(0, startToken.start - MAX_CONTEXT_LENGTH), startToken.start),
+        true
+      ),
+      suffixQuote: normalizeContextSnippet(pageModel.text.slice(endToken.end, endToken.end + MAX_CONTEXT_LENGTH)),
+    };
+  }
+
+  async function buildHighlightSnapshot() {
+    const serializableMap = state.app?.pdfDocument?.annotationStorage?.serializable?.map;
+    const entries = serializableMap instanceof Map ? Array.from(serializableMap.entries()) : [];
+    const sourcePdfFingerprint = state.app?.pdfDocument?.fingerprints?.[0] || "";
+    const snapshot = [];
+
+    for (const [annotationId, rawValue] of entries) {
+      if (!rawValue || rawValue.deleted) continue;
+
+      const quadPoints = normalizeNumberArray(rawValue.quadPoints);
+      const pageIndex = Number(rawValue.pageIndex);
+      if (!quadPoints.length || !Number.isInteger(pageIndex)) {
+        continue;
+      }
+
+      const pageModel = await getPageTextModel(pageIndex);
+      const quote = extractQuoteFromTokenIndexes(pageModel, getHighlightTokenIndexesFromQuads(pageModel, quadPoints));
+      snapshot.push({
+        annotationId: String(annotationId),
+        pageIndex,
+        rect: normalizeNumberArray(rawValue.rect).slice(0, 4),
+        quadPoints,
+        color: normalizeColor(rawValue.color),
+        opacity: clampOpacity(rawValue.opacity),
+        exactQuote: quote?.exactQuote || "",
+        prefixQuote: quote?.prefixQuote || "",
+        suffixQuote: quote?.suffixQuote || "",
+        sourceFingerprint: sourcePdfFingerprint,
+      });
+    }
+
+    return {
+      sourcePdfFingerprint,
+      snapshot,
+    };
+  }
+
   async function syncAnnotatedPdf() {
     if (!canSyncMaterial()) {
       showToast("La sincronizacion solo esta disponible para materiales guardados.", "info");
@@ -817,11 +1115,14 @@
     showStatus("Sincronizando...");
 
     try {
+      const highlightSnapshot = await buildHighlightSnapshot();
       const pdfBytes = await state.app.pdfDocument.saveDocument();
       const fileName = normalizePdfFileName(state.query.fileName || state.app._docFilename || "material");
       const formData = new FormData();
       formData.set("file", new Blob([pdfBytes], { type: "application/pdf" }), fileName);
       formData.set("fileName", fileName);
+      formData.set("sourcePdfFingerprint", highlightSnapshot.sourcePdfFingerprint || "");
+      formData.set("highlightSnapshot", JSON.stringify(highlightSnapshot.snapshot));
 
       const payload = await requireOkJson(
         await fetch(`/api/subject-day-materials/${state.query.materialId}/sync`, {
@@ -851,6 +1152,194 @@
     } finally {
       state.isSyncing = false;
       refreshSyncButtons();
+    }
+  }
+
+  function openReplacementPicker() {
+    if (!canSyncMaterial()) {
+      showToast("El reemplazo solo esta disponible para materiales guardados.", "info");
+      return;
+    }
+    if (!state.app?.pdfDocument) {
+      showToast("Primero carga un PDF.", "info");
+      return;
+    }
+    if (state.isSyncing) {
+      showToast("Espera a que termine la sincronizacion actual.", "info");
+      return;
+    }
+    if (state.hasUnsyncedChanges) {
+      showToast("Sincroniza los cambios antes de reemplazar el PDF.", "info", 3200);
+      return;
+    }
+
+    ensureUi();
+    state.replaceInput.click();
+  }
+
+  function closeReplacementModal() {
+    if (state.replacementBackdrop) {
+      state.replacementBackdrop.dataset.open = "false";
+    }
+    state.replacementPreview = null;
+    state.replacementDecisions = new Map();
+  }
+
+  function renderReplacementPreview(preview) {
+    state.replacementPreview = preview;
+    state.replacementDecisions = new Map(
+      (preview.reviewMatches || []).map((match) => [match.highlight.annotationId, "skip"])
+    );
+
+    state.replacementDescription.textContent = `${preview.candidateFileName || "PDF nuevo"}: ${preview.summary.autoMatches} automaticos, ${preview.summary.reviewMatches} para revisar y ${preview.summary.unmatched} no migrables.`;
+    state.replacementAutoCount.textContent = String(preview.summary.autoMatches || 0);
+    state.replacementReviewCount.textContent = String(preview.summary.reviewMatches || 0);
+    state.replacementUnmatchedCount.textContent = String(preview.summary.unmatched || 0);
+
+    state.replacementReviewList.replaceChildren();
+    const reviewMatches = preview.reviewMatches || [];
+    if (!reviewMatches.length) {
+      const empty = document.createElement("div");
+      empty.className = "pdfjs-custom-replacement-empty";
+      empty.textContent = "No hay coincidencias dudosas. Si continuas, solo se aplicaran las automaticas.";
+      state.replacementReviewList.appendChild(empty);
+    } else {
+      reviewMatches.forEach((match) => {
+        const card = document.createElement("article");
+        card.className = "pdfjs-custom-replacement-card";
+
+        const quote = document.createElement("p");
+        quote.className = "pdfjs-custom-replacement-quote";
+        quote.textContent = match.highlight.exactQuote || "Sin texto recuperable";
+        card.appendChild(quote);
+
+        const meta = document.createElement("p");
+        meta.className = "pdfjs-custom-replacement-meta";
+        meta.textContent = `Pagina original ${match.highlight.pageIndex + 1} -> candidata ${match.candidate.pageIndex + 1}. Score ${match.score}. ${match.reason}`;
+        card.appendChild(meta);
+
+        const actions = document.createElement("div");
+        actions.className = "pdfjs-custom-replacement-actions";
+
+        ["accept", "discard", "skip"].forEach((action) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.action = action;
+          button.dataset.selected = action === "skip" ? "true" : "false";
+          button.textContent =
+            action === "accept" ? "Aceptar candidato" : action === "discard" ? "Descartar" : "Dejar sin migrar";
+          button.addEventListener("click", () => {
+            state.replacementDecisions.set(match.highlight.annotationId, action);
+            actions.querySelectorAll("button").forEach((node) => {
+              node.dataset.selected = node.dataset.action === action ? "true" : "false";
+            });
+          });
+          actions.appendChild(button);
+        });
+
+        card.appendChild(actions);
+        state.replacementReviewList.appendChild(card);
+      });
+    }
+
+    state.replacementUnmatchedList.replaceChildren();
+    const unmatched = preview.unmatched || [];
+    if (!unmatched.length) {
+      const empty = document.createElement("div");
+      empty.className = "pdfjs-custom-replacement-empty";
+      empty.textContent = "No hay highlights descartados automaticamente.";
+      state.replacementUnmatchedList.appendChild(empty);
+    } else {
+      unmatched.forEach((item) => {
+        const card = document.createElement("article");
+        card.className = "pdfjs-custom-replacement-unmatched-item";
+
+        const quote = document.createElement("p");
+        quote.className = "pdfjs-custom-replacement-quote";
+        quote.textContent = item.highlight.exactQuote || "Highlight sin texto recuperable";
+        card.appendChild(quote);
+
+        const meta = document.createElement("p");
+        meta.className = "pdfjs-custom-replacement-meta";
+        meta.textContent = item.reason;
+        card.appendChild(meta);
+
+        state.replacementUnmatchedList.appendChild(card);
+      });
+    }
+
+    state.replacementBackdrop.dataset.open = "true";
+  }
+
+  async function previewReplacement(file) {
+    showBusy("Analizando PDF nuevo...");
+    closeReplacementModal();
+
+    try {
+      const fileName = normalizePdfFileName(file.name || state.query.fileName || "material");
+      const formData = new FormData();
+      formData.set("file", file, fileName);
+      formData.set("fileName", fileName);
+
+      const preview = await requireOkJson(
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-preview`, {
+          method: "POST",
+          body: formData,
+        }),
+        "No se pudo generar la vista previa del reemplazo."
+      );
+
+      renderReplacementPreview(preview);
+    } catch (error) {
+      console.error("Custom PDF.js replacement preview failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudo analizar el PDF nuevo.", "error", 4200);
+    } finally {
+      hideBusy();
+    }
+  }
+
+  async function commitReplacement() {
+    if (!state.replacementPreview?.replacementToken) {
+      showToast("Falta la vista previa del reemplazo.", "error", 3200);
+      return;
+    }
+
+    showBusy("Aplicando reemplazo...");
+
+    try {
+      const decisions = Array.from(state.replacementDecisions.entries()).map(([annotationId, action]) => ({
+        annotationId,
+        action,
+      }));
+
+      const payload = await requireOkJson(
+        await fetch(`/api/subject-day-materials/${state.query.materialId}/replace-commit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            replacementToken: state.replacementPreview.replacementToken,
+            decisions,
+          }),
+        }),
+        "No se pudo confirmar el reemplazo del PDF."
+      );
+
+      if (payload && typeof payload === "object" && payload.material?.file_name) {
+        state.query.fileName = String(payload.material.file_name).trim() || state.query.fileName;
+      }
+
+      closeReplacementModal();
+      notifySubjectDayMaterialsRefresh();
+      showStatus("PDF reemplazado.");
+      scheduleHideStatus(2400);
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 700);
+    } catch (error) {
+      console.error("Custom PDF.js replacement commit failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudo reemplazar el PDF.", "error", 4200);
+    } finally {
+      hideBusy();
     }
   }
 
@@ -971,6 +1460,8 @@
     state.sourcePdfBytes = null;
     state.sourcePdfLibDoc = null;
     clearSelections();
+    clearPageTextModels();
+    closeReplacementModal();
     leaveSelectionMode();
     updateDraftOverlay();
     applyEnhancedPdfReadability();

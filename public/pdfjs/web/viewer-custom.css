@@ -290,3 +290,191 @@
 .pdfjs-custom-sync-button[data-sync-state="synced"] {
   color: #16a34a;
 }
+
+.pdfjs-custom-replace-button {
+  min-width: 126px;
+  color: #38bdf8;
+}
+
+.pdfjs-custom-replace-button[disabled] {
+  color: rgba(148, 163, 184, 0.72);
+}
+
+.pdfjs-custom-replacement-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1210;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.pdfjs-custom-replacement-backdrop[data-open="true"] {
+  display: flex;
+}
+
+.pdfjs-custom-replacement-modal {
+  width: min(900px, 100%);
+  max-height: min(84vh, 860px);
+  overflow: auto;
+  padding: 24px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: #0f172a;
+  color: #e5e7eb;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.42);
+  font-family: system-ui, sans-serif;
+}
+
+.pdfjs-custom-replacement-header h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.pdfjs-custom-replacement-header p {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.pdfjs-custom-replacement-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.pdfjs-custom-replacement-stat {
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.pdfjs-custom-replacement-stat strong {
+  display: block;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.pdfjs-custom-replacement-stat span {
+  display: block;
+  margin-top: 6px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.pdfjs-custom-replacement-stat[data-tone="auto"] strong {
+  color: #38bdf8;
+}
+
+.pdfjs-custom-replacement-stat[data-tone="review"] strong {
+  color: #f59e0b;
+}
+
+.pdfjs-custom-replacement-stat[data-tone="unmatched"] strong {
+  color: #f87171;
+}
+
+.pdfjs-custom-replacement-section {
+  margin-top: 18px;
+}
+
+.pdfjs-custom-replacement-section h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.pdfjs-custom-replacement-empty {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(30, 41, 59, 0.88);
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.pdfjs-custom-replacement-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pdfjs-custom-replacement-card {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.pdfjs-custom-replacement-card p {
+  margin: 0;
+}
+
+.pdfjs-custom-replacement-quote {
+  color: #f8fafc;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.pdfjs-custom-replacement-meta {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pdfjs-custom-replacement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pdfjs-custom-replacement-actions button {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(51, 65, 85, 0.9);
+  color: #e2e8f0;
+  font: 600 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pdfjs-custom-replacement-actions button[data-selected="true"] {
+  background: #f97316;
+  color: #111827;
+}
+
+.pdfjs-custom-replacement-actions button[data-action="discard"][data-selected="true"] {
+  background: #ef4444;
+  color: #fff;
+}
+
+.pdfjs-custom-replacement-actions button[data-action="skip"][data-selected="true"] {
+  background: #64748b;
+  color: #fff;
+}
+
+.pdfjs-custom-replacement-unmatched-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pdfjs-custom-replacement-unmatched-item {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(127, 29, 29, 0.22);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.pdfjs-custom-replacement-unmatched-item p {
+  margin: 0;
+}
+
+.pdfjs-custom-replacement-unmatched-item .pdfjs-custom-replacement-meta {
+  margin-top: 6px;
+}

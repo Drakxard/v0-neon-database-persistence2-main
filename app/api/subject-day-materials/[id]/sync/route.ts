@@ -2,6 +2,7 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { extractHighlightSnapshotFromPdfBytes, parseHighlightSnapshot } from "@/lib/pdf-highlight-migration"
 import { buildR2ObjectKey, uploadR2Object } from "@/lib/r2"
 import { getSubjectById } from "@/lib/subjects"
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
@@ -62,6 +63,30 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
 }
 
+async function upsertHighlightSnapshot(params: {
+  materialId: number
+  sourcePdfFingerprint: string
+  highlightsJson: string
+}) {
+  await sql`
+    INSERT INTO subject_day_material_highlight_snapshots (
+      material_id,
+      source_pdf_fingerprint,
+      highlights_json
+    )
+    VALUES (
+      ${params.materialId},
+      ${params.sourcePdfFingerprint},
+      ${params.highlightsJson}::jsonb
+    )
+    ON CONFLICT (material_id) DO UPDATE
+    SET
+      source_pdf_fingerprint = EXCLUDED.source_pdf_fingerprint,
+      highlights_json = EXCLUDED.highlights_json,
+      updated_at = NOW()
+  `
+}
+
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuthSession()
@@ -114,10 +139,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     })
 
     const arrayBuffer = await fileEntry.arrayBuffer()
+    const pdfBuffer = Buffer.from(arrayBuffer)
     await uploadR2Object({
       objectKey,
       mimeType,
-      body: Buffer.from(arrayBuffer),
+      body: pdfBuffer,
       metadata: {
         "subject-id": material.subject_id,
         "subject-name": subjectName,
@@ -130,6 +156,18 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     })
 
     const previousDriveFileId = material.drive_file_id
+    const requestedSourceFingerprint = String(formData.get("sourcePdfFingerprint") || "").trim()
+    const parsedHighlightSnapshot = parseHighlightSnapshot(formData.get("highlightSnapshot"))
+    const extractedSnapshot =
+      parsedHighlightSnapshot.length > 0
+        ? {
+            sourceFingerprint:
+              requestedSourceFingerprint ||
+              parsedHighlightSnapshot[0]?.sourceFingerprint ||
+              "",
+            snapshot: parsedHighlightSnapshot,
+          }
+        : await extractHighlightSnapshotFromPdfBytes(pdfBuffer, requestedSourceFingerprint)
 
     const updatedRows = await sql`
       UPDATE subject_day_materials
@@ -147,6 +185,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!updatedMaterial) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 })
     }
+
+    await upsertHighlightSnapshot({
+      materialId,
+      sourcePdfFingerprint: extractedSnapshot.sourceFingerprint,
+      highlightsJson: JSON.stringify(extractedSnapshot.snapshot),
+    })
 
     if (previousDriveFileId && previousDriveFileId !== objectKey) {
       try {
