@@ -1,6 +1,3 @@
-import path from "node:path"
-import { pathToFileURL } from "node:url"
-
 export type PdfBinaryInput = Uint8Array | ArrayBuffer | ArrayBufferView
 
 type PdfJsModule = {
@@ -108,9 +105,6 @@ const MAX_CONTEXT_LENGTH = 64
 const MIN_SELECTABLE_TEXT = 24
 
 let cachedPdfJsModule: Promise<PdfJsModule> | null = null
-const runtimeImport = new Function("moduleUrl", "return import(moduleUrl)") as (
-  moduleUrl: string
-) => Promise<PdfJsModule>
 
 export class PdfMigrationDocumentReadError extends Error {
   cause?: unknown
@@ -198,8 +192,9 @@ async function getPdfJsModule() {
   if (!cachedPdfJsModule) {
     cachedPdfJsModule = (async () => {
       installPdfJsNodePolyfills()
-      const moduleUrl = pathToFileURL(path.join(process.cwd(), "public", "pdfjs", "build", "pdf.mjs")).href
-      return runtimeImport(moduleUrl)
+      // The browser viewer continues using vendored assets in public/pdfjs.
+      // Server-side migration needs the Node-compatible legacy build.
+      return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as PdfJsModule
     })()
   }
 
