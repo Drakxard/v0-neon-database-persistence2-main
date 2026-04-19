@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -20,6 +20,8 @@ import { useSubjectEntries } from "@/hooks/use-subject-entries"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
+import { loadCronogramaPdf } from "@/lib/client/cronograma-pdf"
+import { openStoredCronogramaPdf, saveAndOpenCronogramaPdf } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import {
@@ -914,6 +916,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
   const practiceFileInputRef = useRef<HTMLInputElement | null>(null)
+  const cronogramaFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [cronogramaPdfName, setCronogramaPdfName] = useState("")
+  const [isCronogramaLoading, setIsCronogramaLoading] = useState(false)
 
   // Practice modal state
   const [isPracticeOpen, setIsPracticeOpen] = useState(false)
@@ -944,6 +949,27 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   useEffect(() => {
     setSession(authSession)
   }, [authSession])
+
+  useEffect(() => {
+    let isCancelled = false
+
+    const loadSavedCronograma = async () => {
+      try {
+        const storedPdf = await loadCronogramaPdf()
+        if (!isCancelled) {
+          setCronogramaPdfName(storedPdf?.name ?? "")
+        }
+      } catch (error) {
+        console.error("Failed to load saved cronograma PDF:", error)
+      }
+    }
+
+    void loadSavedCronograma()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let isCancelled = false
@@ -3022,6 +3048,73 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     openShortcutDialog(shortcutKey, "create")
   }
 
+  const handleCronogramaButtonClick = useCallback(async () => {
+    if (isCronogramaLoading) return
+
+    if (!cronogramaPdfName) {
+      cronogramaFileInputRef.current?.click()
+      return
+    }
+
+    setIsCronogramaLoading(true)
+    try {
+      const opened = await openStoredCronogramaPdf()
+      if (!opened) {
+        setCronogramaPdfName("")
+        cronogramaFileInputRef.current?.click()
+        return
+      }
+    } catch (error) {
+      console.error("Failed to open cronograma PDF:", error)
+      toast({
+        title: "No se pudo abrir Cronograma",
+        description: error instanceof Error ? error.message : "Ocurrio un problema al abrir el PDF guardado.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCronogramaLoading(false)
+    }
+  }, [cronogramaPdfName, isCronogramaLoading])
+
+  const handleCronogramaFileChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const input = event.currentTarget
+      const file = input.files?.[0] ?? null
+      input.value = ""
+
+      if (!file) return
+
+      if (!isPdfFile(file)) {
+        toast({
+          title: "Archivo invalido",
+          description: "Cronograma solo acepta archivos PDF.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      setIsCronogramaLoading(true)
+      try {
+        await saveAndOpenCronogramaPdf(file)
+        setCronogramaPdfName(file.name)
+        toast({
+          title: "Cronograma actualizado",
+          description: `${file.name} quedo guardado en este dispositivo.`,
+        })
+      } catch (error) {
+        console.error("Failed to save cronograma PDF:", error)
+        toast({
+          title: "No se pudo guardar Cronograma",
+          description: error instanceof Error ? error.message : "Ocurrio un problema al guardar el PDF.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsCronogramaLoading(false)
+      }
+    },
+    []
+  )
+
   const handleMaterialUpload = async (materialType: SubjectDayMaterialType, files: File[]) => {
     if (!currentSubject || files.length === 0) return
 
@@ -4965,6 +5058,24 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           </div>
 
           <div className="order-1 flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:order-2 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <input
+              ref={cronogramaFileInputRef}
+              type="file"
+              accept="application/pdf"
+              className="hidden"
+              onChange={handleCronogramaFileChange}
+            />
+            <Button
+              onClick={() => void handleCronogramaButtonClick()}
+              variant="outline"
+              className="h-11 shrink-0 rounded-full border-border bg-background/70 px-4 text-sm"
+              aria-label={cronogramaPdfName ? `Abrir cronograma ${cronogramaPdfName}` : "Seleccionar cronograma"}
+              title={cronogramaPdfName ? `Cronograma: ${cronogramaPdfName}` : "Seleccionar cronograma"}
+              disabled={isCronogramaLoading}
+            >
+              {isCronogramaLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarDays className="mr-2 h-4 w-4" />}
+              Cronograma
+            </Button>
             <Button
               onClick={openPracticeModal}
               variant="outline"
