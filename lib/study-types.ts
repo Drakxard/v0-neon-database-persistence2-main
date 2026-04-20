@@ -52,6 +52,13 @@ export type PendingSubjectDayMaterial = SubjectDayMaterial & {
   is_pending_upload: true
 }
 
+export type CronogramaRecord = {
+  fileName: string
+  driveFileId: string
+  driveMimeType: string
+  updatedAt: string
+}
+
 export type PracticeCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"
 
 export type VectorOverview = {

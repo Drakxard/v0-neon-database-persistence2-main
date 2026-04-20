@@ -54,6 +54,7 @@
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
     return {
+      resourceType: String(params.get("resourceType") || "material").trim() === "cronograma" ? "cronograma" : "material",
       materialId: Number.parseInt(params.get("materialId") || "", 10),
       subjectId: String(params.get("subjectId") || "").trim(),
       subjectName: String(params.get("subjectName") || "").trim(),
@@ -64,6 +65,10 @@
       fileName: String(params.get("fileName") || "").trim(),
       key: String(params.get("key") || "").trim(),
     };
+  }
+
+  function isCronogramaResource() {
+    return state.query?.resourceType === "cronograma";
   }
 
   function isEditableTarget(target) {
@@ -82,21 +87,39 @@
   }
 
   function isDraftMode() {
-    return !Number.isInteger(state.query?.materialId);
+    return !isCronogramaResource() && !Number.isInteger(state.query?.materialId);
   }
 
-  function canSyncMaterial() {
-    return !isDraftMode() && Number.isInteger(state.query?.materialId);
+  function canSyncCurrentDocument() {
+    return isCronogramaResource() || (!isDraftMode() && Number.isInteger(state.query?.materialId));
+  }
+
+  function canReplaceMaterial() {
+    return !isCronogramaResource() && !isDraftMode() && Number.isInteger(state.query?.materialId);
   }
 
   function hasUnsyncedAnnotations() {
     return Boolean(state.app?.pdfDocument?.annotationStorage?.size > 0 && state.app?._annotationStorageModified);
   }
 
-  function getMaterialFileUrl(cacheBust = false) {
-    if (!canSyncMaterial()) return "";
+  function getCurrentFileUrl(cacheBust = false) {
+    if (isCronogramaResource()) {
+      const cronogramaUrl = "/api/cronograma/file";
+      return cacheBust ? `${cronogramaUrl}?t=${Date.now()}` : cronogramaUrl;
+    }
+    if (!canSyncCurrentDocument()) return "";
     const baseUrl = `/api/subject-day-materials/${state.query.materialId}/file`;
     return cacheBust ? `${baseUrl}?t=${Date.now()}` : baseUrl;
+  }
+
+  function getCurrentSyncUrl() {
+    if (isCronogramaResource()) {
+      return "/api/cronograma/sync";
+    }
+    if (Number.isInteger(state.query?.materialId)) {
+      return `/api/subject-day-materials/${state.query.materialId}/sync`;
+    }
+    return "";
   }
 
   function ensureUi() {
@@ -288,7 +311,7 @@
   function setSyncButtonState(button) {
     if (!(button instanceof HTMLElement)) return;
 
-    if (!canSyncMaterial()) {
+    if (!canSyncCurrentDocument()) {
       button.hidden = true;
       return;
     }
@@ -335,7 +358,7 @@
   function setReplaceButtonState(button) {
     if (!(button instanceof HTMLElement)) return;
 
-    if (!canSyncMaterial()) {
+    if (!canReplaceMaterial()) {
       button.hidden = true;
       return;
     }
@@ -885,6 +908,10 @@
   }
 
   function notifySubjectDayMaterialsRefresh() {
+    if (isCronogramaResource()) {
+      return;
+    }
+
     const payload = {
       subjectId: state.query.subjectId,
       sessionDate: state.query.sessionDate,
@@ -917,12 +944,12 @@
     refreshSyncButtons();
   }
 
-  function refreshMaterialViewerMetadata() {
+  function refreshDocumentViewerMetadata() {
     if (!state.app) return;
 
-    const materialUrl = getMaterialFileUrl();
-    if (materialUrl) {
-      state.app.setTitleUsingUrl(materialUrl, materialUrl);
+    const fileUrl = getCurrentFileUrl();
+    if (fileUrl) {
+      state.app.setTitleUsingUrl(fileUrl, fileUrl);
     }
     if (state.query.fileName) {
       state.app._contentDispositionFilename = state.query.fileName;
@@ -1523,8 +1550,8 @@
   }
 
   async function syncAnnotatedPdf() {
-    if (!canSyncMaterial()) {
-      showToast("La sincronizacion solo esta disponible para materiales guardados.", "info");
+    if (!canSyncCurrentDocument()) {
+      showToast("La sincronizacion solo esta disponible para documentos guardados.", "info");
       return false;
     }
     if (!state.app?.pdfDocument) {
@@ -1546,17 +1573,22 @@
     showStatus("Sincronizando...");
 
     try {
-      const highlightSnapshot = await buildHighlightSnapshot();
       const pdfBytes = await state.app.pdfDocument.saveDocument();
-      const fileName = normalizePdfFileName(state.query.fileName || state.app._docFilename || "material");
+      const fileName = normalizePdfFileName(
+        state.query.fileName || state.app._docFilename || (isCronogramaResource() ? "cronograma" : "material")
+      );
       const formData = new FormData();
       formData.set("file", new Blob([pdfBytes], { type: "application/pdf" }), fileName);
       formData.set("fileName", fileName);
-      formData.set("sourcePdfFingerprint", highlightSnapshot.sourcePdfFingerprint || "");
-      formData.set("highlightSnapshot", JSON.stringify(highlightSnapshot.snapshot));
+
+      if (!isCronogramaResource()) {
+        const highlightSnapshot = await buildHighlightSnapshot();
+        formData.set("sourcePdfFingerprint", highlightSnapshot.sourcePdfFingerprint || "");
+        formData.set("highlightSnapshot", JSON.stringify(highlightSnapshot.snapshot));
+      }
 
       const payload = await requireOkJson(
-        await fetch(`/api/subject-day-materials/${state.query.materialId}/sync`, {
+        await fetch(getCurrentSyncUrl(), {
           method: "POST",
           body: formData,
         }),
@@ -1566,10 +1598,12 @@
       state.query.fileName =
         payload && typeof payload === "object" && typeof payload.file_name === "string" && payload.file_name.trim()
           ? payload.file_name.trim()
-          : fileName;
+          : payload && typeof payload === "object" && typeof payload.fileName === "string" && payload.fileName.trim()
+            ? payload.fileName.trim()
+            : fileName;
 
       markDocumentAsSynced();
-      refreshMaterialViewerMetadata();
+      refreshDocumentViewerMetadata();
       notifySubjectDayMaterialsRefresh();
       showStatus("Puedes salir, sincronizado.");
       scheduleHideStatus();
@@ -1587,7 +1621,7 @@
   }
 
   function openReplacementPicker() {
-    if (!canSyncMaterial()) {
+    if (!canReplaceMaterial()) {
       showToast("El reemplazo solo esta disponible para materiales guardados.", "info");
       return;
     }
@@ -1807,7 +1841,7 @@
 
       state.suppressUnloadSync = true;
       markDocumentAsSynced();
-      refreshMaterialViewerMetadata();
+      refreshDocumentViewerMetadata();
       closeReplacementModal();
       notifySubjectDayMaterialsRefresh();
       showStatus("PDF reemplazado.");
@@ -1824,7 +1858,7 @@
   }
 
   function handleBeforeUnload(event) {
-    if (state.suppressUnloadSync || !canSyncMaterial() || state.isSyncing || !hasUnsyncedAnnotations()) {
+    if (state.suppressUnloadSync || !canSyncCurrentDocument() || state.isSyncing || !hasUnsyncedAnnotations()) {
       return;
     }
 

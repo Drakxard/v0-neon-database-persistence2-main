@@ -20,8 +20,8 @@ import { useSubjectEntries } from "@/hooks/use-subject-entries"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
-import { loadCronogramaPdf } from "@/lib/client/cronograma-pdf"
-import { openStoredCronogramaPdf, saveAndOpenCronogramaPdf } from "@/lib/client/cronograma-viewer"
+import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
+import { openCronogramaViewer } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import {
@@ -953,18 +953,18 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   useEffect(() => {
     let isCancelled = false
 
-    const loadSavedCronograma = async () => {
+    const loadRemoteCronograma = async () => {
       try {
-        const storedPdf = await loadCronogramaPdf()
+        const remoteCronograma = await fetchCronograma()
         if (!isCancelled) {
-          setCronogramaPdfName(storedPdf?.name ?? "")
+          setCronogramaPdfName(remoteCronograma?.fileName ?? "")
         }
       } catch (error) {
-        console.error("Failed to load saved cronograma PDF:", error)
+        console.error("Failed to load remote cronograma PDF:", error)
       }
     }
 
-    void loadSavedCronograma()
+    void loadRemoteCronograma()
 
     return () => {
       isCancelled = true
@@ -3058,12 +3058,14 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     setIsCronogramaLoading(true)
     try {
-      const opened = await openStoredCronogramaPdf()
-      if (!opened) {
+      const remoteCronograma = await fetchCronograma()
+      if (!remoteCronograma) {
         setCronogramaPdfName("")
         cronogramaFileInputRef.current?.click()
         return
       }
+
+      openCronogramaViewer(remoteCronograma.fileName)
     } catch (error) {
       console.error("Failed to open cronograma PDF:", error)
       toast({
@@ -3095,12 +3097,9 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
       setIsCronogramaLoading(true)
       try {
-        await saveAndOpenCronogramaPdf(file)
-        setCronogramaPdfName(file.name)
-        toast({
-          title: "Cronograma actualizado",
-          description: `${file.name} quedo guardado en este dispositivo.`,
-        })
+        const savedCronograma = await uploadCronogramaPdf(file)
+        setCronogramaPdfName(savedCronograma.fileName)
+        openCronogramaViewer(savedCronograma.fileName)
       } catch (error) {
         console.error("Failed to save cronograma PDF:", error)
         toast({
@@ -5038,8 +5037,117 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     <div className="flex min-h-screen flex-col bg-background text-foreground transition-colors duration-300">
       {/* Header */}
       <header className="border-b border-border bg-card/95 shadow-sm backdrop-blur">
-        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-5">
-          <div className="order-2 flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs text-muted-foreground sm:order-1 sm:min-w-[160px] sm:justify-start">
+        <div className="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex shrink-0 items-center">
+              <input
+                ref={cronogramaFileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={handleCronogramaFileChange}
+              />
+              <Button
+                onClick={() => void handleCronogramaButtonClick()}
+                variant="outline"
+                className="h-11 shrink-0 rounded-full border-border bg-background/70 px-4 text-sm"
+                aria-label={cronogramaPdfName ? `Abrir cronograma ${cronogramaPdfName}` : "Seleccionar cronograma"}
+                title={cronogramaPdfName ? `Cronograma: ${cronogramaPdfName}` : "Seleccionar cronograma"}
+                disabled={isCronogramaLoading}
+              >
+                {isCronogramaLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarDays className="mr-2 h-4 w-4" />}
+                Cronograma
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <Button
+                onClick={openPracticeModal}
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                aria-label="Practica"
+                title="Practica"
+              >
+                <GraduationCap className="h-4 w-4" />
+              </Button>
+              <Button
+                onClick={openReviewModal}
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                aria-label="Destacado"
+                title="Destacado"
+              >
+                <Sparkles className="h-4 w-4" />
+              </Button>
+              <Button
+                onClick={openSocraticReviewModal}
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                aria-label="Repaso socratico"
+                title="Repaso socratico"
+              >
+                <Mic className="h-4 w-4" />
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                    aria-label="Cambiar tema"
+                    title="Cambiar tema"
+                  >
+                    <Palette className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl border-border bg-popover">
+                  <DropdownMenuLabel>Tema</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {APP_THEMES.map((themeOption) => {
+                    const isActive = themeOption.id === currentAppTheme
+
+                    return (
+                      <DropdownMenuItem
+                        key={themeOption.id}
+                        onClick={() => setTheme(themeOption.id)}
+                        className="flex items-center gap-3 rounded-xl px-3 py-3"
+                      >
+                        <span className={`h-8 w-8 shrink-0 rounded-full border border-white/40 bg-gradient-to-br ${themeOption.swatchClassName}`} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium">{themeOption.label}</span>
+                          <span className="block text-xs text-muted-foreground">{themeOption.description}</span>
+                        </span>
+                        <span className={`h-2.5 w-2.5 rounded-full transition ${isActive ? "bg-primary" : "bg-transparent"}`} />
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button
+                onClick={openSynthesisModal}
+                variant="outline"
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                aria-label="Sintesis"
+                title="Sintesis"
+              >
+                <BarChart3 className="h-4 w-4" />
+              </Button>
+              <button
+                onClick={handleReset}
+                className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                aria-label="Reiniciar"
+                title="Reiniciar todas las materias"
+              >
+                <RotateCcw className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs text-muted-foreground">
             {saveStatus === "saving" && (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -5055,110 +5163,6 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             {saveStatus === "error" && (
               <span className="text-center text-red-500">Error al guardar</span>
             )}
-          </div>
-
-          <div className="order-1 flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:order-2 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <input
-              ref={cronogramaFileInputRef}
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              onChange={handleCronogramaFileChange}
-            />
-            <Button
-              onClick={() => void handleCronogramaButtonClick()}
-              variant="outline"
-              className="h-11 shrink-0 rounded-full border-border bg-background/70 px-4 text-sm"
-              aria-label={cronogramaPdfName ? `Abrir cronograma ${cronogramaPdfName}` : "Seleccionar cronograma"}
-              title={cronogramaPdfName ? `Cronograma: ${cronogramaPdfName}` : "Seleccionar cronograma"}
-              disabled={isCronogramaLoading}
-            >
-              {isCronogramaLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarDays className="mr-2 h-4 w-4" />}
-              Cronograma
-            </Button>
-            <Button
-              onClick={openPracticeModal}
-              variant="outline"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-              aria-label="Practica"
-              title="Practica"
-            >
-              <GraduationCap className="h-4 w-4" />
-            </Button>
-            <Button
-              onClick={openReviewModal}
-              variant="outline"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-              aria-label="Destacado"
-              title="Destacado"
-            >
-              <Sparkles className="h-4 w-4" />
-            </Button>
-            <Button
-              onClick={openSocraticReviewModal}
-              variant="outline"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-              aria-label="Repaso socratico"
-              title="Repaso socratico"
-            >
-              <Mic className="h-4 w-4" />
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-                  aria-label="Cambiar tema"
-                  title="Cambiar tema"
-                >
-                  <Palette className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl border-border bg-popover">
-                <DropdownMenuLabel>Tema</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {APP_THEMES.map((themeOption) => {
-                  const isActive = themeOption.id === currentAppTheme
-
-                  return (
-                    <DropdownMenuItem
-                      key={themeOption.id}
-                      onClick={() => setTheme(themeOption.id)}
-                      className="flex items-center gap-3 rounded-xl px-3 py-3"
-                    >
-                      <span className={`h-8 w-8 shrink-0 rounded-full border border-white/40 bg-gradient-to-br ${themeOption.swatchClassName}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium">{themeOption.label}</span>
-                        <span className="block text-xs text-muted-foreground">{themeOption.description}</span>
-                      </span>
-                      <span className={`h-2.5 w-2.5 rounded-full transition ${isActive ? "bg-primary" : "bg-transparent"}`} />
-                    </DropdownMenuItem>
-                  )
-                })}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              onClick={openSynthesisModal}
-              variant="outline"
-              size="icon"
-              className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
-              aria-label="Sintesis"
-              title="Sintesis"
-            >
-              <BarChart3 className="h-4 w-4" />
-            </Button>
-            <button
-              onClick={handleReset}
-              className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              aria-label="Reiniciar"
-              title="Reiniciar todas las materias"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </button>
           </div>
         </div>
       </header>

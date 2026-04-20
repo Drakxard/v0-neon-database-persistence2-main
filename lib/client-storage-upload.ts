@@ -41,6 +41,7 @@ export async function uploadBlobToStorage(session: DriveUploadSessionResponse, b
     const response = await fetch(session.uploadUrl, {
       method: "PUT",
       headers: {
+        ...(session.headers ?? {}),
         "Content-Type": session.mimeType || blob.type || "application/octet-stream",
       },
       body: blob,
