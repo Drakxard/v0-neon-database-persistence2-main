@@ -1276,60 +1276,6 @@ export function SubjectWheel({
     synthesisWeekNumberRef.current = synthesisWeekNumber
   }, [synthesisWeekNumber])
 
-  useEffect(() => {
-    if (hasResolvedInitialSynthesisRouteRef.current) return
-
-    if (initialSearchParams?.view !== "synthesis") {
-      hasResolvedInitialSynthesisRouteRef.current = true
-      return
-    }
-
-    const firstSubject = synthesisSubjects[0] ?? null
-    if (!firstSubject) return
-
-    const requestedWeekNumber = Number.parseInt(initialSearchParams.synthesisWeek ?? "", 10)
-    const nextWeekNumber = Number.isInteger(requestedWeekNumber) && requestedWeekNumber > 0
-      ? requestedWeekNumber
-      : homeSelectedWeekNumber
-    const nextMode: SynthesisViewMode = initialSearchParams.synthesisMode === "detail" ? "detail" : "overview"
-    const requestedSubjectId = initialSearchParams.synthesisSubject ?? ""
-    const nextSubject =
-      synthesisSubjects.find((subject) => subject.id === requestedSubjectId) ??
-      firstSubject
-
-    resetSynthesisPlayback()
-    setSynthesisWeekNumber(nextWeekNumber)
-    setSynthesisSubjectId(nextSubject.id)
-    setSynthesisSubjectStateMap({})
-    setSynthesisViewMode(nextMode)
-    setIsSynthesisWeekSelectorOpen(false)
-    setIsSynthesisOpen(true)
-    shouldSyncSynthesisRouteRef.current = true
-    hasResolvedInitialSynthesisRouteRef.current = true
-  }, [
-    homeSelectedWeekNumber,
-    initialSearchParams,
-    resetSynthesisPlayback,
-    synthesisSubjects,
-  ])
-
-  useEffect(() => {
-    if (!hasResolvedInitialSynthesisRouteRef.current || !shouldSyncSynthesisRouteRef.current) return
-
-    const nextHref =
-      isSynthesisOpen && synthesisWeekNumber > 0
-        ? buildSynthesisHref({
-            weekNumber: synthesisWeekNumber,
-            mode: synthesisViewMode,
-            subjectId: synthesisViewMode === "detail" ? synthesisSubjectId : null,
-          })
-        : "/"
-    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
-
-    if (currentHref === nextHref) return
-    window.history.replaceState(null, "", nextHref)
-  }, [isSynthesisOpen, synthesisSubjectId, synthesisViewMode, synthesisWeekNumber])
-
 
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
@@ -3753,6 +3699,54 @@ export function SubjectWheel({
     setSynthesisSubjectId(subjectId)
     setSynthesisViewMode("detail")
   }, [resetSynthesisPlayback])
+
+  useEffect(() => {
+    if (hasResolvedInitialSynthesisRouteRef.current) return
+
+    if (initialSearchParams?.view !== "synthesis") {
+      hasResolvedInitialSynthesisRouteRef.current = true
+      return
+    }
+
+    const firstSubject = synthesisSubjects[0] ?? null
+    if (!firstSubject) return
+
+    const requestedWeekNumber = Number.parseInt(initialSearchParams.synthesisWeek ?? "", 10)
+    const nextWeekNumber =
+      Number.isInteger(requestedWeekNumber) && requestedWeekNumber > 0
+        ? requestedWeekNumber
+        : homeSelectedWeekNumber
+    const nextMode: SynthesisViewMode = initialSearchParams.synthesisMode === "detail" ? "detail" : "overview"
+    const requestedSubjectId = initialSearchParams.synthesisSubject ?? ""
+    const nextSubject = synthesisSubjects.find((subject) => subject.id === requestedSubjectId) ?? firstSubject
+
+    resetSynthesisPlayback()
+    setSynthesisWeekNumber(nextWeekNumber)
+    setSynthesisSubjectId(nextSubject.id)
+    setSynthesisSubjectStateMap({})
+    setSynthesisViewMode(nextMode)
+    setIsSynthesisWeekSelectorOpen(false)
+    setIsSynthesisOpen(true)
+    shouldSyncSynthesisRouteRef.current = true
+    hasResolvedInitialSynthesisRouteRef.current = true
+  }, [homeSelectedWeekNumber, initialSearchParams, resetSynthesisPlayback, synthesisSubjects])
+
+  useEffect(() => {
+    if (!hasResolvedInitialSynthesisRouteRef.current || !shouldSyncSynthesisRouteRef.current) return
+
+    const nextHref =
+      isSynthesisOpen && synthesisWeekNumber > 0
+        ? buildSynthesisHref({
+            weekNumber: synthesisWeekNumber,
+            mode: synthesisViewMode,
+            subjectId: synthesisViewMode === "detail" ? synthesisSubjectId : null,
+          })
+        : "/"
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    if (currentHref === nextHref) return
+    window.history.replaceState(null, "", nextHref)
+  }, [isSynthesisOpen, synthesisSubjectId, synthesisViewMode, synthesisWeekNumber])
 
   const handleStartSynthesisPlayback = useCallback((mode: ContinueMode) => {
     const entriesByMaterialId = (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
