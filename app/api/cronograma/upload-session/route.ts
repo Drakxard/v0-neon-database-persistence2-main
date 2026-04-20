@@ -7,7 +7,6 @@ import {
   normalizeCronogramaEmail,
   normalizeUploadedPdfFileName,
 } from "@/lib/cronograma"
-import { createR2UploadSession } from "@/lib/r2"
 
 export const runtime = "nodejs"
 
@@ -35,26 +34,19 @@ export async function POST(request: Request) {
       email,
       fileName,
     })
-
-    const session = await createR2UploadSession({
-      objectKey,
-      mimeType,
-      metadata: {
-        "owner-email": email,
-        "original-file-name": fileName,
-        "resource-type": CRONOGRAMA_RESOURCE_TYPE,
-      },
-    })
+    const metadata = {
+      "owner-email": email,
+      "original-file-name": fileName,
+      "resource-type": CRONOGRAMA_RESOURCE_TYPE,
+    }
 
     return NextResponse.json({
-      uploadMode: session.uploadMode,
-      objectKey: session.objectKey,
-      uploadUrl: session.uploadUrl,
-      headers: session.headers,
-      metadata: session.metadata,
-      mimeType: session.mimeType,
-      fileName: session.fileName,
-      driveFileId: session.driveFileId,
+      uploadMode: "server",
+      objectKey,
+      metadata,
+      mimeType,
+      fileName,
+      driveFileId: objectKey,
     })
   } catch (error) {
     console.error("POST /api/cronograma/upload-session error:", error)
