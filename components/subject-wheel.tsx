@@ -21,7 +21,7 @@ import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
 import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
-import { openCronogramaViewer } from "@/lib/client/cronograma-viewer"
+import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import {
@@ -172,6 +172,38 @@ function buildMaterialViewerHref(materialId: number) {
   })
 
   return `/practice/viewer?${searchParams.toString()}`
+}
+
+function buildSynthesisHref(params: {
+  weekNumber: number
+  mode: SynthesisViewMode
+  subjectId?: string | null
+}) {
+  const searchParams = new URLSearchParams({
+    view: "synthesis",
+    synthesisMode: params.mode,
+    synthesisWeek: String(params.weekNumber),
+  })
+
+  if (params.mode === "detail" && params.subjectId) {
+    searchParams.set("synthesisSubject", params.subjectId)
+  }
+
+  return `/?${searchParams.toString()}`
+}
+
+function openHrefInNewTab(href: string) {
+  window.open(href, "_blank", "noopener,noreferrer")
+}
+
+function isPlainLeftClick(event: React.MouseEvent<HTMLElement>) {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+}
+
+function handleAuxClickNavigation(event: React.MouseEvent<HTMLElement>, href: string) {
+  if (event.button !== 1) return
+  event.preventDefault()
+  openHrefInNewTab(href)
 }
 
 interface ReviewAudio {
@@ -326,6 +358,13 @@ type SynthesisReturnState = {
 type StackedDayViewReturnState = DayStackReturnState | SynthesisReturnState
 
 type ContinueGroup = ContinuePairGroup | ContinueSingleGroup
+
+type SubjectWheelSearchParams = {
+  view?: string
+  synthesisMode?: string
+  synthesisWeek?: string
+  synthesisSubject?: string
+}
 
 type SubjectVisibilityState = {
   activeSubjects: Subject[]
@@ -830,7 +869,13 @@ function buildSynthesisSubjectSummary(subjectId: string, weekNumber: number, sta
   }
 }
 
-export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
+export function SubjectWheel({
+  authSession,
+  initialSearchParams,
+}: {
+  authSession: AuthSession
+  initialSearchParams?: SubjectWheelSearchParams
+}) {
   const router = useRouter()
   const [session, setSession] = useState<AuthSession>(authSession)
   const visibleSubjects = useMemo<Subject[]>(
@@ -1079,6 +1124,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const synthesisSubjectStateMapRef = useRef<Record<string, SynthesisSubjectState>>({})
   const synthesisWeekNumberRef = useRef(0)
   const synthesisAutosaveTimersRef = useRef<Map<string, number>>(new Map())
+  const hasResolvedInitialSynthesisRouteRef = useRef(false)
+  const shouldSyncSynthesisRouteRef = useRef(false)
   const practiceQuestions: Question[] = []
   const currentPracticeQuestionId = null
   const activeShortcutSubject = isDialogOpen && currentSubject
@@ -1228,6 +1275,60 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   useEffect(() => {
     synthesisWeekNumberRef.current = synthesisWeekNumber
   }, [synthesisWeekNumber])
+
+  useEffect(() => {
+    if (hasResolvedInitialSynthesisRouteRef.current) return
+
+    if (initialSearchParams?.view !== "synthesis") {
+      hasResolvedInitialSynthesisRouteRef.current = true
+      return
+    }
+
+    const firstSubject = synthesisSubjects[0] ?? null
+    if (!firstSubject) return
+
+    const requestedWeekNumber = Number.parseInt(initialSearchParams.synthesisWeek ?? "", 10)
+    const nextWeekNumber = Number.isInteger(requestedWeekNumber) && requestedWeekNumber > 0
+      ? requestedWeekNumber
+      : homeSelectedWeekNumber
+    const nextMode: SynthesisViewMode = initialSearchParams.synthesisMode === "detail" ? "detail" : "overview"
+    const requestedSubjectId = initialSearchParams.synthesisSubject ?? ""
+    const nextSubject =
+      synthesisSubjects.find((subject) => subject.id === requestedSubjectId) ??
+      firstSubject
+
+    resetSynthesisPlayback()
+    setSynthesisWeekNumber(nextWeekNumber)
+    setSynthesisSubjectId(nextSubject.id)
+    setSynthesisSubjectStateMap({})
+    setSynthesisViewMode(nextMode)
+    setIsSynthesisWeekSelectorOpen(false)
+    setIsSynthesisOpen(true)
+    shouldSyncSynthesisRouteRef.current = true
+    hasResolvedInitialSynthesisRouteRef.current = true
+  }, [
+    homeSelectedWeekNumber,
+    initialSearchParams,
+    resetSynthesisPlayback,
+    synthesisSubjects,
+  ])
+
+  useEffect(() => {
+    if (!hasResolvedInitialSynthesisRouteRef.current || !shouldSyncSynthesisRouteRef.current) return
+
+    const nextHref =
+      isSynthesisOpen && synthesisWeekNumber > 0
+        ? buildSynthesisHref({
+            weekNumber: synthesisWeekNumber,
+            mode: synthesisViewMode,
+            subjectId: synthesisViewMode === "detail" ? synthesisSubjectId : null,
+          })
+        : "/"
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    if (currentHref === nextHref) return
+    window.history.replaceState(null, "", nextHref)
+  }, [isSynthesisOpen, synthesisSubjectId, synthesisViewMode, synthesisWeekNumber])
 
 
   useEffect(() => {
@@ -3598,6 +3699,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     if (!firstSubject) return
 
     resetSynthesisPlayback()
+    shouldSyncSynthesisRouteRef.current = true
     setSynthesisWeekNumber(homeSelectedWeekNumber)
     setSynthesisSubjectId(firstSubject.id)
     setSynthesisSubjectStateMap({})
@@ -3609,6 +3711,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
   const closeSynthesisModal = useCallback(() => {
     flushPendingSynthesisAutosaves()
     resetSynthesisPlayback()
+    shouldSyncSynthesisRouteRef.current = true
     setSynthesisViewMode("overview")
     setIsSynthesisOpen(false)
     setIsSynthesisWeekSelectorOpen(false)
@@ -3620,6 +3723,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
     flushPendingSynthesisAutosaves()
     resetSynthesisPlayback()
+    shouldSyncSynthesisRouteRef.current = true
     setSynthesisWeekNumber(weekNumber)
     setSynthesisSubjectId(firstSubject.id)
     setSynthesisViewMode("detail")
@@ -3645,6 +3749,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
 
   const openSynthesisOverviewSubject = useCallback((subjectId: string) => {
     resetSynthesisPlayback()
+    shouldSyncSynthesisRouteRef.current = true
     setSynthesisSubjectId(subjectId)
     setSynthesisViewMode("detail")
   }, [resetSynthesisPlayback])
@@ -4608,6 +4713,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
     const emptyLabel = isWeeklyExercisesScope
       ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
+    const continuePayloadPreview = buildLocalContinuePayload(mode)
+    const draftViewerHref =
+      currentSubject
+        ? buildMaterialDraftViewerHref({
+            subjectId: currentSubject.id,
+            subjectName: getSubjectDisplayName(currentSubject),
+            sessionDate: subjectDialogDateKey,
+            weekNumber: dialogSelectedWeekNumber,
+            weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+            materialType: mode,
+          })
+        : null
+    const continueViewerHref = continuePayloadPreview?.material
+      ? buildMaterialViewerHref(continuePayloadPreview.material.id)
+      : null
 
     return (
       <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-3 sm:p-4">
@@ -4621,19 +4741,8 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
               type="button"
               variant="outline"
               onClick={() => {
-                if (!currentSubject) return
-                window.open(
-                  buildMaterialDraftViewerHref({
-                    subjectId: currentSubject.id,
-                    subjectName: getSubjectDisplayName(currentSubject),
-                    sessionDate: subjectDialogDateKey,
-                    weekNumber: dialogSelectedWeekNumber,
-                    weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
-                    materialType: mode,
-                  }),
-                  "_blank",
-                  "noopener,noreferrer"
-                )
+                if (!draftViewerHref) return
+                openHrefInNewTab(draftViewerHref)
               }}
               disabled={isUploadingMaterialType !== null || !currentSubject}
               className="h-10 border-border px-0 text-foreground"
@@ -4653,6 +4762,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
             <Button
               type="button"
               onClick={() => void openContinueModal(mode)}
+              onAuxClick={continueViewerHref ? (event) => handleAuxClickNavigation(event, continueViewerHref) : undefined}
               className="h-10 bg-primary text-primary-foreground"
             >
               Continuar
@@ -4735,6 +4845,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                         type="button"
                         variant="outline"
                         onClick={() => void openContinueModal(mode, material.id)}
+                        onAuxClick={(event) => handleAuxClickNavigation(event, buildMaterialViewerHref(material.id))}
                         className="h-9 border-border px-3 text-xs text-foreground"
                       >
                         Ver
@@ -4901,12 +5012,21 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
           {synthesisOverviewCards.map((card, index) => {
             const corner = cornerStyles[index % cornerStyles.length]
             const countdownLabel = card.countdown ? `${card.countdown.daysUntil}d` : "--"
+            const href = buildSynthesisHref({
+              weekNumber: synthesisWeekNumber,
+              mode: "detail",
+              subjectId: card.subject.id,
+            })
 
             return (
-              <button
+              <a
                 key={card.subject.id}
-                type="button"
-                onClick={() => openSynthesisOverviewSubject(card.subject.id)}
+                href={href}
+                onClick={(event) => {
+                  if (!isPlainLeftClick(event)) return
+                  event.preventDefault()
+                  openSynthesisOverviewSubject(card.subject.id)
+                }}
                 className="relative flex min-h-[12rem] flex-col items-center justify-center overflow-hidden border-[2px] px-6 py-10 text-center transition-transform duration-150 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 md:min-h-[calc(50dvh-5.5rem)]"
                 style={{
                   backgroundColor: getSubjectVisualColor(card.subject),
@@ -4934,7 +5054,7 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                     Cargando
                   </span>
                 ) : null}
-              </button>
+              </a>
             )
           })}
         </div>
@@ -5047,17 +5167,39 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 className="hidden"
                 onChange={handleCronogramaFileChange}
               />
-              <Button
-                onClick={() => void handleCronogramaButtonClick()}
-                variant="outline"
-                className="h-11 shrink-0 rounded-full border-border bg-background/70 px-4 text-sm"
-                aria-label={cronogramaPdfName ? `Abrir cronograma ${cronogramaPdfName}` : "Seleccionar cronograma"}
-                title={cronogramaPdfName ? `Cronograma: ${cronogramaPdfName}` : "Seleccionar cronograma"}
-                disabled={isCronogramaLoading}
-              >
-                {isCronogramaLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarDays className="mr-2 h-4 w-4" />}
-                Cronograma
-              </Button>
+              {cronogramaPdfName ? (
+                <Button
+                  asChild
+                  variant="outline"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                  aria-label={`Abrir cronograma ${cronogramaPdfName}`}
+                  title={`Cronograma: ${cronogramaPdfName}`}
+                >
+                  <a
+                    href={buildCronogramaViewerHref(cronogramaPdfName)}
+                    onClick={(event) => {
+                      if (!isPlainLeftClick(event)) return
+                      event.preventDefault()
+                      void handleCronogramaButtonClick()
+                    }}
+                  >
+                    {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => void handleCronogramaButtonClick()}
+                  variant="outline"
+                  size="icon"
+                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                  aria-label="Seleccionar cronograma"
+                  title="Seleccionar cronograma"
+                  disabled={isCronogramaLoading}
+                >
+                  {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                </Button>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -5127,14 +5269,26 @@ export function SubjectWheel({ authSession }: { authSession: AuthSession }) {
                 </DropdownMenuContent>
               </DropdownMenu>
               <Button
-                onClick={openSynthesisModal}
+                asChild
                 variant="outline"
                 size="icon"
                 className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
                 aria-label="Sintesis"
                 title="Sintesis"
               >
-                <BarChart3 className="h-4 w-4" />
+                <a
+                  href={buildSynthesisHref({
+                    weekNumber: homeSelectedWeekNumber,
+                    mode: "overview",
+                  })}
+                  onClick={(event) => {
+                    if (!isPlainLeftClick(event)) return
+                    event.preventDefault()
+                    openSynthesisModal()
+                  }}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                </a>
               </Button>
               <button
                 onClick={handleReset}

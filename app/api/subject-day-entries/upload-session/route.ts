@@ -1,7 +1,7 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
-import { buildR2ObjectKey, createR2UploadSession } from "@/lib/r2"
+import { buildR2ObjectKey } from "@/lib/r2"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
@@ -119,29 +119,23 @@ export async function POST(request: Request) {
       weekdayIndex,
       fileName,
     })
-    const session = await createR2UploadSession({
-      objectKey,
-      mimeType,
-      metadata: {
-        "subject-id": subjectId,
-        "subject-name": subjectName.replace(/\n/g, " ").trim(),
-        "session-date": sessionDate,
-        "week-number": String(weekNumber),
-        "weekday-index": String(weekdayIndex),
-        ...(materialId !== null ? { "material-id": String(materialId) } : {}),
-        "original-file-name": fileName,
-      },
-    })
+    const metadata = {
+      "subject-id": subjectId,
+      "subject-name": subjectName.replace(/\n/g, " ").trim(),
+      "session-date": sessionDate,
+      "week-number": String(weekNumber),
+      "weekday-index": String(weekdayIndex),
+      ...(materialId !== null ? { "material-id": String(materialId) } : {}),
+      "original-file-name": fileName,
+    }
 
     return NextResponse.json({
-      uploadMode: session.uploadMode,
-      objectKey: session.objectKey,
-      uploadUrl: session.uploadUrl,
-      headers: session.headers,
-      metadata: session.metadata,
-      mimeType: session.mimeType,
-      fileName: session.fileName,
-      driveFileId: session.driveFileId,
+      uploadMode: "server",
+      objectKey,
+      metadata,
+      mimeType,
+      fileName,
+      driveFileId: objectKey,
     })
   } catch (error) {
     console.error("POST /api/subject-day-entries/upload-session error:", error)
