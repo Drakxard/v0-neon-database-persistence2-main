@@ -987,6 +987,17 @@
         return Math.min(deviceRatio, 1.5);
       }
 
+      async function applyWorkspaceRootHandle(handle) {
+        if (!handle) return;
+        workspaceRootHandle = handle;
+        try {
+          theoryHandle = await handle.getDirectoryHandle('teoria', { create: true });
+          practiceHandle = await handle.getDirectoryHandle('practica', { create: true });
+        } catch (error) {
+          console.warn('No se pudieron preparar subcarpetas del workspace local:', error);
+        }
+      }
+
       window.addEventListener('message', (e) => {
         if (!e.data) return;
         if (e.data.type === 'resetZoom') {
@@ -1064,6 +1075,8 @@
               : 'No se pudo subir el PDF fragmentado.';
             showToast(message, 'error');
           }
+        } else if (e.data.type === 'viewerWorkspaceRootHandle') {
+          void applyWorkspaceRootHandle(e.data.handle);
         }
       });
       try { window.parent.postMessage({ type: 'viewerReady' }, '*'); } catch {}
@@ -1446,6 +1459,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
 
       let theoryHandle = null;
       let practiceHandle = null;
+      let workspaceRootHandle = null;
 
       // Dibujo libre
       let drawMode = false;
@@ -4095,6 +4109,25 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       }
 
       async function ensureCategoryHandle(cat) {
+        if (workspaceRootHandle) {
+          try {
+            let rootPerm = await workspaceRootHandle.queryPermission({ mode: 'readwrite' });
+            if (rootPerm === 'prompt') {
+              rootPerm = await workspaceRootHandle.requestPermission({ mode: 'readwrite' });
+            }
+            if (rootPerm !== 'granted') throw new Error('Permiso denegado');
+
+            const handle = cat === 'teo'
+              ? await workspaceRootHandle.getDirectoryHandle('teoria', { create: true })
+              : await workspaceRootHandle.getDirectoryHandle('practica', { create: true });
+
+            if (cat === 'teo') theoryHandle = handle; else practiceHandle = handle;
+            return handle;
+          } catch (error) {
+            console.warn('No se pudo reutilizar la carpeta raíz del workspace:', error);
+          }
+        }
+
         if (!db) await initDB();
         await loadCategoryHandles(); // precarga si existen
         let handle = (cat === 'teo') ? theoryHandle : practiceHandle;
@@ -4147,6 +4180,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       }
 
       async function loadCategoryHandles() {
+        if (workspaceRootHandle) return;
         if (!db || !supportsFileSystemAccess()) return;
         try {
           await new Promise((resolve) => {

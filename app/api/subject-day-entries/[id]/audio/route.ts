@@ -1,13 +1,15 @@
 import { neon } from "@neondatabase/serverless"
 
 import { downloadDriveFile } from "@/lib/google-drive"
+import { findLocalEntryById } from "@/lib/local-r2-manifests"
 import { isRemoteFileNotFoundError, isRemoteProviderAuthError } from "@/lib/remote-file-errors"
 import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function isMissingSubjectDayEntriesTable(error: unknown) {
   return Boolean(
@@ -27,6 +29,28 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
       return Response.json({ error: "Invalid entry id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const entry = await findLocalEntryById(entryId)
+      if (!entry) {
+        return Response.json({ error: "Entry not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
+      if (forbidden) return forbidden
+
+      const file = isR2ObjectKey(entry.drive_file_id)
+        ? await downloadR2Object(entry.drive_file_id)
+        : await downloadDriveFile(entry.drive_file_id)
+
+      return new Response(file.buffer, {
+        headers: {
+          "Content-Type": file.mimeType || entry.drive_mime_type || "audio/webm",
+          "Content-Disposition": `inline; filename="${entry.drive_file_name}"`,
+          "Cache-Control": "private, max-age=0, must-revalidate",
+        },
+      })
     }
 
     const rows = await sql`

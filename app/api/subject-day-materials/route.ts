@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { listLocalSubjectDayMaterials } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
@@ -131,6 +133,17 @@ export async function GET(request: Request) {
           console.error("GET /api/subject-day-materials daily reconciliation failed:", error)
         }
       }
+    }
+
+    if (isLocalStorageMode()) {
+      const materials = await listLocalSubjectDayMaterials({
+        subjectId,
+        weekNumber,
+        sessionDate: scope === "week" ? undefined : sessionDate!,
+        materialType,
+      })
+
+      return NextResponse.json(materials)
     }
 
     const rows = await listSubjectDayMaterials({

@@ -1,4 +1,5 @@
 import { requireOkJson } from "@/lib/client/api"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import type { SubjectSynthesisSubjectPayload } from "@/lib/study-types"
 
 function buildSearchParams(subjectId: string, weekNumber: number) {
@@ -9,6 +10,41 @@ function buildSearchParams(subjectId: string, weekNumber: number) {
 }
 
 export async function fetchSubjectSynthesisMaterials(subjectId: string, weekNumber: number) {
+  if (isLocalStorageMode()) {
+    const [materialsResponse, entriesResponse] = await Promise.all([
+      fetch(`/api/subject-day-materials?${new URLSearchParams({ subjectId, weekNumber: String(weekNumber), scope: "week" })}`, {
+        cache: "no-store",
+      }),
+      fetch(`/api/subject-day-entries?${new URLSearchParams({ subjectId, weekNumber: String(weekNumber) })}`, {
+        cache: "no-store",
+      }),
+    ])
+
+    const materials = await requireOkJson<any[]>(materialsResponse, "No se pudo cargar la sintesis por archivo.")
+    const entries = await requireOkJson<any[]>(entriesResponse, "No se pudo cargar la sintesis por archivo.")
+    const storageKey = `local-synthesis:${subjectId}:${weekNumber}`
+    const progress =
+      typeof window !== "undefined"
+        ? JSON.parse(window.localStorage.getItem(storageKey) || "[]")
+        : []
+
+    return {
+      subjectId,
+      weekNumber,
+      materials,
+      entries,
+      legacySummary: {
+        subjectId,
+        weekNumber,
+        exerciseSolvedCount: 0,
+        exerciseTotalCount: 0,
+        exerciseSkippedText: null,
+        updatedAt: null,
+      },
+      materialProgress: Array.isArray(progress) ? progress : [],
+    } satisfies SubjectSynthesisSubjectPayload
+  }
+
   const response = await fetch(`/api/subject-synthesis-materials?${buildSearchParams(subjectId, weekNumber)}`, {
     cache: "no-store",
   })
@@ -26,6 +62,13 @@ export async function saveSubjectSynthesisMaterials(input: {
     exerciseTotalCount: number
   }>
 }) {
+  if (isLocalStorageMode()) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`local-synthesis:${input.subjectId}:${input.weekNumber}`, JSON.stringify(input.items))
+    }
+    return fetchSubjectSynthesisMaterials(input.subjectId, input.weekNumber)
+  }
+
   const response = await fetch("/api/subject-synthesis-materials", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

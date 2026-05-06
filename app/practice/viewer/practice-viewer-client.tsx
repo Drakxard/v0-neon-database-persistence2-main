@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
@@ -196,6 +197,7 @@ export function PracticeViewerClient({
   const [previewPlayingRole, setPreviewPlayingRole] = useState<PairRole | null>(null)
   const [draggedRole, setDraggedRole] = useState<PairRole | null>(null)
   const [uploadFeedback, setUploadFeedback] = useState("")
+  const { rootHandle } = useLocalWorkspace()
 
   const viewerSrc = useMemo(() => buildViewerSrc({ material, draftContext }), [draftContext, material])
   const activeContext = material ?? draftContext
@@ -577,6 +579,9 @@ export function PracticeViewerClient({
 
       if (event.data.type === "viewerReady") {
         syncPositionsToViewer(hasMaterial ? positions : [])
+        if (rootHandle) {
+          postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
+        }
         return
       }
 
@@ -686,6 +691,7 @@ export function PracticeViewerClient({
       startRecording,
       stopPreviewPlayback,
       syncPositionsToViewer,
+      rootHandle,
       uploadPracticeFragment,
     ]
   )
@@ -753,7 +759,12 @@ export function PracticeViewerClient({
         className="h-screen w-full border-0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
-        onLoad={() => syncPositionsToViewer(hasMaterial ? positions : [])}
+        onLoad={() => {
+          syncPositionsToViewer(hasMaterial ? positions : [])
+          if (rootHandle) {
+            postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
+          }
+        }}
       />
 
       <audio ref={audioRef} hidden preload="none" />

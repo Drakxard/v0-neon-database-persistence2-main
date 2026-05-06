@@ -10,11 +10,13 @@ import {
   normalizeUploadedPdfFileName,
   type UserCronogramaRow,
 } from "@/lib/cronograma"
+import { readCronogramaManifest, saveCronogramaManifest } from "@/lib/local-r2-manifests"
 import { deleteR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -60,6 +62,32 @@ export async function POST(request: Request) {
       normalizeUploadedPdfFileName(remoteFile.name)
     if (!fileName) {
       return badRequest("Missing fileName for uploaded cronograma")
+    }
+
+    if (isLocalStorageMode()) {
+      const previous = await readCronogramaManifest()
+      const manifest = await saveCronogramaManifest({
+        version: 1,
+        fileName,
+        driveFileId,
+        driveMimeType: remoteFile.mimeType,
+        updatedAt: new Date().toISOString(),
+      })
+
+      if (previous?.driveFileId && previous.driveFileId !== driveFileId) {
+        try {
+          await deleteR2Object(previous.driveFileId)
+        } catch (error) {
+          console.warn("POST /api/cronograma/complete local cleanup warning:", error)
+        }
+      }
+
+      return NextResponse.json({
+        fileName: manifest.fileName,
+        driveFileId: manifest.driveFileId,
+        driveMimeType: manifest.driveMimeType,
+        updatedAt: manifest.updatedAt,
+      })
     }
 
     const previousRows = await sql`

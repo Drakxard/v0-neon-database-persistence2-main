@@ -1,9 +1,11 @@
 import { neon } from '@neondatabase/serverless'
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { readLocalState, updateLocalState } from "@/lib/local-state-store"
 import { normalizeAllowedSubjectIds } from "@/lib/subjects"
 import { parseDateKey } from "@/lib/server/request-parsing"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export async function GET(request: Request) {
   try {
@@ -15,6 +17,11 @@ export async function GET(request: Request) {
 
     if (!date) {
       return Response.json({ error: 'Missing date parameter' }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const state = await readLocalState()
+      return Response.json(state.dailySessions[String(date)] ?? null)
     }
 
     const result = await sql`
@@ -85,6 +92,23 @@ export async function POST(request: Request) {
     const normalizedCompletedSubjects = Object.fromEntries(
       Object.entries(completedSubjects || {}).filter(([subjectId]) => !ensureSubjectAccess(auth.session!, subjectId))
     )
+
+    if (isLocalStorageMode()) {
+      const result = await updateLocalState((state) => {
+        const key = String(date)
+        const current = state.dailySessions[key]
+        const next = {
+          id: current?.id ?? Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
+          date: key,
+          active_subject_ids: normalizedActiveSubjectIds,
+          completed_subjects: normalizedCompletedSubjects,
+          show_all_subjects: Boolean(showAllSubjects),
+        }
+        state.dailySessions[key] = next
+        return next
+      })
+      return Response.json(result)
+    }
 
     // Check if session exists
     const existing = await sql`

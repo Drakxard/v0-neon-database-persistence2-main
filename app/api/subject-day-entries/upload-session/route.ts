@@ -2,12 +2,14 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { buildR2ObjectKey } from "@/lib/r2"
+import { listLocalSubjectDayEntries } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function isMissingSubjectDayEntriesTable(error: unknown) {
   return Boolean(
@@ -104,12 +106,21 @@ export async function POST(request: Request) {
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
 
-    const nextOrderIndex = await getNextOrderIndex({
-      subjectId,
-      weekNumber,
-      sessionDate,
-      materialId,
-    })
+    const nextOrderIndex = isLocalStorageMode()
+      ? (
+          await listLocalSubjectDayEntries({
+            subjectId,
+            weekNumber,
+            sessionDate,
+            materialId,
+          })
+        ).length
+      : await getNextOrderIndex({
+          subjectId,
+          weekNumber,
+          sessionDate,
+          materialId,
+        })
     const safeSubjectName = subjectName.replace(/\s+/g, "-").toLowerCase()
     const fileName = `${safeSubjectName}-${sessionDate}-${nextOrderIndex + 1}.${getFileExtension(mimeType)}`
 

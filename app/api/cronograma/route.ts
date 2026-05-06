@@ -8,17 +8,23 @@ import {
   normalizeCronogramaRecord,
   type UserCronogramaRow,
 } from "@/lib/cronograma"
+import { readCronogramaManifest } from "@/lib/local-r2-manifests"
 import { isRemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { getR2ObjectMetadata } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export async function GET() {
   try {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
+
+    if (isLocalStorageMode()) {
+      return NextResponse.json(await readCronogramaManifest())
+    }
 
     const email = normalizeCronogramaEmail(auth.session!.email)
     const rows = await sql`

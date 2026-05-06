@@ -4,7 +4,7 @@ import { neon } from "@neondatabase/serverless"
 import { del, put } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type SaveQuestionExampleResult =
   | {

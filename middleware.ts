@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
 const APP_AUTH_COOKIE_NAME = "app_auth_session"
+const LOCAL_STORAGE_MODE = (process.env.APP_STORAGE_MODE || "database").trim().toLowerCase() === "local"
 
 function decodeBase64Url(input: string) {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/")
@@ -87,6 +88,10 @@ function isPublicPath(pathname: string) {
 }
 
 export async function middleware(request: NextRequest) {
+  if (LOCAL_STORAGE_MODE) {
+    return NextResponse.next()
+  }
+
   const { pathname, search } = request.nextUrl
   if (isPublicPath(pathname)) {
     if (pathname === "/login") {

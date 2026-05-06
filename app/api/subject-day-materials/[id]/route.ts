@@ -2,11 +2,13 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { deleteLocalMaterial, findLocalMaterialById, upsertLocalMaterial } from "@/lib/local-r2-manifests"
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type SubjectDayMaterialRow = {
   id: number
@@ -59,6 +61,30 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const materialId = Number.parseInt(id, 10)
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const material = await findLocalMaterialById(materialId)
+      if (!material) {
+        return NextResponse.json({ error: "Material not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+      if (forbidden) return forbidden
+
+      const body = await request.json()
+      if (typeof body.isCheckupDone !== "boolean") {
+        return NextResponse.json({ error: "Invalid isCheckupDone value" }, { status: 400 })
+      }
+
+      const updatedMaterial = {
+        ...material,
+        is_checkup_done: body.isCheckupDone,
+        updated_at: new Date().toISOString(),
+      }
+
+      await upsertLocalMaterial(updatedMaterial)
+      return NextResponse.json(updatedMaterial)
     }
 
     const scopeRows = await sql`
@@ -114,6 +140,27 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     const materialId = Number.parseInt(id, 10)
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const material = await findLocalMaterialById(materialId)
+      if (!material) {
+        return NextResponse.json({ error: "Material not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+      if (forbidden) return forbidden
+
+      await deleteLocalMaterial(materialId)
+
+      if (material.drive_file_id) {
+        await deleteSubjectDayMaterialRemoteFile({
+          materialId,
+          driveFileId: material.drive_file_id,
+        })
+      }
+
+      return NextResponse.json({ success: true, id: material.id })
     }
 
     const materials = await sql`

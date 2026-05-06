@@ -16,7 +16,7 @@ import { deleteR2Object, uploadR2Object } from "@/lib/r2"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })

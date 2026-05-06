@@ -3,9 +3,17 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { APP_AUTH_COOKIE_NAME, getAppAuthConfig, verifySessionToken, type AppSessionTokenPayload } from "@/lib/app-auth"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS, normalizeAllowedSubjectIds, getSubjectIdFromIndex } from "@/lib/subjects"
 
 const sql = neon(process.env.DATABASE_URL!)
+
+const LOCAL_SESSION: AuthSession = {
+  email: "local@app.local",
+  isAdmin: true,
+  allowedSubjectIds: SUBJECT_IDS,
+  expiresAtMs: Number.MAX_SAFE_INTEGER,
+}
 
 export type AllowedAccountRow = {
   id: number
@@ -34,6 +42,10 @@ export function getAdminSession() {
 }
 
 export async function getCurrentSessionForEmail(email: string): Promise<AuthSession | null> {
+  if (isLocalStorageMode()) {
+    return LOCAL_SESSION
+  }
+
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) return null
 
@@ -58,6 +70,10 @@ export async function getCurrentSessionForEmail(email: string): Promise<AuthSess
 }
 
 export async function getAllowedAccountByEmail(email: string) {
+  if (isLocalStorageMode()) {
+    return null
+  }
+
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) return null
 
@@ -78,6 +94,10 @@ export async function getAllowedAccountByEmail(email: string) {
 }
 
 export async function listAllowedAccounts() {
+  if (isLocalStorageMode()) {
+    return []
+  }
+
   const rows = await sql`
     SELECT id, email, allowed_subject_ids, created_at, updated_at
     FROM allowed_google_accounts
@@ -92,6 +112,10 @@ export async function listAllowedAccounts() {
 }
 
 export async function createAllowedAccount(email: string, allowedSubjectIds: string[]) {
+  if (isLocalStorageMode()) {
+    throw new Error("Los accesos administrados no se usan en modo local.")
+  }
+
   const normalizedEmail = email.trim().toLowerCase()
   const normalizedSubjects = normalizeAllowedSubjectIds(allowedSubjectIds)
 
@@ -109,6 +133,10 @@ export async function createAllowedAccount(email: string, allowedSubjectIds: str
 }
 
 export async function deleteAllowedAccountById(id: number) {
+  if (isLocalStorageMode()) {
+    return null
+  }
+
   const rows = await sql`
     DELETE FROM allowed_google_accounts
     WHERE id = ${id}
@@ -119,6 +147,10 @@ export async function deleteAllowedAccountById(id: number) {
 }
 
 export async function getRequestAuthSession(): Promise<AuthSession | null> {
+  if (isLocalStorageMode()) {
+    return LOCAL_SESSION
+  }
+
   const cookieStore = await cookies()
   const token = cookieStore.get(APP_AUTH_COOKIE_NAME)?.value
   if (!token) return null
@@ -137,6 +169,10 @@ export async function getRequestAuthSession(): Promise<AuthSession | null> {
 }
 
 export async function requireAuthSession() {
+  if (isLocalStorageMode()) {
+    return { session: LOCAL_SESSION, response: null }
+  }
+
   const session = await getRequestAuthSession()
   if (!session) {
     return { session: null, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) }
@@ -146,6 +182,10 @@ export async function requireAuthSession() {
 }
 
 export async function requireAdminSession() {
+  if (isLocalStorageMode()) {
+    return { session: LOCAL_SESSION, response: null }
+  }
+
   const auth = await requireAuthSession()
   if (auth.response) return auth
   if (!auth.session?.isAdmin) {

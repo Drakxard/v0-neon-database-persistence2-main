@@ -3,13 +3,15 @@ import { NextResponse } from "next/server"
 
 import { transcribeAudioWithGemini } from "@/lib/gemini"
 import { deleteDriveFile, downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
+import { readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
 import { deleteR2Object, downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type EntryRow = {
   id: number
@@ -203,6 +205,60 @@ export async function POST(request: Request) {
       sessionDate,
       materialId,
     })
+
+    if (isLocalStorageMode()) {
+      const manifest = await readEntryManifest(subjectId, weekNumber)
+      const pairRows = pairId
+        ? manifest.entries.filter((entry) => entry.pair_id === pairId)
+        : []
+      const existingRoleRow = pairId && pairRole ? pairRows.find((entry) => entry.pair_role === pairRole) ?? null : null
+
+      if (pairId && existingRoleRow) {
+        return badRequest("Audio pair role already exists")
+      }
+
+      let transcriptText = uploadedFileName || "Audio"
+      try {
+        const downloadedFile = isR2ObjectKey(driveFile.id)
+          ? await downloadR2Object(driveFile.id)
+          : await downloadDriveFile(driveFile.id)
+        const transcription = await transcribeAudioWithGemini(downloadedFile.buffer, downloadedFile.mimeType || driveFile.mimeType)
+        if (transcription?.trim()) {
+          transcriptText = transcription.trim()
+        }
+      } catch (error) {
+        console.warn("Local audio transcription fallback warning:", error)
+      }
+
+      const now = new Date().toISOString()
+      const entry = {
+        id: Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
+        subject_day_material_id: materialId,
+        subject_id: subjectId,
+        week_number: weekNumber,
+        session_date: sessionDate,
+        weekday_index: weekdayIndex,
+        order_index: nextOrderIndex,
+        transcript_text: transcriptText,
+        drive_file_id: driveFile.id,
+        drive_file_name: uploadedFileName || driveFile.name,
+        drive_mime_type: driveFile.mimeType,
+        drive_web_view_link: "",
+        answer_text: null,
+        custom_title: null,
+        practice_state: null,
+        pair_id: pairId,
+        pair_role: pairRole,
+        is_featured: false,
+        created_at: now,
+        updated_at: now,
+        external_links: [],
+        audio_position: null,
+      }
+
+      await saveEntryManifest(subjectId, weekNumber, [...manifest.entries, entry])
+      return NextResponse.json(formatEntry(entry as EntryRow))
+    }
 
     if (pairId && pairRole) {
       let pairRows: Array<{

@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { LocalWorkspaceProvider } from '@/components/local-workspace-provider'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
+import { isLocalStorageMode } from '@/lib/storage-mode'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
@@ -28,19 +30,23 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const localMode = isLocalStorageMode()
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="bg-background font-sans antialiased">
-        <ThemeProvider
-          attribute="data-theme"
-          defaultTheme="daylight"
-          enableSystem={false}
-          disableTransitionOnChange
-        >
-          {children}
-          <Toaster />
-          <Analytics />
-        </ThemeProvider>
+        <LocalWorkspaceProvider enabled={localMode}>
+          <ThemeProvider
+            attribute="data-theme"
+            defaultTheme="daylight"
+            enableSystem={false}
+            disableTransitionOnChange
+          >
+            {children}
+            <Toaster />
+            <Analytics />
+          </ThemeProvider>
+        </LocalWorkspaceProvider>
       </body>
     </html>
   )

@@ -1,7 +1,9 @@
 import { neon } from '@neondatabase/serverless'
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { readLocalState, updateLocalState } from "@/lib/local-state-store"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export async function GET(request: Request) {
   try {
@@ -18,6 +20,11 @@ export async function GET(request: Request) {
 
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
+
+    if (isLocalStorageMode()) {
+      const state = await readLocalState()
+      return Response.json(state.subjectCompletions[`${date}:${subjectId}`] ?? null)
+    }
 
     const result = await sql`
       SELECT id, date, subject_id, panorama, created_at, updated_at
@@ -50,6 +57,25 @@ export async function POST(request: Request) {
 
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
+
+    if (isLocalStorageMode()) {
+      const result = await updateLocalState((state) => {
+        const key = `${date}:${subjectId}`
+        const current = state.subjectCompletions[key]
+        const now = new Date().toISOString()
+        const next = {
+          id: current?.id ?? Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
+          date,
+          subject_id: subjectId,
+          panorama: panorama || "",
+          created_at: current?.created_at ?? now,
+          updated_at: now,
+        }
+        state.subjectCompletions[key] = next
+        return next
+      })
+      return Response.json(result)
+    }
 
     // Check if completion exists
     const existing = await sql`
@@ -99,6 +125,13 @@ export async function DELETE(request: Request) {
 
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
+
+    if (isLocalStorageMode()) {
+      await updateLocalState((state) => {
+        delete state.subjectCompletions[`${date}:${subjectId}`]
+      })
+      return Response.json({ success: true })
+    }
 
     await sql`
       DELETE FROM subject_completions

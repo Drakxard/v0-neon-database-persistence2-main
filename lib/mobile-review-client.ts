@@ -1,4 +1,5 @@
 import { requireOkJson } from "@/lib/client/api"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import type { VectorOverview } from "@/lib/study-types"
 
 export async function fetchMobileReviewOverview(params: {
@@ -6,6 +7,13 @@ export async function fetchMobileReviewOverview(params: {
   date: string
   includeInactive?: boolean
 }) {
+  if (isLocalStorageMode()) {
+    return {
+      weekNumber: params.weekNumber,
+      vectors: [] as VectorOverview[],
+    }
+  }
+
   const searchParams = new URLSearchParams({
     weekNumber: String(params.weekNumber),
     date: params.date,

@@ -2,12 +2,13 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { buildR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type MaterialType = "theory" | "practice"
 
@@ -66,12 +67,20 @@ export async function POST(request: Request) {
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
 
-    const [orderRow] = await sql`
-      SELECT COALESCE(MAX(order_index), -1) AS max_order
-      FROM subject_day_materials
-      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
-    `
-    const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
+    const nextOrderIndex = isLocalStorageMode()
+      ? 1
+      : Math.max(
+          1,
+          Number(
+            (
+              await sql!`
+                SELECT COALESCE(MAX(order_index), -1) AS max_order
+                FROM subject_day_materials
+                WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
+              `
+            )[0]?.max_order ?? 0
+          ) + 1
+        )
     const safeFileName = rawFileName || `${materialType}-${sessionDate}-${nextOrderIndex + 1}.pdf`
     const finalFileName = safeFileName.toLowerCase().endsWith(".pdf") ? safeFileName : `${safeFileName}.pdf`
 

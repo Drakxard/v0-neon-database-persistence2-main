@@ -3,7 +3,7 @@ import { del } from "@vercel/blob"
 import { NextResponse } from "next/server"
 import { ensureQuestionSubjectAccess, requireAuthSession } from "@/lib/authz"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 async function deleteStoredExampleImage(imageUrl: string | null | undefined) {
   if (!imageUrl) return

@@ -36,6 +36,7 @@ import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import type {
   GroqModelOption,
   PendingSubjectDayMaterial,
@@ -71,6 +72,8 @@ const NIGHT_SUBJECT_COLORS: Record<string, string> = {
   logica: "#3c6953",
   probabilidad: "#69598b",
 }
+
+const LOCAL_STORAGE_MODE = isLocalStorageMode()
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -5386,7 +5389,7 @@ export function SubjectWheel({
         <p>Las materias se reiniciarán mañana</p>
       </footer>
 
-      {session.isAdmin ? (
+      {session.isAdmin && !LOCAL_STORAGE_MODE ? (
         <AdminAccessModal open={isAdminModalOpen} onOpenChange={setIsAdminModalOpen} subjectOptions={SUBJECTS} />
       ) : null}
 
@@ -7513,7 +7516,7 @@ export function SubjectWheel({
                 ) : (
                   <div />
                 )}
-                {session.isAdmin ? (
+                {session.isAdmin && !LOCAL_STORAGE_MODE ? (
                   <Button
                     onClick={() => setIsAdminModalOpen(true)}
                     variant="outline"

@@ -2,20 +2,24 @@ import { neon, Pool, type PoolClient } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { deleteDriveFile } from "@/lib/google-drive"
+import { deleteLocalEntry, findLocalEntryById, findLocalMaterialById, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
 import { deleteR2Object, isR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 const globalForPool = globalThis as typeof globalThis & { __subjectDayEntriesPool?: Pool }
 const pool =
   globalForPool.__subjectDayEntriesPool ??
-  new Pool({
-    connectionString: process.env.DATABASE_URL!,
-  })
+  (process.env.DATABASE_URL
+    ? new Pool({
+        connectionString: process.env.DATABASE_URL,
+      })
+    : null)
 
-if (process.env.NODE_ENV !== "production") {
+if (process.env.NODE_ENV !== "production" && pool) {
   globalForPool.__subjectDayEntriesPool = pool
 }
 
@@ -360,6 +364,96 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
     }
 
+    if (isLocalStorageMode()) {
+      const entry = await findLocalEntryById(entryId)
+      if (!entry) {
+        return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
+      if (forbidden) return forbidden
+
+      const body = await request.json()
+      const answerText = typeof body.answerText === "string" ? body.answerText.trim() : undefined
+      const transcriptText = typeof body.transcriptText === "string" ? body.transcriptText.trim() : undefined
+      const customTitle = typeof body.customTitle === "string" ? body.customTitle.trim() : undefined
+      const practiceState =
+        body.practiceState === "erre" ? "erre" : body.practiceState === null ? null : undefined
+      const isFeatured = typeof body.isFeatured === "boolean" ? body.isFeatured : undefined
+      const pairRole = body.pairRole === "question" || body.pairRole === "answer" ? body.pairRole : undefined
+      const targetMaterialId =
+        typeof body.targetMaterialId === "number" && Number.isInteger(body.targetMaterialId)
+          ? body.targetMaterialId
+          : undefined
+
+      const now = new Date().toISOString()
+      let nextEntry = {
+        ...entry,
+        answer_text: answerText !== undefined ? answerText || null : entry.answer_text,
+        transcript_text: transcriptText !== undefined ? transcriptText : entry.transcript_text,
+        custom_title: customTitle !== undefined ? customTitle || null : entry.custom_title,
+        practice_state: practiceState !== undefined ? practiceState : entry.practice_state,
+        is_featured: isFeatured !== undefined ? isFeatured : entry.is_featured,
+        pair_role: pairRole !== undefined ? pairRole : entry.pair_role,
+        updated_at: now,
+      }
+
+      if (targetMaterialId !== undefined) {
+        const targetMaterial = await findLocalMaterialById(targetMaterialId)
+        if (!targetMaterial) {
+          return NextResponse.json({ error: "No se encontro el PDF de destino." }, { status: 404 })
+        }
+
+        nextEntry = {
+          ...nextEntry,
+          subject_day_material_id: targetMaterial.id,
+          subject_id: targetMaterial.subject_id,
+          week_number: targetMaterial.week_number,
+          session_date: targetMaterial.session_date,
+          weekday_index: targetMaterial.weekday_index,
+        }
+      }
+
+      const sourceManifest = await readEntryManifest(entry.subject_id, entry.week_number)
+      let updatedSourceEntries = sourceManifest.entries.map((candidate) => {
+        if (candidate.id === nextEntry.id) return nextEntry
+        if (pairRole && nextEntry.pair_id && candidate.pair_id === nextEntry.pair_id) {
+          return {
+            ...candidate,
+            pair_role: pairRole === "question" ? "answer" : "question",
+            updated_at: now,
+          }
+        }
+        return candidate
+      })
+
+      if (isFeatured === true) {
+        updatedSourceEntries = updatedSourceEntries.map((candidate) => ({
+          ...candidate,
+          is_featured:
+            candidate.id === nextEntry.id ||
+            (targetMaterialId !== undefined &&
+              candidate.id === nextEntry.id &&
+              candidate.subject_id === nextEntry.subject_id &&
+              candidate.week_number === nextEntry.week_number),
+        }))
+      }
+
+      if (targetMaterialId !== undefined && (nextEntry.subject_id !== entry.subject_id || nextEntry.week_number !== entry.week_number)) {
+        await saveEntryManifest(
+          entry.subject_id,
+          entry.week_number,
+          updatedSourceEntries.filter((candidate) => candidate.id !== nextEntry.id)
+        )
+        const targetManifest = await readEntryManifest(nextEntry.subject_id, nextEntry.week_number)
+        await saveEntryManifest(nextEntry.subject_id, nextEntry.week_number, [...targetManifest.entries, nextEntry])
+      } else {
+        await saveEntryManifest(entry.subject_id, entry.week_number, updatedSourceEntries)
+      }
+
+      return NextResponse.json(buildEntryResponse(nextEntry))
+    }
+
     const scopeRows = await sql`
       SELECT subject_id
       FROM subject_day_entries
@@ -633,6 +727,45 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     const entryId = Number.parseInt(id, 10)
     if (!Number.isInteger(entryId)) {
       return NextResponse.json({ error: "Invalid entry id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const entry = await findLocalEntryById(entryId)
+      if (!entry) {
+        return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
+      if (forbidden) return forbidden
+
+      const deletedIds = [entry.id]
+      if (entry.pair_id) {
+        const relatedEntries = (await readEntryManifest(entry.subject_id, entry.week_number)).entries.filter(
+          (candidate) => candidate.pair_id === entry.pair_id
+        )
+        for (const pairEntry of relatedEntries) {
+          if (pairEntry.drive_file_id) {
+            if (isR2ObjectKey(pairEntry.drive_file_id)) {
+              await deleteR2Object(pairEntry.drive_file_id)
+            } else {
+              await deleteDriveFile(pairEntry.drive_file_id)
+            }
+          }
+          await deleteLocalEntry(pairEntry.id)
+          if (!deletedIds.includes(pairEntry.id)) deletedIds.push(pairEntry.id)
+        }
+      } else {
+        if (entry.drive_file_id) {
+          if (isR2ObjectKey(entry.drive_file_id)) {
+            await deleteR2Object(entry.drive_file_id)
+          } else {
+            await deleteDriveFile(entry.drive_file_id)
+          }
+        }
+        await deleteLocalEntry(entryId)
+      }
+
+      return NextResponse.json({ success: true, id: entryId, ids: deletedIds })
     }
 
     let entries: Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>

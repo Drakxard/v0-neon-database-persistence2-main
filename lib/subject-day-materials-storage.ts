@@ -4,7 +4,7 @@ import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
 import { isRemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export type SubjectDayMaterialStorageRecord = {
   id: number
@@ -15,6 +15,7 @@ type MaterialRemoteMetadata = Awaited<ReturnType<typeof getR2ObjectMetadata>> | 
 type MaterialRemoteFile = Awaited<ReturnType<typeof downloadR2Object>> | Awaited<ReturnType<typeof downloadDriveFile>>
 
 async function cleanupMissingSubjectDayMaterial(materialId: number) {
+  if (!sql) return
   await sql`
     DELETE FROM subject_day_materials
     WHERE id = ${materialId}

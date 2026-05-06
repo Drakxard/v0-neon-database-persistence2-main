@@ -1,12 +1,14 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
+import { findLocalMaterialById, listLocalSubjectDayEntries, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type EntryRow = {
   id: number
@@ -288,6 +290,22 @@ export async function GET(request: Request) {
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
 
+    if (isLocalStorageMode()) {
+      const entries = await listLocalSubjectDayEntries({
+        subjectId,
+        weekNumber: Number.isNaN(weekNumber) ? undefined : weekNumber,
+        sessionDate: sessionDate && parsedDate ? sessionDate : undefined,
+        materialId,
+      })
+
+      return NextResponse.json(
+        entries.map((entry) => ({
+          ...entry,
+          display_title: getDisplayTitle(entry),
+        }))
+      )
+    }
+
     let rows: EntryRow[]
     if (sessionDate && parsedDate) {
       if (Number.isNaN(weekNumber)) {
@@ -349,6 +367,53 @@ export async function POST(request: Request) {
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex =
       Number.isNaN(requestedWeekdayIndex) ? getWeekdayIndexFromDateKey(sessionDate) : requestedWeekdayIndex
+
+    if (isLocalStorageMode()) {
+      const targetMaterial = materialId == null ? null : await findLocalMaterialById(materialId)
+      const resolvedSubjectId = targetMaterial?.subject_id ?? subjectId
+      const resolvedWeekNumber = targetMaterial?.week_number ?? weekNumber
+      const resolvedSessionDate = targetMaterial?.session_date ?? sessionDate
+      const resolvedWeekdayIndex = targetMaterial?.weekday_index ?? weekdayIndex
+      const resolvedMaterialId = targetMaterial?.id ?? null
+      const manifest = await readEntryManifest(resolvedSubjectId, resolvedWeekNumber)
+      const siblingEntries = manifest.entries.filter(
+        (entry) =>
+          entry.session_date === resolvedSessionDate &&
+          (entry.subject_day_material_id ?? null) === resolvedMaterialId
+      )
+      const nextOrderIndex = siblingEntries.length
+      const now = new Date().toISOString()
+      const createdEntry = {
+        id: Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
+        subject_day_material_id: resolvedMaterialId,
+        subject_id: resolvedSubjectId,
+        week_number: resolvedWeekNumber,
+        session_date: resolvedSessionDate,
+        weekday_index: resolvedWeekdayIndex,
+        order_index: nextOrderIndex,
+        transcript_text: transcriptText,
+        drive_file_id: "",
+        drive_file_name: "",
+        drive_mime_type: "text/plain",
+        drive_web_view_link: "",
+        answer_text: answerText || null,
+        custom_title: customTitle || null,
+        practice_state: null,
+        pair_id: null,
+        pair_role: null,
+        is_featured: false,
+        created_at: now,
+        updated_at: now,
+        external_links: [],
+        audio_position: null,
+      }
+
+      await saveEntryManifest(resolvedSubjectId, resolvedWeekNumber, [...manifest.entries, createdEntry])
+      return NextResponse.json({
+        ...createdEntry,
+        display_title: getDisplayTitle(createdEntry),
+      })
+    }
 
     const resolvedMaterialId = await resolveMaterialId({
       subjectId,

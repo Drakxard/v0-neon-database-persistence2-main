@@ -2,6 +2,8 @@ import Link from "next/link"
 import { neon } from "@neondatabase/serverless"
 
 import { getRequestAuthSession, canAccessSubject } from "@/lib/authz"
+import { findLocalMaterialById } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { parseDateKey } from "@/lib/subject-utils"
 import { getSubjectById } from "@/lib/subjects"
 import { PracticeViewerShell } from "./practice-viewer-shell"
@@ -9,7 +11,7 @@ import { PracticeViewerShell } from "./practice-viewer-shell"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 const SUBJECT_NAMES: Record<string, string> = {
   algebra: "Algebra 2",
@@ -60,6 +62,22 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
 }
 
 async function getMaterial(materialId: number) {
+  if (isLocalStorageMode()) {
+    const material = await findLocalMaterialById(materialId)
+    if (!material) return undefined
+
+    return {
+      id: material.id,
+      subject_id: material.subject_id,
+      week_number: material.week_number,
+      session_date: material.session_date,
+      weekday_index: material.weekday_index,
+      file_name: material.file_name,
+      drive_mime_type: material.drive_mime_type,
+    }
+  }
+
+  if (!sql) return undefined
   const rows = await sql`
     SELECT id, subject_id, week_number, session_date, weekday_index, file_name, drive_mime_type
     FROM subject_day_materials

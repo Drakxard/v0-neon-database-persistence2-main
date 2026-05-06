@@ -1,6 +1,7 @@
 import { MobileReviewClient } from "@/app/mobile/review/mobile-review-client"
 import { buildMobileReviewSignedQuery, verifyMobileReviewSignature } from "@/lib/mobile-review-auth"
 import { getMobileReviewStatus, isMissingMobileReviewDependency, resolveMobileReviewPair, withSignedTaskAudioUrls } from "@/lib/mobile-review"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const dynamic = "force-dynamic"
 
@@ -9,6 +10,18 @@ export default async function MobileReviewPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
+  if (isLocalStorageMode()) {
+    return (
+      <MobileReviewClient
+        deviceId=""
+        signature=""
+        initialPayload={null}
+        initialError="Mobile review todavia no esta habilitado en modo local."
+        requiresAccess={false}
+      />
+    )
+  }
+
   const params = await searchParams
   const deviceId = typeof params.device === "string" ? params.device.trim() : ""
   const signature = typeof params.sig === "string" ? params.sig.trim() : ""

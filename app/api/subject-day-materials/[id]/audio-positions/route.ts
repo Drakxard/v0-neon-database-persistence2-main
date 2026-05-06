@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server"
 import { neon } from "@neondatabase/serverless"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { findLocalMaterialById, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type RouteContext = {
   params: Promise<{
@@ -72,6 +74,34 @@ export async function GET(_request: Request, context: RouteContext) {
 
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const material = await findLocalMaterialById(materialId)
+      if (!material) {
+        return NextResponse.json({ error: "Material not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+      if (forbidden) return forbidden
+
+      const manifest = await readEntryManifest(material.subject_id, material.week_number)
+      const positions = manifest.entries
+        .filter((entry) => entry.subject_day_material_id === materialId && entry.audio_position)
+        .map((entry) => ({
+          entryId: entry.id,
+          materialId,
+          pageNum: entry.audio_position!.page_num,
+          xp: entry.audio_position!.xp,
+          yp: entry.audio_position!.yp,
+          transcriptText: entry.transcript_text,
+          title: entry.custom_title?.trim() || entry.drive_file_name || "Audio",
+          audioUrl: `/api/subject-day-entries/${entry.id}/audio`,
+          mimeType: entry.drive_mime_type || "audio/webm",
+          pairId: entry.pair_id,
+          pairRole: entry.pair_role,
+        }))
+      return NextResponse.json(positions)
     }
 
     const scopeRows = await sql`
@@ -156,6 +186,65 @@ export async function POST(request: Request, context: RouteContext) {
 
     if (!Number.isInteger(materialId)) {
       return NextResponse.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const material = await findLocalMaterialById(materialId)
+      if (!material) {
+        return NextResponse.json({ error: "Material not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+      if (forbidden) return forbidden
+
+      const body = await request.json().catch(() => null)
+      const entryId = Number.parseInt(String(body?.entryId ?? ""), 10)
+      const pageNum = Number.parseInt(String(body?.pageNum ?? ""), 10)
+      const xp = Number(body?.xp)
+      const yp = Number(body?.yp)
+
+      if (!Number.isInteger(entryId) || !Number.isInteger(pageNum) || pageNum < 1) {
+        return NextResponse.json({ error: "Invalid entry position payload" }, { status: 400 })
+      }
+
+      if (!Number.isFinite(xp) || !Number.isFinite(yp) || xp < 0 || xp > 1 || yp < 0 || yp > 1) {
+        return NextResponse.json({ error: "Invalid entry position coordinates" }, { status: 400 })
+      }
+
+      const manifest = await readEntryManifest(material.subject_id, material.week_number)
+      const entry = manifest.entries.find((candidate) => candidate.id === entryId && candidate.subject_day_material_id === materialId)
+      if (!entry) {
+        return NextResponse.json({ error: "Entry does not belong to this material" }, { status: 400 })
+      }
+
+      const updatedEntry = {
+        ...entry,
+        updated_at: new Date().toISOString(),
+        audio_position: {
+          page_num: pageNum,
+          xp,
+          yp,
+        },
+      }
+      await saveEntryManifest(
+        material.subject_id,
+        material.week_number,
+        manifest.entries.map((candidate) => (candidate.id === entryId ? updatedEntry : candidate))
+      )
+
+      return NextResponse.json({
+        entryId: updatedEntry.id,
+        materialId,
+        pageNum,
+        xp,
+        yp,
+        transcriptText: updatedEntry.transcript_text,
+        title: updatedEntry.custom_title?.trim() || updatedEntry.drive_file_name || "Audio",
+        audioUrl: `/api/subject-day-entries/${updatedEntry.id}/audio`,
+        mimeType: updatedEntry.drive_mime_type || "audio/webm",
+        pairId: updatedEntry.pair_id,
+        pairRole: updatedEntry.pair_role,
+      })
     }
 
     const scopeRows = await sql`

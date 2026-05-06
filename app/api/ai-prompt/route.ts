@@ -1,9 +1,16 @@
 import { neon } from '@neondatabase/serverless'
+import { readLocalState, updateLocalState } from "@/lib/local-state-store"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export async function GET() {
   try {
+    if (isLocalStorageMode()) {
+      const state = await readLocalState()
+      return Response.json({ prompt: state.aiPrompt })
+    }
+
     const result = await sql`SELECT prompt FROM ai_prompt WHERE id = 1`
     const prompt = result.length > 0 ? result[0].prompt : ''
     return Response.json({ prompt })
@@ -16,6 +23,13 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const { prompt } = await request.json()
+    if (isLocalStorageMode()) {
+      await updateLocalState((state) => {
+        state.aiPrompt = typeof prompt === "string" ? prompt : ""
+      })
+      return Response.json({ ok: true })
+    }
+
     await sql`
       INSERT INTO ai_prompt (id, prompt, updated_at)
       VALUES (1, ${prompt}, NOW())

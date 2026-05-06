@@ -10,7 +10,7 @@ import type {
   SocraticReviewSettings,
 } from "@/lib/study-types"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type PairRow = {
   pair_id: string

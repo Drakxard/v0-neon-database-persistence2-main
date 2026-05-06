@@ -1,10 +1,12 @@
 import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { findLocalEntryById, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function isMissingSubjectDayEntriesTable(error: unknown) {
   return Boolean(
@@ -39,6 +41,34 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       normalizedUrl = new URL(url).toString()
     } catch {
       return NextResponse.json({ error: "Invalid url" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const entry = await findLocalEntryById(entryId)
+      if (!entry) {
+        return NextResponse.json({ error: "Entry not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, entry.subject_id)
+      if (forbidden) return forbidden
+
+      const manifest = await readEntryManifest(entry.subject_id, entry.week_number)
+      const nextLink = {
+        id: Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
+        label,
+        url: normalizedUrl,
+      }
+      const updatedEntries = manifest.entries.map((candidate) =>
+        candidate.id === entryId
+          ? {
+              ...candidate,
+              updated_at: new Date().toISOString(),
+              external_links: [...candidate.external_links, nextLink],
+            }
+          : candidate
+      )
+      await saveEntryManifest(entry.subject_id, entry.week_number, updatedEntries)
+      return NextResponse.json(nextLink)
     }
 
     const existingEntry = await sql`

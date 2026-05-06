@@ -6,7 +6,7 @@ import type { SubjectSynthesisRecord } from "@/lib/study-types"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function isMissingSubjectSynthesisTable(error: unknown) {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01")

@@ -1,11 +1,14 @@
 import { neon } from "@neondatabase/serverless"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { findLocalMaterialById } from "@/lib/local-r2-manifests"
+import { downloadR2Object } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { downloadSubjectDayMaterialFileOrAutocleanup } from "@/lib/subject-day-materials-storage"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 function isMissingSubjectDayMaterialsTable(error: unknown) {
   return Boolean(
@@ -25,6 +28,25 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const materialId = Number.parseInt(id, 10)
     if (!Number.isInteger(materialId)) {
       return Response.json({ error: "Invalid material id" }, { status: 400 })
+    }
+
+    if (isLocalStorageMode()) {
+      const material = await findLocalMaterialById(materialId)
+      if (!material) {
+        return Response.json({ error: "Material not found" }, { status: 404 })
+      }
+
+      const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
+      if (forbidden) return forbidden
+
+      const remoteFile = await downloadR2Object(material.drive_file_id)
+      return new Response(remoteFile.buffer, {
+        headers: {
+          "Content-Type": remoteFile.mimeType || material.drive_mime_type || "application/pdf",
+          "Content-Disposition": `inline; filename="${material.file_name}"`,
+          "Cache-Control": "private, max-age=0, must-revalidate",
+        },
+      })
     }
 
     const rows = await sql`

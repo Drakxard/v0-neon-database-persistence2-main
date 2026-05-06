@@ -15,7 +15,7 @@ import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type SubjectDayMaterialRow = {
   id: number

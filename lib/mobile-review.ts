@@ -7,7 +7,7 @@ import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { getSubjectById, isValidSubjectId } from "@/lib/subjects"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
 
 export type MobileReviewPair = {

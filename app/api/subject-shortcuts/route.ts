@@ -2,11 +2,13 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { readLocalState, updateLocalState } from "@/lib/local-state-store"
 import { parseRequiredString } from "@/lib/server/request-parsing"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type ShortcutKey = "e_fich" | "figma"
 
@@ -71,6 +73,18 @@ export async function GET(request: Request) {
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
 
+    if (isLocalStorageMode()) {
+      const state = await readLocalState()
+      const shortcut = state.subjectShortcuts[subjectId]
+      return NextResponse.json(
+        shortcut ?? {
+          subjectId,
+          eFich: null,
+          figma: null,
+        }
+      )
+    }
+
     const rows = await selectSubjectShortcuts(subjectId)
     return NextResponse.json(normalizeShortcutResponse(subjectId, rows))
   } catch (error) {
@@ -112,6 +126,25 @@ export async function PUT(request: Request) {
       normalizedUrl = new URL(url).toString()
     } catch {
       return badRequest("Invalid url")
+    }
+
+    if (isLocalStorageMode()) {
+      const nextShortcut = await updateLocalState((state) => {
+        const current = state.subjectShortcuts[subjectId] ?? {
+          subjectId,
+          eFich: null,
+          figma: null,
+        }
+
+        const updated = {
+          ...current,
+          eFich: shortcutKey === "e_fich" ? normalizedUrl : current.eFich,
+          figma: shortcutKey === "figma" ? normalizedUrl : current.figma,
+        }
+        state.subjectShortcuts[subjectId] = updated
+        return updated
+      })
+      return NextResponse.json(nextShortcut)
     }
 
     await sql`

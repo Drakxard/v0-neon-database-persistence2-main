@@ -1,3 +1,5 @@
+import { isLocalStorageMode } from "@/lib/storage-mode"
+
 export const APP_AUTH_COOKIE_NAME = "app_auth_session"
 export const APP_AUTH_STATE_COOKIE_NAME = "app_auth_state"
 
@@ -18,6 +20,13 @@ function requireEnv(name: string) {
 }
 
 export function getAppAuthConfig() {
+  if (isLocalStorageMode()) {
+    return {
+      adminEmail: "local@app.local",
+      sessionSecret: "local-mode-secret",
+    }
+  }
+
   return {
     adminEmail: requireEnv("ALLOWED_GOOGLE_EMAIL").toLowerCase(),
     sessionSecret: requireEnv("APP_AUTH_SECRET"),

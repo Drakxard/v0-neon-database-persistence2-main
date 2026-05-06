@@ -3,10 +3,12 @@ import { NextResponse } from "next/server"
 
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { listLocalSubjectDayEntries, listLocalSubjectDayMaterials } from "@/lib/local-r2-manifests"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type SubjectDayMaterialRow = {
   id: number
@@ -120,6 +122,38 @@ export async function GET(request: Request) {
 
     const rawWeekNumber = Number.parseInt(searchParams.get("weekNumber") || "", 10)
     const weekNumber = Number.isNaN(rawWeekNumber) ? getWeekNumberForDate(parsedSessionDate) : rawWeekNumber
+
+    if (isLocalStorageMode()) {
+      const material = (
+        await listLocalSubjectDayMaterials({
+          subjectId,
+          weekNumber,
+          sessionDate,
+          materialType: "practice",
+        })
+      ).find((candidate) => !candidate.is_checkup_done) ?? null
+
+      const previousFeaturedEntry =
+        (
+          await listLocalSubjectDayEntries({
+            subjectId,
+            weekNumber,
+          })
+        )
+          .filter((entry) => entry.is_featured)
+          .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null
+
+      return NextResponse.json({
+        material,
+        previousFeaturedEntry: previousFeaturedEntry
+          ? {
+              ...previousFeaturedEntry,
+              display_title: previousFeaturedEntry.custom_title?.trim() || `Duda ${previousFeaturedEntry.order_index + 1}`,
+            }
+          : null,
+      })
+    }
+
     const materialRows = await sql`
       SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       FROM subject_day_materials

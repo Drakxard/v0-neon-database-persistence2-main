@@ -2,13 +2,15 @@ import { neon } from "@neondatabase/serverless"
 import { NextResponse } from "next/server"
 
 import { getDriveFileMetadata } from "@/lib/google-drive"
+import { ensureLocalMaterialFromUpload } from "@/lib/local-r2-manifests"
 import { getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 type MaterialType = "theory" | "practice"
 
@@ -134,11 +136,6 @@ export async function POST(request: Request) {
       }
     }
 
-    const existingRow = await findMaterialByDriveFileId(driveFile.id)
-    if (existingRow) {
-      return NextResponse.json(normalizeRows([existingRow])[0])
-    }
-
     const persistedFileName = isR2ObjectKey(driveFileId)
       ? normalizeUploadedPdfFileName(readR2MetadataValue("metadata" in driveFile ? driveFile.metadata : undefined, "original-file-name") || uploadedFileName || driveFile.name)
       : normalizeUploadedPdfFileName(uploadedFileName) || driveFile.name
@@ -151,6 +148,25 @@ export async function POST(request: Request) {
     const weekNumber =
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
+
+    if (isLocalStorageMode()) {
+      const material = await ensureLocalMaterialFromUpload({
+        subjectId,
+        sessionDate,
+        weekNumber,
+        weekdayIndex,
+        materialType,
+        driveFileId: driveFile.id,
+        fileName: persistedFileName,
+      })
+
+      return NextResponse.json(material)
+    }
+
+    const existingRow = await findMaterialByDriveFileId(driveFile.id)
+    if (existingRow) {
+      return NextResponse.json(normalizeRows([existingRow])[0])
+    }
 
     const [orderRow] = await sql`
       SELECT COALESCE(MAX(order_index), -1) AS max_order

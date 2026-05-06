@@ -1,3 +1,7 @@
+import { redirect } from "next/navigation"
+
+import { isLocalStorageMode } from "@/lib/storage-mode"
+
 export default async function LoginPage({
   searchParams,
 }: {
@@ -7,6 +11,10 @@ export default async function LoginPage({
   const nextParam = typeof resolvedSearchParams.next === "string" ? resolvedSearchParams.next : "/"
   const errorParam = typeof resolvedSearchParams.error === "string" ? resolvedSearchParams.error : ""
   const emailParam = typeof resolvedSearchParams.email === "string" ? resolvedSearchParams.email : ""
+
+  if (isLocalStorageMode()) {
+    redirect(nextParam)
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 text-foreground transition-colors duration-300">
