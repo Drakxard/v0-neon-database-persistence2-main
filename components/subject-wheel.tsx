@@ -5205,17 +5205,17 @@ export function SubjectWheel({
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen flex-col bg-background text-foreground transition-colors duration-300">
-        <header className="flex items-center border-b border-border bg-card/95 p-5 shadow-sm backdrop-blur">
+      <div className="flex min-h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground transition-colors duration-300">
+        <header className="flex shrink-0 items-center border-b border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur sm:px-5 sm:py-4">
           <div className="flex gap-2">
             <div className="h-10 w-10 rounded-full border border-border bg-muted" />
             <div className="h-10 w-10 rounded-full border border-border bg-muted" />
           </div>
         </header>
-        <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12">
-          <div className="aspect-square w-full max-w-md animate-pulse rounded-full bg-muted" />
+        <main className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 py-3">
+          <div className="aspect-square w-[min(82vw,calc(100dvh-9rem),28rem)] animate-pulse rounded-full bg-muted" />
         </main>
-        <footer className="border-t border-border bg-card px-4 py-4 text-center text-xs text-muted-foreground">
+        <footer className="shrink-0 border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
           Cargando...
         </footer>
       </div>
@@ -5223,11 +5223,11 @@ export function SubjectWheel({
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground transition-colors duration-300">
+    <div className="flex min-h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground transition-colors duration-300">
       {/* Header */}
-      <header className="border-b border-border bg-card/95 shadow-sm backdrop-blur">
-        <div className="flex flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5">
-          <div className="flex items-center justify-between gap-3">
+      <header className="shrink-0 border-b border-border bg-card/95 shadow-sm backdrop-blur">
+        <div className="flex flex-col gap-1.5 px-3 py-2 sm:gap-2 sm:px-5 sm:py-4">
+          <div className="flex items-center justify-between gap-2 sm:gap-3">
             <div className="flex shrink-0 items-center">
               <input
                 ref={cronogramaFileInputRef}
@@ -5241,7 +5241,7 @@ export function SubjectWheel({
                   asChild
                   variant="outline"
                   size="icon"
-                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                   aria-label={`Abrir cronograma ${cronogramaPdfName}`}
                   title={`Cronograma: ${cronogramaPdfName}`}
                 >
@@ -5261,7 +5261,7 @@ export function SubjectWheel({
                   onClick={() => void handleCronogramaButtonClick()}
                   variant="outline"
                   size="icon"
-                  className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                   aria-label="Seleccionar cronograma"
                   title="Seleccionar cronograma"
                   disabled={isCronogramaLoading}
@@ -5271,12 +5271,12 @@ export function SubjectWheel({
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2 overflow-x-auto pb-1 sm:gap-3 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <Button
                 onClick={openPracticeModal}
                 variant="outline"
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                 aria-label="Practica"
                 title="Practica"
               >
@@ -5286,7 +5286,7 @@ export function SubjectWheel({
                 onClick={openReviewModal}
                 variant="outline"
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                 aria-label="Destacado"
                 title="Destacado"
               >
@@ -5296,7 +5296,7 @@ export function SubjectWheel({
                 onClick={openSocraticReviewModal}
                 variant="outline"
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                 aria-label="Repaso socratico"
                 title="Repaso socratico"
               >
@@ -5307,7 +5307,7 @@ export function SubjectWheel({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                    className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                     aria-label="Cambiar tema"
                     title="Cambiar tema"
                   >
@@ -5341,7 +5341,7 @@ export function SubjectWheel({
                 asChild
                 variant="outline"
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-full border-border bg-background/70"
+                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                 aria-label="Sintesis"
                 title="Sintesis"
               >
@@ -5361,7 +5361,7 @@ export function SubjectWheel({
               </Button>
               <button
                 onClick={handleReset}
-                className="shrink-0 rounded-full border border-transparent p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="shrink-0 rounded-full border border-transparent p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:p-2.5"
                 aria-label="Reiniciar"
                 title="Reiniciar todas las materias"
               >
@@ -5370,7 +5370,7 @@ export function SubjectWheel({
             </div>
           </div>
 
-          <div className="flex min-h-5 items-center justify-center gap-1.5 px-1 text-xs text-muted-foreground">
+          <div className="flex min-h-4 items-center justify-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
             {saveStatus === "saving" && (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -5391,9 +5391,9 @@ export function SubjectWheel({
       </header>
 
       {/* Main Content */}
-      <main className="flex flex-1 items-center justify-center px-8 py-12 sm:px-12 sm:py-14">
+      <main className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 py-3 sm:px-5 sm:py-4">
         {activeSubjects.length > 0 ? (
-          <svg viewBox="0 0 320 320" className="w-full max-w-[560px]">
+          <svg viewBox="0 0 320 320" className="aspect-square w-[min(88vw,calc(100dvh-10.5rem),32.5rem)] max-w-full">
             <g>
               {segments.map(({ subject, path, labelX, labelY, fontSize }) => (
               <g
@@ -5442,15 +5442,15 @@ export function SubjectWheel({
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer className="border-t border-border bg-card px-4 py-4 text-center text-xs text-muted-foreground">
+      <footer className="max-h-[18dvh] shrink-0 overflow-y-auto border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
         {completedSubjects.length > 0 && (
-          <div className="flex flex-wrap gap-2 justify-center mb-2">
+          <div className="mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
               <button
                 key={subject.id}
                 type="button"
                 onClick={() => handleSubjectClick(subject)}
-                className="px-3 py-1 rounded-full text-white text-xs font-medium transition-opacity hover:opacity-90"
+                className="rounded-full px-2.5 py-0.5 text-xs font-medium text-white transition-opacity hover:opacity-90 sm:px-3 sm:py-1"
                 style={{ backgroundColor: getSubjectVisualColor(subject) }}
               >
                 {subject.name.replace("\n", " ")}
