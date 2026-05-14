@@ -1363,6 +1363,30 @@ export function SubjectWheel({
     }
   }, [isSynthesisOpen])
 
+  const ensureLocalAudioSource = useCallback(
+    async (entry: Pick<SubjectDayEntry, "id" | "drive_file_id"> | null | undefined) => {
+      if (!LOCAL_STORAGE_MODE || !entry?.drive_file_id || !isWorkspaceFileId(entry.drive_file_id)) {
+        return null
+      }
+
+      const cached = audioCacheRef.current.get(entry.id)
+      if (cached) return cached
+
+      const nextUrl = await createObjectUrlForWorkspaceFile(entry.drive_file_id)
+      audioCacheRef.current.set(entry.id, nextUrl)
+      setAudioSourceUrls((previous) =>
+        previous[entry.id] === nextUrl
+          ? previous
+          : {
+              ...previous,
+              [entry.id]: nextUrl,
+            }
+      )
+      return nextUrl
+    },
+    []
+  )
+
   useEffect(() => {
     const audio = synthesisPlaybackAudioRef.current
     const nextPlaybackItem =
@@ -1748,30 +1772,6 @@ export function SubjectWheel({
       if (audio?.source === "local") URL.revokeObjectURL(audio.url)
     })
   }, [])
-
-  const ensureLocalAudioSource = useCallback(
-    async (entry: Pick<SubjectDayEntry, "id" | "drive_file_id"> | null | undefined) => {
-      if (!LOCAL_STORAGE_MODE || !entry?.drive_file_id || !isWorkspaceFileId(entry.drive_file_id)) {
-        return null
-      }
-
-      const cached = audioCacheRef.current.get(entry.id)
-      if (cached) return cached
-
-      const nextUrl = await createObjectUrlForWorkspaceFile(entry.drive_file_id)
-      audioCacheRef.current.set(entry.id, nextUrl)
-      setAudioSourceUrls((previous) =>
-        previous[entry.id] === nextUrl
-          ? previous
-          : {
-              ...previous,
-              [entry.id]: nextUrl,
-            }
-      )
-      return nextUrl
-    },
-    []
-  )
 
   const clearPendingFeaturedSave = () => {
     if (pendingFeaturedSaveTimerRef.current) {
