@@ -18,6 +18,7 @@ type MaterialContext = {
   weekNumber: number
   weekdayIndex: number
   fileName: string
+  workspaceFileId?: string | null
 }
 
 type DraftViewerContext = {
@@ -129,16 +130,18 @@ function buildViewerSrc({
   material,
   draftContext,
   fileUrl,
+  localWorkspaceMode,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
   fileUrl?: string | null
+  localWorkspaceMode?: boolean
 }) {
   const params = new URLSearchParams()
 
   if (material) {
-    params.set("url", fileUrl || `/api/subject-day-materials/${material.id}/file`)
-    params.set("name", material.fileName)
+    params.set("file", fileUrl || `/api/subject-day-materials/${material.id}/file`)
+    params.set("fileName", material.fileName)
     params.set("key", `subject-day-material-${material.id}`)
     params.set("materialId", String(material.id))
     params.set("subjectId", material.subjectId)
@@ -146,19 +149,27 @@ function buildViewerSrc({
     params.set("sessionDate", material.sessionDate)
     params.set("weekNumber", String(material.weekNumber))
     params.set("weekdayIndex", String(material.weekdayIndex))
+    if (material.workspaceFileId) {
+      params.set("workspaceFileId", material.workspaceFileId)
+    }
   }
 
   if (draftContext) {
-    params.set("draftUpload", "1")
+    params.set("file", "")
     params.set("subjectId", draftContext.subjectId)
     params.set("subjectName", draftContext.subjectName)
     params.set("sessionDate", draftContext.sessionDate)
     params.set("weekNumber", String(draftContext.weekNumber))
     params.set("weekdayIndex", String(draftContext.weekdayIndex))
     params.set("materialType", draftContext.materialType)
+    params.set("key", `practice-draft:${draftContext.subjectId}:${draftContext.sessionDate}`)
   }
 
-  return `/visor/index.html?${params.toString()}`
+  if (localWorkspaceMode) {
+    params.set("localWorkspace", "1")
+  }
+
+  return `/pdfjs/web/viewer.html?${params.toString()}#locale=es-AR`
 }
 
 function notifySubjectDayMaterialsRefresh(payload: { subjectId: string; sessionDate: string; weekNumber: number }) {
@@ -211,8 +222,8 @@ export function PracticeViewerClient({
   const isLocalMode = isLocalStorageMode()
 
   const viewerSrc = useMemo(
-    () => buildViewerSrc({ material: resolvedMaterial, draftContext, fileUrl: materialFileUrl }),
-    [draftContext, materialFileUrl, resolvedMaterial]
+    () => buildViewerSrc({ material: resolvedMaterial, draftContext, fileUrl: materialFileUrl, localWorkspaceMode: isLocalMode }),
+    [draftContext, isLocalMode, materialFileUrl, resolvedMaterial]
   )
   const activeContext = resolvedMaterial ?? draftContext
   const hasMaterial = Boolean(resolvedMaterial)
@@ -778,6 +789,7 @@ export function PracticeViewerClient({
         weekNumber: localMaterial.week_number,
         weekdayIndex: localMaterial.weekday_index,
         fileName: localMaterial.file_name,
+        workspaceFileId: localMaterial.drive_file_id,
       })
     })()
 

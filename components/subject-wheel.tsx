@@ -5225,10 +5225,10 @@ export function SubjectWheel({
   return (
     <div className="relative min-h-dvh max-h-dvh overflow-hidden bg-background text-foreground transition-colors duration-300">
       {/* Header */}
-      <header className="absolute inset-x-0 top-0 z-20 border-b border-border bg-card/95 shadow-sm backdrop-blur">
-        <div className="flex flex-col gap-1 px-3 py-2 sm:px-4 sm:py-2.5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
+        <div className="flex flex-col gap-1 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="flex shrink-0 items-center">
+            <div className="pointer-events-auto flex shrink-0 items-center">
               <input
                 ref={cronogramaFileInputRef}
                 type="file"
@@ -5271,7 +5271,7 @@ export function SubjectWheel({
               )}
             </div>
 
-            <div className="flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <Button
                 onClick={openPracticeModal}
                 variant="outline"
@@ -5370,7 +5370,7 @@ export function SubjectWheel({
             </div>
           </div>
 
-          <div className="flex min-h-4 items-center justify-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
+          <div className="pointer-events-none flex min-h-4 items-center justify-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
             {saveStatus === "saving" && (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -5393,7 +5393,7 @@ export function SubjectWheel({
       {/* Main Content */}
       <main className="absolute inset-0 flex items-center justify-center overflow-hidden">
         {activeSubjects.length > 0 ? (
-          <svg viewBox="0 0 320 320" className="aspect-square w-[min(50vw,50dvh,22rem)] max-w-full">
+          <svg viewBox="0 0 320 320" className="aspect-square w-[min(92vw,92dvh,56rem)] max-w-full">
             <g>
               {segments.map(({ subject, path, labelX, labelY, fontSize }) => (
               <g
@@ -5442,9 +5442,9 @@ export function SubjectWheel({
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer className="absolute inset-x-0 bottom-0 z-20 max-h-[10dvh] overflow-y-auto border-t border-border bg-card/95 px-3 py-2 text-center text-xs text-muted-foreground backdrop-blur sm:px-4 sm:py-2.5">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
         {completedSubjects.length > 0 && (
-          <div className="mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
+          <div className="pointer-events-auto mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
               <button
                 key={subject.id}

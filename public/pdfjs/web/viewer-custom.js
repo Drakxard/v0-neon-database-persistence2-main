@@ -44,6 +44,8 @@
     exitSyncTimer: null,
     statusTimer: null,
     enhancedPdfReadability: false,
+    workspaceMode: "remote",
+    workspaceRootHandle: null,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -64,6 +66,8 @@
       materialType: String(params.get("materialType") || "practice").trim() || "practice",
       fileName: String(params.get("fileName") || "").trim(),
       key: String(params.get("key") || "").trim(),
+      localWorkspace: params.get("localWorkspace") === "1",
+      workspaceFileId: String(params.get("workspaceFileId") || "").trim(),
     };
   }
 
@@ -90,11 +94,21 @@
     return !isCronogramaResource() && !Number.isInteger(state.query?.materialId);
   }
 
+  function isLocalWorkspaceMode() {
+    return state.workspaceMode === "local" || Boolean(state.query?.localWorkspace);
+  }
+
   function canSyncCurrentDocument() {
+    if (isLocalWorkspaceMode()) {
+      return Boolean(state.query?.workspaceFileId);
+    }
     return isCronogramaResource() || (!isDraftMode() && Number.isInteger(state.query?.materialId));
   }
 
   function canReplaceMaterial() {
+    if (isLocalWorkspaceMode()) {
+      return false;
+    }
     return !isCronogramaResource() && !isDraftMode() && Number.isInteger(state.query?.materialId);
   }
 
@@ -120,6 +134,113 @@
       return `/api/subject-day-materials/${state.query.materialId}/sync`;
     }
     return "";
+  }
+
+  function openWorkspaceDb() {
+    return new Promise((resolve, reject) => {
+      const request = window.indexedDB.open("local-workspace", 1);
+
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains("workspace")) {
+          database.createObjectStore("workspace", { keyPath: "id" });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("No se pudo abrir IndexedDB."));
+    });
+  }
+
+  async function loadWorkspaceRootHandleFromDb() {
+    const database = await openWorkspaceDb();
+
+    try {
+      return await new Promise((resolve, reject) => {
+        const transaction = database.transaction("workspace", "readonly");
+        const store = transaction.objectStore("workspace");
+        const request = store.get("root-handle");
+        request.onsuccess = () => resolve((request.result && request.result.handle) || null);
+        request.onerror = () => reject(request.error || new Error("No se pudo leer la carpeta local."));
+      });
+    } finally {
+      database.close();
+    }
+  }
+
+  async function ensureWorkspaceRootHandle() {
+    if (state.workspaceRootHandle) {
+      return state.workspaceRootHandle;
+    }
+
+    let handle = null;
+    try {
+      handle = await loadWorkspaceRootHandleFromDb();
+    } catch (error) {
+      console.warn("Custom PDF.js workspace bootstrap failed:", error);
+    }
+
+    if (!handle) {
+      throw new Error("No se encontro la carpeta local guardada.");
+    }
+
+    let permission = "prompt";
+    try {
+      permission = await handle.queryPermission({ mode: "readwrite" });
+    } catch {}
+
+    if (permission !== "granted") {
+      try {
+        permission = await handle.requestPermission({ mode: "readwrite" });
+      } catch {
+        permission = "denied";
+      }
+    }
+
+    if (permission !== "granted") {
+      throw new Error("No hay permiso de lectura/escritura para la carpeta local.");
+    }
+
+    state.workspaceRootHandle = handle;
+    return handle;
+  }
+
+  function workspaceIdToSegments(workspaceId) {
+    if (!workspaceId || !String(workspaceId).startsWith("workspace://")) {
+      throw new Error("No hay un archivo local valido para sincronizar.");
+    }
+
+    return String(workspaceId)
+      .slice("workspace://".length)
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+  }
+
+  async function getWorkspaceFileHandle(workspaceId) {
+    const rootHandle = await ensureWorkspaceRootHandle();
+    const segments = workspaceIdToSegments(workspaceId);
+    const fileName = segments.pop();
+    if (!fileName) {
+      throw new Error("Ruta de archivo local invalida.");
+    }
+
+    let directoryHandle = rootHandle;
+    for (const segment of segments) {
+      directoryHandle = await directoryHandle.getDirectoryHandle(segment, { create: true });
+    }
+
+    return directoryHandle.getFileHandle(fileName, { create: true });
+  }
+
+  async function syncAnnotatedPdfToLocalWorkspace(pdfBytes, fileName) {
+    const fileHandle = await getWorkspaceFileHandle(state.query?.workspaceFileId);
+    const writable = await fileHandle.createWritable();
+    try {
+      await writable.write(new File([pdfBytes], fileName, { type: "application/pdf" }));
+    } finally {
+      await writable.close();
+    }
   }
 
   function ensureUi() {
@@ -1577,6 +1698,18 @@
       const fileName = normalizePdfFileName(
         state.query.fileName || state.app._docFilename || (isCronogramaResource() ? "cronograma" : "material")
       );
+
+      if (isLocalWorkspaceMode()) {
+        await syncAnnotatedPdfToLocalWorkspace(pdfBytes, fileName);
+        state.query.fileName = fileName;
+        markDocumentAsSynced();
+        refreshDocumentViewerMetadata();
+        notifySubjectDayMaterialsRefresh();
+        showStatus("Puedes salir, sincronizado.");
+        scheduleHideStatus();
+        return true;
+      }
+
       const formData = new FormData();
       formData.set("file", new Blob([pdfBytes], { type: "application/pdf" }), fileName);
       formData.set("fileName", fileName);
@@ -1882,6 +2015,38 @@
     clearExitSyncTimer();
   }
 
+  function handleParentMessage(event) {
+    if (event.origin !== window.location.origin || !event.data || typeof event.data.type !== "string") {
+      return;
+    }
+
+    if (event.data.type === "viewerWorkspaceRootHandle" && event.data.handle) {
+      state.workspaceRootHandle = event.data.handle;
+      return;
+    }
+
+    if (event.data.type === "viewerWorkspaceMode" && event.data.mode === "local") {
+      state.workspaceMode = "local";
+      refreshSyncButtons();
+      return;
+    }
+
+    if (event.data.type === "practiceFragmentUploadState") {
+      if (event.data.status === "uploading") {
+        showBusy("Subiendo PDF fragmentado...");
+        return;
+      }
+      hideBusy();
+      if (event.data.status === "success") {
+        showToast(`PDF creado: ${event.data.fileName || "fragmento.pdf"}`, "success", 3200);
+        return;
+      }
+      if (event.data.status === "error") {
+        showToast(event.data.error || "No se pudo subir el PDF fragmentado.", "error", 4200);
+      }
+    }
+  }
+
   function openModal() {
     if (!state.app?.pdfDocument) {
       showToast("Primero carga un PDF.", "info");
@@ -1919,6 +2084,28 @@
 
     try {
       const pdfData = await buildPdfFromSelections(inputName);
+
+      if (isLocalWorkspaceMode()) {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            {
+              type: "uploadPracticeFragment",
+              payload: {
+                blob: pdfData.blob,
+                fileName: pdfData.fileName,
+              },
+            },
+            window.location.origin
+          );
+          clearSelections();
+          leaveSelectionMode();
+          showToast(`PDF enviado: ${pdfData.fileName}`, "success", 3200);
+          return;
+        }
+
+        throw new Error("El modo local de fragmentos necesita abrirse desde la app principal.");
+      }
+
       updateBusy("Preparando subida...");
 
       const sessionPayload = await requireOkJson(
@@ -2047,6 +2234,7 @@
     document.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("message", handleParentMessage);
 
     if (!state.syncStatePoller) {
       state.syncStatePoller = window.setInterval(refreshSyncButtons, 400);
