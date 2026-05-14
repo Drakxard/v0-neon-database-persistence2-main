@@ -19,29 +19,40 @@ type LocalWorkspaceContextValue = {
   reselectWorkspace: () => Promise<void>
 }
 
+type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported" | "ready"
+
 const LocalWorkspaceContext = createContext<LocalWorkspaceContextValue | null>(null)
 
 function WorkspaceModal({
-  isRecovering,
+  bootState,
   error,
   onSelect,
 }: {
-  isRecovering: boolean
+  bootState: Exclude<LocalWorkspaceBootState, "ready">
   error: string
   onSelect: () => Promise<void>
 }) {
+  const isChecking = bootState === "checking"
+  const isRecovering = bootState === "recover"
+  const isUnsupported = bootState === "unsupported"
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 px-6">
       <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900 p-6 text-white shadow-2xl">
         <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Modo local</p>
         <h2 className="mt-3 text-2xl font-semibold">
-          {isRecovering ? "Recuperar carpeta de trabajo" : "Elegi la carpeta de trabajo"}
+          {isChecking
+            ? "Recuperando carpeta local"
+            : isRecovering
+              ? "Recuperar carpeta de trabajo"
+              : "Elegi la carpeta de trabajo"}
         </h2>
         <p className="mt-3 text-sm text-slate-300">
-          La app va a guardar y reutilizar una carpeta raiz local. Dentro de esa carpeta se crean o reutilizan
-          automaticamente las subcarpetas `cronograma/`, `teoria/`, `practica/`, `audio/` y `manifests/`.
+          {isChecking
+            ? "Comprobando si ya existe una carpeta local guardada y si conserva permisos de lectura y escritura."
+            : "La app va a guardar y reutilizar una carpeta raiz local. Dentro de esa carpeta se crean o reutilizan automaticamente las subcarpetas `cronograma/`, `teoria/`, `practica/`, `audio/` y `manifests/`."}
         </p>
-        {!supportsWorkspacePicker() ? (
+        {isUnsupported ? (
           <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
             Este modo necesita un navegador Chromium con File System Access API.
           </p>
@@ -52,10 +63,14 @@ function WorkspaceModal({
         <button
           type="button"
           onClick={() => void onSelect()}
-          disabled={!supportsWorkspacePicker()}
+          disabled={isChecking || isUnsupported || !supportsWorkspacePicker()}
           className="mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-sky-500 px-5 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isRecovering ? "Volver a seleccionar carpeta" : "Seleccionar carpeta"}
+          {isChecking
+            ? "Comprobando..."
+            : isRecovering
+              ? "Volver a seleccionar carpeta"
+              : "Seleccionar carpeta"}
         </button>
       </div>
     </div>
@@ -69,25 +84,28 @@ export function LocalWorkspaceProvider({
   enabled: boolean
   children: React.ReactNode
 }) {
-  const [isReady, setIsReady] = useState(!enabled)
+  const [bootState, setBootState] = useState<LocalWorkspaceBootState>(enabled ? "checking" : "ready")
   const [rootHandle, setRootHandle] = useState<FileSystemDirectoryHandle | null>(null)
   const [permissionState, setPermissionState] = useState<PermissionState | "unsupported">(
     enabled ? "prompt" : "granted"
   )
-  const [needsPrompt, setNeedsPrompt] = useState(false)
   const [error, setError] = useState("")
+  const isReady = !enabled || bootState === "ready"
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      setBootState("ready")
+      return
+    }
 
     let cancelled = false
+    setBootState("checking")
 
     const bootstrap = async () => {
       if (!supportsWorkspacePicker()) {
         if (cancelled) return
         setPermissionState("unsupported")
-        setNeedsPrompt(true)
-        setIsReady(false)
+        setBootState("unsupported")
         return
       }
 
@@ -95,9 +113,8 @@ export function LocalWorkspaceProvider({
         const storedHandle = await loadWorkspaceHandle()
         if (!storedHandle) {
           if (cancelled) return
-          setNeedsPrompt(true)
           setPermissionState("prompt")
-          setIsReady(false)
+          setBootState("prompt")
           return
         }
 
@@ -110,8 +127,7 @@ export function LocalWorkspaceProvider({
           if (cancelled) return
           setRootHandle(null)
           setPermissionState(permission)
-          setNeedsPrompt(true)
-          setIsReady(false)
+          setBootState("recover")
           return
         }
 
@@ -119,13 +135,11 @@ export function LocalWorkspaceProvider({
         if (cancelled) return
         setRootHandle(storedHandle)
         setPermissionState("granted")
-        setNeedsPrompt(false)
-        setIsReady(true)
+        setBootState("ready")
       } catch (workspaceError) {
         if (cancelled) return
         setError(workspaceError instanceof Error ? workspaceError.message : "No se pudo restaurar la carpeta local.")
-        setNeedsPrompt(true)
-        setIsReady(false)
+        setBootState("recover")
       }
     }
 
@@ -151,8 +165,7 @@ export function LocalWorkspaceProvider({
       if (cancelled) return
       setRootHandle(null)
       setPermissionState(requestedPermission)
-      setNeedsPrompt(true)
-      setIsReady(false)
+      setBootState("recover")
       setError("Se perdio el permiso de la carpeta local. Vuelve a seleccionarla para continuar.")
     }
 
@@ -170,16 +183,15 @@ export function LocalWorkspaceProvider({
   const reselectWorkspace = async () => {
     try {
       setError("")
+      setBootState("checking")
       const handle = await pickWorkspaceRootHandle()
       setRootHandle(handle)
       setPermissionState("granted")
-      setNeedsPrompt(false)
-      setIsReady(true)
+      setBootState("ready")
     } catch (workspaceError) {
       setRootHandle(null)
       setPermissionState("prompt")
-      setNeedsPrompt(true)
-      setIsReady(false)
+      setBootState(supportsWorkspacePicker() ? "prompt" : "unsupported")
       setError(workspaceError instanceof Error ? workspaceError.message : "No se pudo seleccionar la carpeta local.")
     }
   }
@@ -198,8 +210,8 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled && isReady ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady ? children : null}
-      {enabled && needsPrompt ? (
-        <WorkspaceModal isRecovering={permissionState !== "prompt"} error={error} onSelect={reselectWorkspace} />
+      {enabled && bootState !== "ready" ? (
+        <WorkspaceModal bootState={bootState} error={error} onSelect={reselectWorkspace} />
       ) : null}
     </LocalWorkspaceContext.Provider>
   )
