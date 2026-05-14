@@ -6,7 +6,7 @@ import { APP_AUTH_COOKIE_NAME, getAppAuthConfig, verifySessionToken, type AppSes
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS, normalizeAllowedSubjectIds, getSubjectIdFromIndex } from "@/lib/subjects"
 
-const sql = neon(process.env.DATABASE_URL!)
+const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 const LOCAL_SESSION: AuthSession = {
   email: "local@app.local",
@@ -45,6 +45,9 @@ export async function getCurrentSessionForEmail(email: string): Promise<AuthSess
   if (isLocalStorageMode()) {
     return LOCAL_SESSION
   }
+  if (!sql) {
+    return null
+  }
 
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) return null
@@ -73,6 +76,9 @@ export async function getAllowedAccountByEmail(email: string) {
   if (isLocalStorageMode()) {
     return null
   }
+  if (!sql) {
+    return null
+  }
 
   const normalizedEmail = email.trim().toLowerCase()
   if (!normalizedEmail) return null
@@ -97,6 +103,9 @@ export async function listAllowedAccounts() {
   if (isLocalStorageMode()) {
     return []
   }
+  if (!sql) {
+    return []
+  }
 
   const rows = await sql`
     SELECT id, email, allowed_subject_ids, created_at, updated_at
@@ -114,6 +123,9 @@ export async function listAllowedAccounts() {
 export async function createAllowedAccount(email: string, allowedSubjectIds: string[]) {
   if (isLocalStorageMode()) {
     throw new Error("Los accesos administrados no se usan en modo local.")
+  }
+  if (!sql) {
+    throw new Error("Missing database connection.")
   }
 
   const normalizedEmail = email.trim().toLowerCase()
@@ -134,6 +146,9 @@ export async function createAllowedAccount(email: string, allowedSubjectIds: str
 
 export async function deleteAllowedAccountById(id: number) {
   if (isLocalStorageMode()) {
+    return null
+  }
+  if (!sql) {
     return null
   }
 
