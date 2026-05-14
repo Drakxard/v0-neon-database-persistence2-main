@@ -2,12 +2,26 @@ import { NextResponse } from "next/server"
 
 import { APP_AUTH_COOKIE_NAME, createSessionTokenFromPayload, getAppAuthConfig } from "@/lib/app-auth"
 import { getCurrentSessionForEmail, getRequestAuthSession } from "@/lib/authz"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
 const FIVE_MONTHS_IN_SECONDS = 60 * 60 * 24 * 30 * 5
 
 export async function GET() {
+  if (isLocalStorageMode()) {
+    const session = await getRequestAuthSession()
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    return NextResponse.json({
+      email: session.email,
+      isAdmin: session.isAdmin,
+      allowedSubjectIds: session.allowedSubjectIds,
+    })
+  }
+
   const session = await getRequestAuthSession()
   if (!session) {
     const response = NextResponse.json({ error: "Unauthorized" }, { status: 401 })

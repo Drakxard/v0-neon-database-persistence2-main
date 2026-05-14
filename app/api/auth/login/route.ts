@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { APP_AUTH_COOKIE_NAME, createSessionTokenFromPayload, getAppAuthConfig } from "@/lib/app-auth"
 import { getAdminSession, getAllowedAccountByEmail } from "@/lib/authz"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 export const runtime = "nodejs"
 
@@ -20,8 +21,13 @@ function createLoginErrorRedirect(requestUrl: URL, message: string, email = "") 
 export async function POST(request: Request) {
   const requestUrl = new URL(request.url)
   const formData = await request.formData()
-  const email = String(formData.get("email") || "").trim().toLowerCase()
   const next = String(formData.get("next") || "/")
+
+  if (isLocalStorageMode()) {
+    return NextResponse.redirect(new URL(next.startsWith("/") ? next : "/", requestUrl.origin), { status: 303 })
+  }
+
+  const email = String(formData.get("email") || "").trim().toLowerCase()
 
   if (!email) {
     return createLoginErrorRedirect(requestUrl, "Ingresa un correo.", email)

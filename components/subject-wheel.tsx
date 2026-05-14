@@ -1025,6 +1025,8 @@ export function SubjectWheel({
   }, [])
 
   useEffect(() => {
+    if (LOCAL_STORAGE_MODE) return
+
     let isCancelled = false
 
     const syncSession = async () => {

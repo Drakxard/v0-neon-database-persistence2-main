@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 const APP_AUTH_COOKIE_NAME = "app_auth_session"
-const LOCAL_STORAGE_MODE = (process.env.APP_STORAGE_MODE || "database").trim().toLowerCase() === "local"
 
 function decodeBase64Url(input: string) {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/")
@@ -88,7 +88,7 @@ function isPublicPath(pathname: string) {
 }
 
 export async function middleware(request: NextRequest) {
-  if (LOCAL_STORAGE_MODE) {
+  if (isLocalStorageMode()) {
     return NextResponse.next()
   }
 
