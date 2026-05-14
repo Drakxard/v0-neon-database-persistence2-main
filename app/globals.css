@@ -199,7 +199,4 @@
     margin: 0;
     @apply h-full min-h-full bg-background text-foreground transition-colors duration-300;
   }
-  body > * {
-    @apply h-full min-h-full;
-  }
 }

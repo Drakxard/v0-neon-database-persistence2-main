@@ -5393,7 +5393,7 @@ export function SubjectWheel({
       {/* Main Content */}
       <main className="flex min-h-0 flex-1 items-center justify-center overflow-hidden px-3 py-3 sm:px-5 sm:py-4">
         {activeSubjects.length > 0 ? (
-          <svg viewBox="0 0 320 320" className="aspect-square w-[min(88vw,calc(100dvh-10.5rem),32.5rem)] max-w-full">
+          <svg viewBox="0 0 320 320" className="aspect-square w-[min(78vw,calc(100dvh-12rem),27rem)] max-w-full sm:w-[min(74vw,calc(100dvh-12.5rem),29rem)] lg:w-[min(68vw,calc(100dvh-13rem),30rem)]">
             <g>
               {segments.map(({ subject, path, labelX, labelY, fontSize }) => (
               <g
@@ -5442,7 +5442,7 @@ export function SubjectWheel({
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer className="max-h-[18dvh] shrink-0 overflow-y-auto border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
+      <footer className="max-h-[14dvh] shrink-0 overflow-y-auto border-t border-border bg-card px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
         {completedSubjects.length > 0 && (
           <div className="mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
