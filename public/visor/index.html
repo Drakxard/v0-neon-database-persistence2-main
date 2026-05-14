@@ -1034,7 +1034,9 @@
             ];
             clearPendingAudioPreview();
             renderAnchoredAudioPositions();
-            loadAnchoredAudioPositionsFromApi();
+            if (workspaceMode !== 'local') {
+              loadAnchoredAudioPositionsFromApi();
+            }
             showToast('Audio anclado guardado', 'success');
           }
         } else if (e.data.type === 'anchoredAudioPlaybackState') {
@@ -1058,7 +1060,9 @@
             ? e.data.error
             : 'No se pudo borrar el audio.';
           showToast(message, 'error');
-          loadAnchoredAudioPositionsFromApi();
+          if (workspaceMode !== 'local') {
+            loadAnchoredAudioPositionsFromApi();
+          }
         } else if (e.data.type === 'practiceFragmentUploadState') {
           if (e.data.status === 'uploading') {
             showOverlay('Subiendo fragmento a Drive…');
@@ -1077,6 +1081,8 @@
           }
         } else if (e.data.type === 'viewerWorkspaceRootHandle') {
           void applyWorkspaceRootHandle(e.data.handle);
+        } else if (e.data.type === 'viewerWorkspaceMode') {
+          workspaceMode = e.data.mode === 'local' ? 'local' : 'remote';
         }
       });
       try { window.parent.postMessage({ type: 'viewerReady' }, '*'); } catch {}
@@ -1460,6 +1466,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
       let theoryHandle = null;
       let practiceHandle = null;
       let workspaceRootHandle = null;
+      let workspaceMode = 'remote';
 
       // Dibujo libre
       let drawMode = false;
@@ -2483,7 +2490,9 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
 
           buildPageSkeletons();
           renderAnchoredAudioPositions();
-          loadAnchoredAudioPositionsFromApi();
+          if (workspaceMode !== 'local') {
+            loadAnchoredAudioPositionsFromApi();
+          }
           prepareInitialReveal();
           const saved = parseInt(
             localStorage.getItem('lastPage-' + currentPdfKey) || '1',

@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
+import { createObjectUrlForWorkspaceFile, getLocalMaterialById } from "@/lib/local-workspace-data"
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
+import { isLocalStorageMode } from "@/lib/storage-mode"
+import { getSubjectById } from "@/lib/subjects"
 
 type MaterialContext = {
   id: number
@@ -125,14 +128,16 @@ function buildPairAnchors(anchor: PendingAnchor) {
 function buildViewerSrc({
   material,
   draftContext,
+  fileUrl,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
+  fileUrl?: string | null
 }) {
   const params = new URLSearchParams()
 
   if (material) {
-    params.set("url", `/api/subject-day-materials/${material.id}/file`)
+    params.set("url", fileUrl || `/api/subject-day-materials/${material.id}/file`)
     params.set("name", material.fileName)
     params.set("key", `subject-day-material-${material.id}`)
     params.set("materialId", String(material.id))
@@ -173,9 +178,11 @@ function notifySubjectDayMaterialsRefresh(payload: { subjectId: string; sessionD
 export function PracticeViewerClient({
   material,
   draftContext,
+  materialId,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
+  materialId?: number
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -197,12 +204,19 @@ export function PracticeViewerClient({
   const [previewPlayingRole, setPreviewPlayingRole] = useState<PairRole | null>(null)
   const [draggedRole, setDraggedRole] = useState<PairRole | null>(null)
   const [uploadFeedback, setUploadFeedback] = useState("")
+  const [resolvedMaterial, setResolvedMaterial] = useState<MaterialContext | undefined>(material)
+  const [materialFileUrl, setMaterialFileUrl] = useState<string | null>(null)
   const { rootHandle } = useLocalWorkspace()
+  const playbackUrlCacheRef = useRef(new Map<string, string>())
+  const isLocalMode = isLocalStorageMode()
 
-  const viewerSrc = useMemo(() => buildViewerSrc({ material, draftContext }), [draftContext, material])
-  const activeContext = material ?? draftContext
-  const hasMaterial = Boolean(material)
-  const isPairModalOpen = Boolean(material && pairDraft)
+  const viewerSrc = useMemo(
+    () => buildViewerSrc({ material: resolvedMaterial, draftContext, fileUrl: materialFileUrl }),
+    [draftContext, materialFileUrl, resolvedMaterial]
+  )
+  const activeContext = resolvedMaterial ?? draftContext
+  const hasMaterial = Boolean(resolvedMaterial)
+  const isPairModalOpen = Boolean(resolvedMaterial && pairDraft)
   const isPairComplete = Boolean(pairDraft?.slots.question && pairDraft?.slots.answer)
 
   const postToViewer = useCallback((message: unknown) => {
@@ -243,7 +257,7 @@ export function PracticeViewerClient({
   )
 
   const loadPositions = useCallback(async () => {
-    if (!material) {
+    if (!resolvedMaterial) {
       setPositions([])
       syncPositionsToViewer([])
       return
@@ -251,7 +265,7 @@ export function PracticeViewerClient({
 
     try {
       setPositionsError("")
-      const response = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, { cache: "no-store" })
+      const response = await fetch(`/api/subject-day-materials/${resolvedMaterial.id}/audio-positions`, { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok) {
         throw new Error(getErrorMessage(payload, "No se pudieron cargar los audios anclados."))
@@ -265,7 +279,7 @@ export function PracticeViewerClient({
       setPositionsError(message)
       syncPositionsToViewer([])
     }
-  }, [material, syncPositionsToViewer])
+  }, [resolvedMaterial, syncPositionsToViewer])
 
   const resetPairState = useCallback(() => {
     setIsRecording(false)
@@ -452,7 +466,7 @@ export function PracticeViewerClient({
   }, [replacePairDraft])
 
   const confirmRecording = useCallback(async () => {
-    if (!material || !pairDraftRef.current) return
+    if (!resolvedMaterial || !pairDraftRef.current) return
 
     const currentDraft = pairDraftRef.current
     if (!currentDraft.slots.question || !currentDraft.slots.answer) return
@@ -472,12 +486,12 @@ export function PracticeViewerClient({
         }
 
         const createdEntry = await createPracticeAudioEntry<{ id: number }>({
-          subjectId: material.subjectId,
-          subjectName: material.subjectName,
-          sessionDate: material.sessionDate,
-          weekNumber: material.weekNumber,
-          weekdayIndex: material.weekdayIndex,
-          materialId: material.id,
+          subjectId: resolvedMaterial.subjectId,
+          subjectName: resolvedMaterial.subjectName,
+          sessionDate: resolvedMaterial.sessionDate,
+          weekNumber: resolvedMaterial.weekNumber,
+          weekdayIndex: resolvedMaterial.weekdayIndex,
+          materialId: resolvedMaterial.id,
           blob: slot.blob,
           mimeType: slot.mimeType,
           pairId: currentDraft.pairId,
@@ -486,7 +500,7 @@ export function PracticeViewerClient({
         createdEntryIds.push(createdEntry.id)
 
         const anchor = anchors[role]
-        const positionResponse = await fetch(`/api/subject-day-materials/${material.id}/audio-positions`, {
+        const positionResponse = await fetch(`/api/subject-day-materials/${resolvedMaterial.id}/audio-positions`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -518,7 +532,7 @@ export function PracticeViewerClient({
     } finally {
       setIsUploading(false)
     }
-  }, [closeRecorder, loadPositions, material])
+  }, [closeRecorder, loadPositions, resolvedMaterial])
 
   const uploadPracticeFragment = useCallback(
     async (payload: FragmentUploadPayload) => {
@@ -582,6 +596,9 @@ export function PracticeViewerClient({
         if (rootHandle) {
           postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
         }
+        if (isLocalMode) {
+          postToViewer({ type: "viewerWorkspaceMode", mode: "local" })
+        }
         return
       }
 
@@ -592,7 +609,7 @@ export function PracticeViewerClient({
         return
       }
 
-      if (!material) {
+      if (!resolvedMaterial) {
         return
       }
 
@@ -619,11 +636,54 @@ export function PracticeViewerClient({
         if (!matching || !audioRef.current) return
 
         const audio = audioRef.current
-        const isSame = activeEntryId === entryId && audio.src.endsWith(matching.audioUrl)
+        const currentUrl =
+          isLocalMode && matching.audioUrl.startsWith("workspace://")
+            ? playbackUrlCacheRef.current.get(matching.audioUrl) || ""
+            : matching.audioUrl
+        const isSame = activeEntryId === entryId && currentUrl.length > 0 && audio.src.endsWith(currentUrl)
         if (isSame && !audio.paused) {
           audio.pause()
           setActiveEntryId(null)
           postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: false })
+          return
+        }
+
+        if (isLocalMode && matching.audioUrl.startsWith("workspace://")) {
+          const cachedUrl = playbackUrlCacheRef.current.get(matching.audioUrl)
+          if (cachedUrl) {
+            audio.src = cachedUrl
+            audio.currentTime = 0
+            void audio.play()
+              .then(() => {
+                setActiveEntryId(entryId)
+                postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: true })
+              })
+              .catch((error) => {
+                console.error("Failed to play anchored audio:", error)
+                setRecordingError("No se pudo reproducir el audio.")
+                setActiveEntryId(null)
+                postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: false })
+              })
+            return
+          }
+
+          void createObjectUrlForWorkspaceFile(matching.audioUrl)
+            .then((nextUrl) => {
+              playbackUrlCacheRef.current.set(matching.audioUrl, nextUrl)
+              audio.src = nextUrl
+              audio.currentTime = 0
+              return audio.play()
+            })
+            .then(() => {
+              setActiveEntryId(entryId)
+              postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: true })
+            })
+            .catch((error) => {
+              console.error("Failed to play anchored audio:", error)
+              setRecordingError("No se pudo reproducir el audio.")
+              setActiveEntryId(null)
+              postToViewer({ type: "anchoredAudioPlaybackState", entryId, playing: false })
+            })
           return
         }
 
@@ -683,11 +743,12 @@ export function PracticeViewerClient({
       activeEntryId,
       closeRecorder,
       hasMaterial,
+      isLocalMode,
       loadPositions,
-      material,
       positions,
       postToViewer,
       replacePairDraft,
+      resolvedMaterial,
       startRecording,
       stopPreviewPlayback,
       syncPositionsToViewer,
@@ -695,6 +756,61 @@ export function PracticeViewerClient({
       uploadPracticeFragment,
     ]
   )
+
+  useEffect(() => {
+    setResolvedMaterial(material)
+  }, [material])
+
+  useEffect(() => {
+    if (!isLocalMode || material || !Number.isInteger(materialId)) return
+
+    let cancelled = false
+
+    void (async () => {
+      const localMaterial = await getLocalMaterialById(materialId)
+      if (!localMaterial || cancelled) return
+
+      setResolvedMaterial({
+        id: localMaterial.id,
+        subjectId: localMaterial.subject_id,
+        subjectName: getSubjectById(localMaterial.subject_id)?.name.replace("\n", " ") || localMaterial.subject_id,
+        sessionDate: localMaterial.session_date,
+        weekNumber: localMaterial.week_number,
+        weekdayIndex: localMaterial.weekday_index,
+        fileName: localMaterial.file_name,
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isLocalMode, material, materialId])
+
+  useEffect(() => {
+    if (!isLocalMode || !resolvedMaterial?.id) return
+
+    let cancelled = false
+
+    void (async () => {
+      const localMaterial = await getLocalMaterialById(resolvedMaterial.id)
+      if (!localMaterial?.drive_file_id || cancelled) return
+
+      const nextUrl = await createObjectUrlForWorkspaceFile(localMaterial.drive_file_id)
+      if (cancelled) {
+        URL.revokeObjectURL(nextUrl)
+        return
+      }
+
+      setMaterialFileUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous)
+        return nextUrl
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isLocalMode, resolvedMaterial?.id])
 
   useEffect(() => {
     void loadPositions()
@@ -747,14 +863,31 @@ export function PracticeViewerClient({
       stopMediaTracks()
       stopPreviewPlayback()
       disposePairDraft(pairDraftRef.current)
+      if (materialFileUrl) {
+        URL.revokeObjectURL(materialFileUrl)
+      }
+      playbackUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
+      playbackUrlCacheRef.current.clear()
     }
-  }, [discardRecording, disposePairDraft, stopMediaTracks, stopPreviewPlayback])
+  }, [discardRecording, disposePairDraft, materialFileUrl, stopMediaTracks, stopPreviewPlayback])
+
+  if (isLocalMode && Number.isInteger(materialId) && (!resolvedMaterial || !materialFileUrl)) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
+        <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-6">
+          <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Visor PDF</p>
+          <h1 className="mt-3 text-2xl font-semibold">Abriendo material local</h1>
+          <p className="mt-3 text-sm text-slate-300">Recuperando el PDF desde la carpeta seleccionada.</p>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <iframe
         ref={iframeRef}
-        title={`Visor PDF: ${material?.fileName || "fragmentador"}`}
+        title={`Visor PDF: ${resolvedMaterial?.fileName || "fragmentador"}`}
         src={viewerSrc}
         className="h-screen w-full border-0"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -763,6 +896,9 @@ export function PracticeViewerClient({
           syncPositionsToViewer(hasMaterial ? positions : [])
           if (rootHandle) {
             postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
+          }
+          if (isLocalMode) {
+            postToViewer({ type: "viewerWorkspaceMode", mode: "local" })
           }
         }}
       />
@@ -782,14 +918,14 @@ export function PracticeViewerClient({
         </div>
       ) : null}
 
-      {material && isPairModalOpen && pairDraft ? (
+      {resolvedMaterial && isPairModalOpen && pairDraft ? (
         <div className="fixed inset-0 z-[1500] flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-xl rounded-3xl border border-amber-200/30 bg-[#efe2ad] p-6 text-slate-950 shadow-2xl">
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-[0.24em] text-slate-700">Audio anclado</p>
               <h2 className="text-2xl font-semibold">Dupla pregunta / respuesta</h2>
               <p className="text-sm text-slate-700">
-                {material.subjectName} - {material.sessionDate} - pagina {pairDraft.anchor.pageNum}
+                {resolvedMaterial.subjectName} - {resolvedMaterial.sessionDate} - pagina {pairDraft.anchor.pageNum}
               </p>
               <p className="text-xs text-slate-600">
                 El primer audio entra como pregunta. Puedes arrastrar los bloques para intercambiar roles.

@@ -1,6 +1,13 @@
 "use client"
 
+import { getWorkspaceCronogramaObjectUrl } from "@/lib/local-workspace-data"
+import { isLocalStorageMode } from "@/lib/storage-mode"
+
 export function buildCronogramaViewerHref(fileName: string) {
+  if (isLocalStorageMode()) {
+    return "#"
+  }
+
   const searchParams = new URLSearchParams({
     resourceType: "cronograma",
     file: "/api/cronograma/file",
@@ -11,6 +18,22 @@ export function buildCronogramaViewerHref(fileName: string) {
   return `/pdfjs/web/viewer.html?${searchParams.toString()}#locale=es-AR`
 }
 
-export function openCronogramaViewer(fileName: string) {
+export async function openCronogramaViewer(fileName: string) {
+  if (isLocalStorageMode()) {
+    const fileUrl = await getWorkspaceCronogramaObjectUrl()
+    if (!fileUrl) {
+      throw new Error("No se encontro el cronograma local.")
+    }
+
+    const searchParams = new URLSearchParams({
+      resourceType: "cronograma",
+      file: fileUrl,
+      fileName,
+      key: `cronograma-local-${Date.now()}`,
+    })
+    window.location.assign(`/pdfjs/web/viewer.html?${searchParams.toString()}#locale=es-AR`)
+    return
+  }
+
   window.location.assign(buildCronogramaViewerHref(fileName))
 }

@@ -1,19 +1,17 @@
+import {
+  appendLocalSocraticReviewTurn,
+  getLocalSocraticReviewSettings,
+  saveLocalSocraticReviewSettings,
+} from "@/lib/local-workspace-data"
 import { requireOkJson } from "@/lib/client/api"
 import { isLocalStorageMode } from "@/lib/storage-mode"
+import { getSubjectById } from "@/lib/subjects"
 import type {
   GroqModelOption,
   SocraticReviewGeneratedTurn,
   SocraticReviewQueuePayload,
   SocraticReviewSettings,
 } from "@/lib/study-types"
-
-function getLocalSettingsKey() {
-  return "local-socratic-review-settings"
-}
-
-function getLocalTurnsKey() {
-  return "local-socratic-review-turns"
-}
 
 export async function fetchSocraticReviewQueue(params: {
   subjectId: string
@@ -43,7 +41,7 @@ export async function fetchSocraticReviewQueue(params: {
         return {
           pairId,
           subjectId: question.subject_id,
-          subjectName: question.subject_id,
+          subjectName: getSubjectById(question.subject_id)?.name.replace("\n", " ") || question.subject_id,
           weekNumber: question.week_number,
           sessionDate: question.session_date,
           orderIndex: question.order_index,
@@ -59,7 +57,7 @@ export async function fetchSocraticReviewQueue(params: {
 
     return {
       subjectId: params.subjectId,
-      subjectName: params.subjectId,
+      subjectName: getSubjectById(params.subjectId)?.name.replace("\n", " ") || params.subjectId,
       weekNumber: weekNumber ?? 0,
       items,
     } satisfies SocraticReviewQueuePayload
@@ -78,6 +76,10 @@ export async function fetchSocraticReviewQueue(params: {
 }
 
 export async function fetchGroqModels() {
+  if (isLocalStorageMode()) {
+    return { models: [] as GroqModelOption[] }
+  }
+
   const response = await fetch("/api/groq/models")
   return requireOkJson<{ models: GroqModelOption[] }>(
     response,
@@ -87,10 +89,7 @@ export async function fetchGroqModels() {
 
 export async function fetchSocraticReviewSettings() {
   if (isLocalStorageMode()) {
-    if (typeof window === "undefined") {
-      return { selectedModel: null }
-    }
-    return JSON.parse(window.localStorage.getItem(getLocalSettingsKey()) || '{"selectedModel":null}') as SocraticReviewSettings
+    return getLocalSocraticReviewSettings()
   }
 
   const response = await fetch("/api/socratic-review/settings")
@@ -102,11 +101,7 @@ export async function fetchSocraticReviewSettings() {
 
 export async function saveSocraticReviewSettings(selectedModel: string) {
   if (isLocalStorageMode()) {
-    const payload = { selectedModel }
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(getLocalSettingsKey(), JSON.stringify(payload))
-    }
-    return payload
+    return saveLocalSocraticReviewSettings(selectedModel)
   }
 
   const response = await fetch("/api/socratic-review/settings", {
@@ -123,10 +118,6 @@ export async function saveSocraticReviewSettings(selectedModel: string) {
 
 export async function generateSocraticReviewTurn(params: { pairId: string; modelId: string }) {
   if (isLocalStorageMode()) {
-    const turns =
-      typeof window !== "undefined"
-        ? JSON.parse(window.localStorage.getItem(getLocalTurnsKey()) || "[]")
-        : []
     const nextTurn = {
       turnId: Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
       pairId: params.pairId,
@@ -137,10 +128,7 @@ export async function generateSocraticReviewTurn(params: { pairId: string; model
       fallbackUsed: true,
       modelId: params.modelId,
     } satisfies SocraticReviewGeneratedTurn
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(getLocalTurnsKey(), JSON.stringify([...turns, nextTurn]))
-    }
-    return nextTurn
+    return appendLocalSocraticReviewTurn(nextTurn)
   }
 
   const response = await fetch("/api/socratic-review/generate", {

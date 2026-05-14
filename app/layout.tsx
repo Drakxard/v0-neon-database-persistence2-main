@@ -44,7 +44,7 @@ export default function RootLayout({
           >
             {children}
             <Toaster />
-            <Analytics />
+            {!localMode ? <Analytics /> : null}
           </ThemeProvider>
         </LocalWorkspaceProvider>
       </body>

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
+import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
 import {
   ensureWorkspaceSubdirectories,
   loadWorkspaceHandle,
@@ -38,7 +39,7 @@ function WorkspaceModal({
         </h2>
         <p className="mt-3 text-sm text-slate-300">
           La app va a guardar y reutilizar una carpeta raiz local. Dentro de esa carpeta se crean o reutilizan
-          automaticamente las subcarpetas `teoria/` y `practica/`.
+          automaticamente las subcarpetas `cronograma/`, `teoria/`, `practica/`, `audio/` y `manifests/`.
         </p>
         {!supportsWorkspacePicker() ? (
           <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
@@ -135,13 +136,52 @@ export function LocalWorkspaceProvider({
     }
   }, [enabled])
 
+  useEffect(() => {
+    if (!enabled || !rootHandle) return
+
+    let cancelled = false
+
+    const validatePermission = async () => {
+      const restoredPermission = await queryWorkspacePermission(rootHandle)
+      if (restoredPermission === "granted") return
+
+      const requestedPermission = await requestWorkspacePermission(rootHandle)
+      if (requestedPermission === "granted") return
+
+      if (cancelled) return
+      setRootHandle(null)
+      setPermissionState(requestedPermission)
+      setNeedsPrompt(true)
+      setIsReady(false)
+      setError("Se perdio el permiso de la carpeta local. Vuelve a seleccionarla para continuar.")
+    }
+
+    const handleFocus = () => {
+      void validatePermission()
+    }
+
+    window.addEventListener("focus", handleFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", handleFocus)
+    }
+  }, [enabled, rootHandle])
+
   const reselectWorkspace = async () => {
-    setError("")
-    const handle = await pickWorkspaceRootHandle()
-    setRootHandle(handle)
-    setPermissionState("granted")
-    setNeedsPrompt(false)
-    setIsReady(true)
+    try {
+      setError("")
+      const handle = await pickWorkspaceRootHandle()
+      setRootHandle(handle)
+      setPermissionState("granted")
+      setNeedsPrompt(false)
+      setIsReady(true)
+    } catch (workspaceError) {
+      setRootHandle(null)
+      setPermissionState("prompt")
+      setNeedsPrompt(true)
+      setIsReady(false)
+      setError(workspaceError instanceof Error ? workspaceError.message : "No se pudo seleccionar la carpeta local.")
+    }
   }
 
   const value = useMemo<LocalWorkspaceContextValue>(
@@ -156,7 +196,8 @@ export function LocalWorkspaceProvider({
 
   return (
     <LocalWorkspaceContext.Provider value={value}>
-      {children}
+      {enabled && isReady ? <LocalFetchInterceptor /> : null}
+      {!enabled || isReady ? children : null}
       {enabled && needsPrompt ? (
         <WorkspaceModal isRecovering={permissionState !== "prompt"} error={error} onSelect={reselectWorkspace} />
       ) : null}

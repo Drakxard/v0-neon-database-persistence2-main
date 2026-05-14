@@ -23,6 +23,7 @@ import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/
 import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
 import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
+import { createObjectUrlForWorkspaceFile, isWorkspaceFileId } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import {
   fetchGroqModels,
@@ -175,6 +176,10 @@ function buildMaterialViewerHref(materialId: number) {
   })
 
   return `/practice/viewer?${searchParams.toString()}`
+}
+
+function buildEntryAudioApiHref(entryId: number) {
+  return `/api/subject-day-entries/${entryId}/audio`
 }
 
 function buildSynthesisHref(params: {
@@ -1372,17 +1377,38 @@ export function SubjectWheel({
       return
     }
 
-    const nextSrc = `/api/subject-day-entries/${nextPlaybackItem.entryId}/audio`
-    if (audio.src !== new URL(nextSrc, window.location.origin).toString()) {
-      audio.src = nextSrc
-      audio.load()
+    const playAudio = async () => {
+      try {
+        let nextSrc = buildEntryAudioApiHref(nextPlaybackItem.entryId)
+
+        if (LOCAL_STORAGE_MODE) {
+          const cachedUrl = audioCacheRef.current.get(nextPlaybackItem.entryId)
+          if (cachedUrl) {
+            nextSrc = cachedUrl
+          } else {
+            const matchingEntry = entries.find((entry) => entry.id === nextPlaybackItem.entryId) ?? null
+            if (matchingEntry) {
+              const localUrl = await ensureLocalAudioSource(matchingEntry)
+              if (localUrl) nextSrc = localUrl
+            }
+          }
+        }
+
+        const normalizedNextSrc = new URL(nextSrc, window.location.origin).toString()
+        if (audio.src !== normalizedNextSrc) {
+          audio.src = nextSrc
+          audio.load()
+        }
+
+        await audio.play()
+      } catch (error) {
+        console.error("Failed to play synthesis queue audio:", error)
+        setIsSynthesisPlaybackActive(false)
+      }
     }
 
-    void audio.play().catch((error) => {
-      console.error("Failed to play synthesis queue audio:", error)
-      setIsSynthesisPlaybackActive(false)
-    })
-  }, [isSynthesisPlaybackActive, synthesisPlaybackIndex, synthesisPlaybackQueue])
+    void playAudio()
+  }, [ensureLocalAudioSource, entries, isSynthesisPlaybackActive, synthesisPlaybackIndex, synthesisPlaybackQueue])
 
   useEffect(() => {
     const currentQuestion = practiceQuestions[currentPracticeIndex]
@@ -1695,6 +1721,21 @@ export function SubjectWheel({
     audioPairDraftRef.current = audioPairDraft
   }, [audioPairDraft])
 
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE) return
+
+    const candidateEntries = [
+      ...entries.filter((entry) => entryHasAudio(entry)),
+      ...(continuePayload?.previousFeaturedEntry && entryHasAudio(continuePayload.previousFeaturedEntry)
+        ? [continuePayload.previousFeaturedEntry]
+        : []),
+    ]
+
+    candidateEntries.forEach((entry) => {
+      void ensureLocalAudioSource(entry)
+    })
+  }, [continuePayload?.previousFeaturedEntry, ensureLocalAudioSource, entries])
+
   const disposeReviewAudio = (nextAudio?: ReviewAudio | null) => {
     if (reviewAudio && reviewAudio !== nextAudio) {
       URL.revokeObjectURL(reviewAudio.url)
@@ -1707,6 +1748,30 @@ export function SubjectWheel({
       if (audio?.source === "local") URL.revokeObjectURL(audio.url)
     })
   }, [])
+
+  const ensureLocalAudioSource = useCallback(
+    async (entry: Pick<SubjectDayEntry, "id" | "drive_file_id"> | null | undefined) => {
+      if (!LOCAL_STORAGE_MODE || !entry?.drive_file_id || !isWorkspaceFileId(entry.drive_file_id)) {
+        return null
+      }
+
+      const cached = audioCacheRef.current.get(entry.id)
+      if (cached) return cached
+
+      const nextUrl = await createObjectUrlForWorkspaceFile(entry.drive_file_id)
+      audioCacheRef.current.set(entry.id, nextUrl)
+      setAudioSourceUrls((previous) =>
+        previous[entry.id] === nextUrl
+          ? previous
+          : {
+              ...previous,
+              [entry.id]: nextUrl,
+            }
+      )
+      return nextUrl
+    },
+    []
+  )
 
   const clearPendingFeaturedSave = () => {
     if (pendingFeaturedSaveTimerRef.current) {
@@ -2474,7 +2539,7 @@ export function SubjectWheel({
       slots: {
         question: questionEntry
           ? {
-              url: `/api/subject-day-entries/${questionEntry.id}/audio`,
+              url: audioSourceUrls[questionEntry.id] || buildEntryAudioApiHref(questionEntry.id),
               mimeType: questionEntry.drive_mime_type || "audio/webm",
               blob: null,
               source: "persisted",
@@ -2484,7 +2549,7 @@ export function SubjectWheel({
           : null,
         answer: answerEntry
           ? {
-              url: `/api/subject-day-entries/${answerEntry.id}/audio`,
+              url: audioSourceUrls[answerEntry.id] || buildEntryAudioApiHref(answerEntry.id),
               mimeType: answerEntry.drive_mime_type || "audio/webm",
               blob: null,
               source: "persisted",
@@ -3115,7 +3180,7 @@ export function SubjectWheel({
         return
       }
 
-      openCronogramaViewer(remoteCronograma.fileName)
+      await openCronogramaViewer(remoteCronograma.fileName)
     } catch (error) {
       console.error("Failed to open cronograma PDF:", error)
       toast({
@@ -3149,7 +3214,7 @@ export function SubjectWheel({
       try {
         const savedCronograma = await uploadCronogramaPdf(file)
         setCronogramaPdfName(savedCronograma.fileName)
-        openCronogramaViewer(savedCronograma.fileName)
+        await openCronogramaViewer(savedCronograma.fileName)
       } catch (error) {
         console.error("Failed to save cronograma PDF:", error)
         toast({
@@ -3513,20 +3578,25 @@ export function SubjectWheel({
 
       let nextUrl = audioCacheRef.current.get(entryId)
       if (!nextUrl) {
-        setLoadingAudioEntryId(entryId)
-        const response = await fetch(`/api/subject-day-entries/${entryId}/audio`)
-        if (!response.ok) {
-          const payload = await parseJsonResponse(response)
-          throw new Error(getErrorMessage(payload, "No se pudo descargar el audio."))
-        }
+        const localEntry = LOCAL_STORAGE_MODE ? entries.find((entry) => entry.id === entryId) ?? null : null
+        if (localEntry?.drive_file_id && isWorkspaceFileId(localEntry.drive_file_id)) {
+          nextUrl = await ensureLocalAudioSource(localEntry)
+        } else {
+          setLoadingAudioEntryId(entryId)
+          const response = await fetch(buildEntryAudioApiHref(entryId))
+          if (!response.ok) {
+            const payload = await parseJsonResponse(response)
+            throw new Error(getErrorMessage(payload, "No se pudo descargar el audio."))
+          }
 
-        const blob = await response.blob()
-        nextUrl = URL.createObjectURL(blob)
-        audioCacheRef.current.set(entryId, nextUrl)
-        setAudioSourceUrls((previous) => ({
-          ...previous,
-          [entryId]: nextUrl!,
-        }))
+          const blob = await response.blob()
+          nextUrl = URL.createObjectURL(blob)
+          audioCacheRef.current.set(entryId, nextUrl)
+          setAudioSourceUrls((previous) => ({
+            ...previous,
+            [entryId]: nextUrl!,
+          }))
+        }
       }
 
       setExpandedAudioEntryId(entryId)
@@ -6222,7 +6292,7 @@ export function SubjectWheel({
                           key={continuePayload.previousFeaturedEntry.id}
                           controls
                           preload="none"
-                          src={`/api/subject-day-entries/${continuePayload.previousFeaturedEntry.id}/audio`}
+                          src={audioSourceUrls[continuePayload.previousFeaturedEntry.id] || buildEntryAudioApiHref(continuePayload.previousFeaturedEntry.id)}
                           className="block w-full min-w-0"
                         />
                       </div>
@@ -7105,7 +7175,7 @@ export function SubjectWheel({
                                   <p className="truncate text-lg font-semibold text-foreground">{getEntryDisplayTitle(entry)}</p>
                                 </div>
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                                  <audio controls preload="none" src={`/api/subject-day-entries/${entry.id}/audio`} className="sm:w-[320px]" />
+                                  <audio controls preload="none" src={audioSourceUrls[entry.id] || buildEntryAudioApiHref(entry.id)} className="sm:w-[320px]" />
                                   <Button
                                     type="button"
                                     variant="outline"
@@ -7401,7 +7471,7 @@ export function SubjectWheel({
                                   ref={socraticAnswerAudioRef}
                                   controls
                                   preload="none"
-                                  src={`/api/subject-day-entries/${socraticTurn.answerEntryId}/audio`}
+                                  src={audioSourceUrls[socraticTurn.answerEntryId] || buildEntryAudioApiHref(socraticTurn.answerEntryId)}
                                   className="w-full"
                                 />
                               ) : null}

@@ -87,8 +87,11 @@ export async function requestWorkspacePermission(handle: FileSystemDirectoryHand
 }
 
 export async function ensureWorkspaceSubdirectories(rootHandle: FileSystemDirectoryHandle) {
+  await rootHandle.getDirectoryHandle("cronograma", { create: true })
   await rootHandle.getDirectoryHandle("teoria", { create: true })
   await rootHandle.getDirectoryHandle("practica", { create: true })
+  await rootHandle.getDirectoryHandle("audio", { create: true })
+  await rootHandle.getDirectoryHandle("manifests", { create: true })
 }
 
 export async function pickWorkspaceRootHandle() {

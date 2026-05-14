@@ -1,4 +1,5 @@
 import { requireOkJson } from "@/lib/client/api"
+import { getLocalSynthesisProgress, saveLocalSynthesisProgress } from "@/lib/local-workspace-data"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type { SubjectSynthesisSubjectPayload } from "@/lib/study-types"
 
@@ -22,11 +23,7 @@ export async function fetchSubjectSynthesisMaterials(subjectId: string, weekNumb
 
     const materials = await requireOkJson<any[]>(materialsResponse, "No se pudo cargar la sintesis por archivo.")
     const entries = await requireOkJson<any[]>(entriesResponse, "No se pudo cargar la sintesis por archivo.")
-    const storageKey = `local-synthesis:${subjectId}:${weekNumber}`
-    const progress =
-      typeof window !== "undefined"
-        ? JSON.parse(window.localStorage.getItem(storageKey) || "[]")
-        : []
+    const progress = await getLocalSynthesisProgress(subjectId, weekNumber)
 
     return {
       subjectId,
@@ -63,9 +60,7 @@ export async function saveSubjectSynthesisMaterials(input: {
   }>
 }) {
   if (isLocalStorageMode()) {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(`local-synthesis:${input.subjectId}:${input.weekNumber}`, JSON.stringify(input.items))
-    }
+    await saveLocalSynthesisProgress(input.subjectId, input.weekNumber, input.items)
     return fetchSubjectSynthesisMaterials(input.subjectId, input.weekNumber)
   }
 
