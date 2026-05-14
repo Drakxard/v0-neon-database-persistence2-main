@@ -13,7 +13,7 @@ export default async function LoginPage({
   const emailParam = typeof resolvedSearchParams.email === "string" ? resolvedSearchParams.email : ""
 
   if (isLocalStorageMode()) {
-    redirect(nextParam)
+    redirect("/")
   }
 
   return (
