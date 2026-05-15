@@ -3901,22 +3901,6 @@ export function SubjectWheel({
     setIsDialogOpen(true)
   }, [flushPendingFeaturedUpdate, flushPendingSynthesisAutosaves, resetSynthesisPlayback, resetSubjectUiState, synthesisSelectedSubject, synthesisViewMode])
 
-  // Practice modal functions
-  const openPracticeModal = () => {
-    setPracticeLaunchView("exercises")
-    setPracticeSubjectIndex(null)
-    setPracticeSubjectId("")
-    setPracticeWeekNumber(String(getCurrentWeekNumber()))
-    setPracticeFilters({ random: false, unanswered: false, erre: false })
-    setPracticeEntries([])
-    setPracticeVisibleEntries([])
-    setPracticeLoadError("")
-    setCurrentPracticeIndex(0)
-    setIsPracticeFinished(false)
-    setIsAnswerRevealed(false)
-    setIsPracticeOpen(true)
-  }
-
   const openExercisesPracticeSubject = async (subjectId: string) => {
     await flushPendingFeaturedUpdate()
     const subject = getSubjectById(subjectId, visibleSubjects)
@@ -3930,13 +3914,6 @@ export function SubjectWheel({
     setExerciseWeeklyScopeEnabled(true)
     setPracticeSectionView("exercises")
     setIsDialogOpen(true)
-  }
-
-  const openReviewModal = () => {
-    setReviewSubjectId("")
-    setReviewEntries([])
-    setReviewError("")
-    setIsReviewOpen(true)
   }
 
   const stopSocraticPlayback = useCallback(() => {
@@ -4146,11 +4123,6 @@ export function SubjectWheel({
     },
     [loadSocraticTurnForPair, stopSocraticPlayback]
   )
-
-  const openSocraticReviewModal = () => {
-    resetSocraticReviewSession()
-    setIsSocraticReviewOpen(true)
-  }
 
   const handleSocraticDialogChange = (open: boolean) => {
     setIsSocraticReviewOpen(open)
@@ -4692,10 +4664,8 @@ export function SubjectWheel({
   const renderMaterialManagerSection = (mode: ContinueMode) => {
     const isTheorySection = mode === "theory"
     const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
-    const coverageItems = getCoverageForMode(mode)
     const title = isTheorySection ? "Teoria" : "Practica"
     const isDropActive = dragOverMaterialType === mode
-    const isUploadingThisMode = isUploadingMaterialType === mode
     const emptyLabel = isWeeklyExercisesScope
       ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
@@ -4714,13 +4684,6 @@ export function SubjectWheel({
         <div className="flex flex-col gap-2">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
-            <p className="text-sm text-muted-foreground">
-              {isDropActive
-                ? "Suelta los PDFs aqui."
-                : isUploadingThisMode
-                  ? "Subiendo PDFs..."
-                  : "Arrastra uno o varios PDFs aqui."}
-            </p>
           </div>
         </div>
 
@@ -4730,10 +4693,7 @@ export function SubjectWheel({
               <div key={material.id} className="rounded-xl border border-border bg-card px-3 py-3">
                 {"is_pending_upload" in material ? (
                   <div className="space-y-2">
-                    <span className="inline-flex min-w-0 items-center gap-2 truncate text-sm text-muted-foreground">
-                      <Checkbox checked={false} disabled />
-                      <span className="truncate">{material.file_name}</span>
-                    </span>
+                    <span className="block min-w-0 truncate text-sm text-muted-foreground">{material.file_name}</span>
                     {isWeeklyExercisesScope ? (
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {getWeekdayLabel(material.session_date)} {material.session_date}
@@ -4745,51 +4705,23 @@ export function SubjectWheel({
                     </span>
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      {(() => {
-                      const coverage = coverageItems.find((item) => item.id === material.id)
-                      const coverageLabel =
-                        coverage?.status === "cubierto_minimo"
-                          ? "Cubierto minimo"
-                          : coverage?.status === "tocado_sin_dupla"
-                            ? "Tocado sin dupla"
-                            : "Sin tocar"
-                      const coverageClassName =
-                        coverage?.status === "cubierto_minimo"
-                          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                          : coverage?.status === "tocado_sin_dupla"
-                            ? "border-amber-300 bg-amber-50 text-amber-700"
-                            : "border-red-300 bg-red-50 text-red-700"
-
-                      return (
-                        <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] ${coverageClassName}`}>
-                          {coverageLabel}
-                        </span>
-                      )
-                    })()}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => void deleteMaterial(material)}
-                        disabled={isDeletingMaterialId === material.id}
-                        className="h-7 w-7 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                        aria-label={`Borrar ${material.file_name}`}
-                      >
-                        {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                      </Button>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        checked={material.is_checkup_done}
-                        onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
-                      />
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
                       <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                         {material.file_name}
                       </span>
                     </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void deleteMaterial(material)}
+                      disabled={isDeletingMaterialId === material.id}
+                      className="h-7 w-7 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      aria-label={`Borrar ${material.file_name}`}
+                    >
+                      {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                    </Button>
                   </div>
                 )}
               </div>
@@ -4802,30 +4734,6 @@ export function SubjectWheel({
         </div>
       </section>
     )
-  }
-
-  const handleReset = async () => {
-    try {
-      const scheduledSubjects = getDisplaySubjectsForDate(homeSelectedDate, showAllSubjectsForDay, visibleSubjects)
-      const scheduledSubjectIds = scheduledSubjects.map((subject) => subject.id)
-      
-      // Reset local state
-      setActiveSubjects(scheduledSubjects)
-      setCompletedSubjects([])
-      setAllCompletedSubjectIds([])
-      setHistory([])
-      setHistoryIndex(-1)
-
-      // Delete today's session from database
-      await saveDailySession({
-        date: currentDateKey,
-        activeSubjectIds: scheduledSubjectIds,
-        completedSubjects: {},
-        showAllSubjects: showAllSubjectsForDay,
-      })
-    } catch (error) {
-      console.error("[v0] Failed to reset:", error)
-    }
   }
 
   const handleShowAllSubjectsChange = (checked: boolean) => {
@@ -5133,36 +5041,6 @@ export function SubjectWheel({
             </div>
 
             <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <Button
-                onClick={openPracticeModal}
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Practica"
-                title="Practica"
-              >
-                <GraduationCap className="h-4 w-4" />
-              </Button>
-              <Button
-                onClick={openReviewModal}
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Destacado"
-                title="Destacado"
-              >
-                <Sparkles className="h-4 w-4" />
-              </Button>
-              <Button
-                onClick={openSocraticReviewModal}
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Repaso socratico"
-                title="Repaso socratico"
-              >
-                <Mic className="h-4 w-4" />
-              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -5220,14 +5098,6 @@ export function SubjectWheel({
                   <BarChart3 className="h-4 w-4" />
                 </a>
               </Button>
-              <button
-                onClick={handleReset}
-                className="shrink-0 rounded-full border border-transparent p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground sm:p-2.5"
-                aria-label="Reiniciar"
-                title="Reiniciar todas las materias"
-              >
-                <RotateCcw className="h-5 w-5" />
-              </button>
             </div>
           </div>
 
