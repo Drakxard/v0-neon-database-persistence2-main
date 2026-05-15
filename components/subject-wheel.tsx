@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, ExternalLink, FilePenLine, Loader2, Palette, Plus, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -26,6 +26,7 @@ import { saveDailySession } from "@/lib/daily-study-client"
 import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import { createObjectUrlForWorkspaceFile, isWorkspaceFileId } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
+import { cn } from "@/lib/utils"
 import {
   fetchGroqModels,
   fetchSocraticReviewQueue,
@@ -138,39 +139,6 @@ type SynthesisSubjectState = {
   error: string
 }
 
-function buildMaterialDraftViewerHref(params: {
-  subjectId: string
-  subjectName: string
-  sessionDate: string
-  weekNumber: number
-  weekdayIndex: number
-  materialType: SubjectDayMaterialType
-}) {
-  const searchParams = new URLSearchParams({
-    subjectId: params.subjectId,
-    subjectName: params.subjectName,
-    sessionDate: params.sessionDate,
-    weekNumber: String(params.weekNumber),
-    weekdayIndex: String(params.weekdayIndex),
-    materialType: params.materialType,
-  })
-
-  return `/practice/viewer?${searchParams.toString()}`
-}
-
-function buildPracticeDraftViewerHref(params: {
-  subjectId: string
-  subjectName: string
-  sessionDate: string
-  weekNumber: number
-  weekdayIndex: number
-}) {
-  return buildMaterialDraftViewerHref({
-    ...params,
-    materialType: "practice",
-  })
-}
-
 function buildMaterialViewerHref(materialId: number) {
   const searchParams = new URLSearchParams({
     materialId: String(materialId),
@@ -201,18 +169,8 @@ function buildSynthesisHref(params: {
   return `/?${searchParams.toString()}`
 }
 
-function openHrefInNewTab(href: string) {
-  window.open(href, "_blank", "noopener,noreferrer")
-}
-
 function isPlainLeftClick(event: React.MouseEvent<HTMLElement>) {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
-}
-
-function handleAuxClickNavigation(event: React.MouseEvent<HTMLElement>, href: string) {
-  if (event.button !== 1) return
-  event.preventDefault()
-  openHrefInNewTab(href)
 }
 
 interface ReviewAudio {
@@ -285,29 +243,6 @@ function getVectorDayLabel(currentDay: number | null, hasVector: boolean) {
   if (!hasVector || currentDay == null) return "Sin teoria"
   if (currentDay === 0) return "Inicio"
   return `Dia ${currentDay}`
-}
-
-function getVectorDayTone(currentDay: number | null, hasVector: boolean) {
-  if (!hasVector || currentDay == null) {
-    return "border-border bg-muted/30 text-muted-foreground"
-  }
-  if (currentDay >= 5) {
-    return "border-red-300 bg-red-50 text-red-700"
-  }
-  if (currentDay >= 3) {
-    return "border-amber-300 bg-amber-50 text-amber-700"
-  }
-  return "border-emerald-300 bg-emerald-50 text-emerald-700"
-}
-
-function getCurrentSubjectVectorBadgeLabel(summary: {
-  currentDay: number | null
-  hasVector: boolean
-  hasTheory: boolean
-}) {
-  if (summary.hasVector) return getVectorDayLabel(summary.currentDay, true)
-  if (summary.hasTheory) return "Teoria cargada"
-  return "Sin teoria"
 }
 
 type ManualEntryTarget = {
@@ -979,11 +914,11 @@ export function SubjectWheel({
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
   const [continueMode, setContinueMode] = useState<ContinueMode>("practice")
+  const [dragOverMaterialType, setDragOverMaterialType] = useState<ContinueMode | null>(null)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
-  const theoryFileInputRef = useRef<HTMLInputElement | null>(null)
-  const practiceFileInputRef = useRef<HTMLInputElement | null>(null)
   const cronogramaFileInputRef = useRef<HTMLInputElement | null>(null)
+  const materialDropDepthRef = useRef<Record<ContinueMode, number>>({ theory: 0, practice: 0 })
   const [cronogramaPdfName, setCronogramaPdfName] = useState("")
   const [isCronogramaLoading, setIsCronogramaLoading] = useState(false)
 
@@ -2077,24 +2012,6 @@ export function SubjectWheel({
     setDialogDateKey(formatDateKey(nextDate))
   }
 
-  const openWeekAudioDay = async (dateKey: string) => {
-    await flushPendingFeaturedUpdate()
-    setStackedDayViewReturnState({
-      source: "day-stack",
-      dialogDateKey,
-      practiceSectionView,
-      exerciseWeeklyScopeEnabled,
-      subjectViewDateOverride,
-      dialogShowAllSubjectsForDay,
-      selectedPracticeMaterialId,
-    })
-    setDialogDateKey(dateKey)
-    setPracticeSectionView("theory")
-    setExerciseWeeklyScopeEnabled(false)
-    setSubjectViewDateOverride(null)
-    setSelectedPracticeMaterialId(null)
-  }
-
   const returnToCurrentDayView = async () => {
     await flushPendingFeaturedUpdate()
     setSubjectViewDateOverride(null)
@@ -2922,14 +2839,6 @@ export function SubjectWheel({
     }
   }
 
-  const copyEntriesForMaterial = async (materialId: number) => {
-    await copyEntries(practiceEntriesByMaterialId[materialId] ?? [], "Contenido del PDF copiado al portapapeles")
-  }
-
-  const copyEntriesForSession = async (sessionDate: string) => {
-    await copyEntries(entries.filter((entry) => entry.session_date === sessionDate), "Contenido del dia copiado al portapapeles")
-  }
-
   const toggleFeaturedEntry = (entry: SubjectDayEntry) => {
     const nextIsFeatured = !entry.is_featured
     pendingFeaturedUpdateRef.current = {
@@ -3323,6 +3232,46 @@ export function SubjectWheel({
         variant: "destructive",
       })
     }
+  }
+
+  const dataTransferHasFiles = (dataTransfer: DataTransfer | null) => {
+    if (!dataTransfer) return false
+    return Array.from(dataTransfer.types).includes("Files")
+  }
+
+  const handleMaterialDragEnter = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+    if (!dataTransferHasFiles(event.dataTransfer)) return
+    event.preventDefault()
+    materialDropDepthRef.current[mode] += 1
+    setDragOverMaterialType(mode)
+  }
+
+  const handleMaterialDragOver = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+    if (!dataTransferHasFiles(event.dataTransfer)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "copy"
+    if (dragOverMaterialType !== mode) {
+      setDragOverMaterialType(mode)
+    }
+  }
+
+  const handleMaterialDragLeave = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+    if (!dataTransferHasFiles(event.dataTransfer)) return
+    event.preventDefault()
+    materialDropDepthRef.current[mode] = Math.max(0, materialDropDepthRef.current[mode] - 1)
+    if (materialDropDepthRef.current[mode] === 0 && dragOverMaterialType === mode) {
+      setDragOverMaterialType(null)
+    }
+  }
+
+  const handleMaterialDrop = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+    if (!dataTransferHasFiles(event.dataTransfer)) return
+    event.preventDefault()
+    materialDropDepthRef.current[mode] = 0
+    setDragOverMaterialType(null)
+    const droppedFiles = Array.from(event.dataTransfer.files ?? [])
+    if (droppedFiles.length === 0) return
+    void handleMaterialUpload(mode, droppedFiles)
   }
 
   const loadContinuePayload = async (
@@ -4587,48 +4536,6 @@ export function SubjectWheel({
     () => buildMaterialCoverage(theoryMaterials, practiceEntriesByMaterialId),
     [practiceEntriesByMaterialId, theoryMaterials]
   )
-  const currentSubjectVectorSummary = useMemo(() => {
-    const firstTheoryMaterial = theoryMaterials[0] ?? null
-    const hasTheory = Boolean(currentSubjectOverview?.startDate || firstTheoryMaterial)
-    const relevantCoverage = isTheoryContinueMode
-      ? currentSubjectTheoryCoverage
-      : currentSubjectOverview
-        ? currentSubjectPracticeCoverage.filter((material) =>
-            currentSubjectOverview.relevantPracticeMaterialIds.includes(material.id)
-          )
-        : currentSubjectPracticeCoverage
-    const coveredCount = relevantCoverage.filter((material) => material.status === "cubierto_minimo").length
-
-    return {
-      hasVector: Boolean(currentSubjectOverview),
-      hasTheory,
-      startDate: currentSubjectOverview?.startDate ?? firstTheoryMaterial?.session_date ?? null,
-      currentDay: currentSubjectOverview?.currentDay ?? null,
-      relevantCount: isTheoryContinueMode
-        ? relevantCoverage.length
-        : currentSubjectOverview
-          ? currentSubjectOverview.relevantPracticeMaterialIds.length
-          : relevantCoverage.length,
-      coveredCount,
-      totalCount: isTheoryContinueMode
-        ? currentSubjectTheoryCoverage.length
-        : currentSubjectOverview?.totalPracticeMaterialIds.length ?? currentSubjectPracticeCoverage.length,
-      stateLabel: currentSubjectOverview?.stateLabel ?? (hasTheory ? "parcial" : "sin_teoria"),
-      severity: currentSubjectOverview?.severity ?? ("yellow" as const),
-      staleReason: isTheoryContinueMode ? [] : currentSubjectOverview?.staleReason ?? [],
-      lastInteractionAt: currentSubjectOverview?.lastInteractionAt ?? null,
-      fragileConcepts: isTheoryContinueMode
-        ? []
-        : entries.filter((entry) => entry.practice_state === "erre"),
-    }
-  }, [
-    currentSubjectOverview,
-    currentSubjectPracticeCoverage,
-    currentSubjectTheoryCoverage,
-    entries,
-    isTheoryContinueMode,
-    theoryMaterials,
-  ])
   const selectedContinueMaterialEntries = useMemo(
     () => (selectedPracticeMaterialId ? entries.filter((entry) => entry.subject_day_material_id === selectedPracticeMaterialId) : []),
     [entries, selectedPracticeMaterialId]
@@ -4718,21 +4625,6 @@ export function SubjectWheel({
       ) ?? null,
     [currentSubject?.id, dialogSelectedWeekNumber, entries]
   )
-  const weekAudioDays = useMemo(() => {
-    const grouped = activeDayEntries.reduce<Record<string, SubjectDayEntry[]>>((accumulator, entry) => {
-      const current = accumulator[entry.session_date] ?? []
-      current.push(entry)
-      accumulator[entry.session_date] = current
-      return accumulator
-    }, {})
-
-    return Object.entries(grouped)
-      .map(([sessionDate, dayEntries]) => ({
-        sessionDate,
-        entries: sortSubjectDayEntries(dayEntries),
-      }))
-      .sort((left, right) => left.sessionDate.localeCompare(right.sessionDate))
-  }, [activeDayEntries])
   const isSubjectDayRefreshing = (isEntriesLoading || isMaterialsLoading) && hasResolvedSubjectDayData
   const shouldShowInitialSubjectDayLoading = (isEntriesLoading || isMaterialsLoading) && !hasResolvedSubjectDayData
   const buildLocalContinuePayload = useCallback((mode: ContinueMode = continueMode): ContinuePayload | null => {
@@ -4801,68 +4693,34 @@ export function SubjectWheel({
     const isTheorySection = mode === "theory"
     const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
     const coverageItems = getCoverageForMode(mode)
-    const title = isTheorySection ? "Archivos teoricos" : "Practica"
-    const description = isTheorySection
-      ? null
-      : "No busques exhaustividad: una dupla fuerte por subtema critico ya cuenta como cobertura minima util."
-    const fileInputRef = isTheorySection ? theoryFileInputRef : practiceFileInputRef
+    const title = isTheorySection ? "Teoria" : "Practica"
+    const isDropActive = dragOverMaterialType === mode
+    const isUploadingThisMode = isUploadingMaterialType === mode
     const emptyLabel = isWeeklyExercisesScope
       ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
-    const continuePayloadPreview = buildLocalContinuePayload(mode)
-    const draftViewerHref =
-      currentSubject
-        ? buildMaterialDraftViewerHref({
-            subjectId: currentSubject.id,
-            subjectName: getSubjectDisplayName(currentSubject),
-            sessionDate: subjectDialogDateKey,
-            weekNumber: dialogSelectedWeekNumber,
-            weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
-            materialType: mode,
-          })
-        : null
-    const continueViewerHref = continuePayloadPreview?.material
-      ? buildMaterialViewerHref(continuePayloadPreview.material.id)
-      : null
 
     return (
-      <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-3 sm:p-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <section
+        onDragEnter={(event) => handleMaterialDragEnter(mode, event)}
+        onDragOver={(event) => handleMaterialDragOver(mode, event)}
+        onDragLeave={(event) => handleMaterialDragLeave(mode, event)}
+        onDrop={(event) => handleMaterialDrop(mode, event)}
+        className={cn(
+          "space-y-3 rounded-2xl border bg-muted/40 p-3 transition-colors sm:p-4",
+          isDropActive ? "border-primary bg-primary/5" : "border-border"
+        )}
+      >
+        <div className="flex flex-col gap-2">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
-            {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
-          </div>
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (!draftViewerHref) return
-                openHrefInNewTab(draftViewerHref)
-              }}
-              disabled={isUploadingMaterialType !== null || !currentSubject}
-              className="h-10 border-border px-0 text-foreground"
-              aria-label={`Abrir visor para fragmentar un PDF de ${getContinueModeLabel(mode)}`}
-            >
-              <ExternalLink className="h-4 w-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploadingMaterialType !== null}
-              className="h-10 border-border px-0 text-foreground"
-            >
-              {isUploadingMaterialType === mode ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void openContinueModal(mode)}
-              onAuxClick={continueViewerHref ? (event) => handleAuxClickNavigation(event, continueViewerHref) : undefined}
-              className="h-10 bg-primary text-primary-foreground"
-            >
-              Continuar
-            </Button>
+            <p className="text-sm text-muted-foreground">
+              {isDropActive
+                ? "Suelta los PDFs aqui."
+                : isUploadingThisMode
+                  ? "Subiendo PDFs..."
+                  : "Arrastra uno o varios PDFs aqui."}
+            </p>
           </div>
         </div>
 
@@ -4928,33 +4786,9 @@ export function SubjectWheel({
                         checked={material.is_checkup_done}
                         onCheckedChange={(checked) => void toggleMaterialCheckup(material, Boolean(checked))}
                       />
-                      <a
-                        href={buildMaterialViewerHref(material.id)}
-                        className="min-w-0 flex-1 truncate text-sm text-foreground hover:underline"
-                      >
+                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                         {material.file_name}
-                      </a>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void openContinueModal(mode, material.id)}
-                        onAuxClick={(event) => handleAuxClickNavigation(event, buildMaterialViewerHref(material.id))}
-                        className="h-9 border-border px-3 text-xs text-foreground"
-                      >
-                        Ver
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => void copyEntriesForMaterial(material.id)}
-                        disabled={(practiceEntriesByMaterialId[material.id] ?? []).length === 0 || isCopyingEntries}
-                        className="h-9 border-border px-3 text-xs text-foreground"
-                      >
-                        Copiar
-                      </Button>
+                      </span>
                     </div>
                   </div>
                 )}
@@ -5970,31 +5804,6 @@ export function SubjectWheel({
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto py-4 sm:py-6 sm:pl-14 sm:pr-14">
-              <input
-                ref={theoryFileInputRef}
-                type="file"
-                accept="application/pdf"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? [])
-                  event.target.value = ""
-                  void handleMaterialUpload("theory", files)
-                }}
-              />
-              <input
-                ref={practiceFileInputRef}
-                type="file"
-                accept="application/pdf"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  const files = Array.from(event.target.files ?? [])
-                  event.target.value = ""
-                  void handleMaterialUpload("practice", files)
-                }}
-              />
-
               {entriesError ? (
                 <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
               ) : null}
@@ -6006,72 +5815,10 @@ export function SubjectWheel({
                 </div>
               ) : null}
 
-              {currentSubject ? (
-                <section className="mb-4 rounded-2xl border border-border bg-muted/40 p-4">
-                  <div className="flex justify-end">
-                    <div
-                      className={`rounded-full border px-3 py-1 text-xs ${getVectorDayTone(currentSubjectVectorSummary.currentDay, currentSubjectVectorSummary.hasVector)}`}
-                    >
-                      {getCurrentSubjectVectorBadgeLabel(currentSubjectVectorSummary)}
-                    </div>
-                  </div>
-                </section>
-              ) : null}
-
-              {practiceSectionView === "theory" && !isTheoryContinueMode ? (
-                <div className="mb-2" />
-              ) : (
-                <>
-                <div className="mb-6 space-y-4">
-                  {renderMaterialManagerSection("theory")}
-
-                  {isTheoryContinueMode ? null : renderMaterialManagerSection("practice")}
-
-                  {isTheoryContinueMode ? null : (
-                  <section className="space-y-3 rounded-2xl border border-border bg-muted/40 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Semana</p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      {weekAudioDays.length > 0 ? (
-                        weekAudioDays.map((day) => (
-                          <div key={day.sessionDate} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2">
-                            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                              {getWeekdayLabel(day.sessionDate)}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => void openWeekAudioDay(day.sessionDate)}
-                              className="h-8 border-border px-3 text-xs text-foreground"
-                            >
-                              Ver
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => void copyEntriesForSession(day.sessionDate)}
-                              disabled={day.entries.length === 0 || isCopyingEntries}
-                              className="h-8 border-border px-3 text-xs text-foreground"
-                            >
-                              Copiar
-                            </Button>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-                          Todavia no hay audios cargados en esta semana.
-                        </p>
-                      )}
-                    </div>
-                  </section>
-                  )}
-                </div>
-                </>
-              )}
+              <div className="mb-6 space-y-4">
+                {renderMaterialManagerSection("theory")}
+                {isTheoryContinueMode ? null : renderMaterialManagerSection("practice")}
+              </div>
 
               {shouldShowInitialSubjectDayLoading ? (
                 <div className="flex min-h-56 items-center justify-center">
