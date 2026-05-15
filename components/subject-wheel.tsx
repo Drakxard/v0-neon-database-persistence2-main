@@ -4491,7 +4491,7 @@ export function SubjectWheel({
   const homeSubjectCards = useMemo(
     () =>
       visibleSubjects.map((subject) => {
-        const countdown = getHomeSubjectCountdown(subject.id, homeSelectedDate)
+        const countdown = getHomeSubjectCountdown(subject.id, new Date())
 
         return {
           subject,
@@ -4499,7 +4499,7 @@ export function SubjectWheel({
           displayName: getHomeSubjectDisplayName(subject),
         }
       }),
-    [homeSelectedDate, visibleSubjects]
+    [visibleSubjects]
   )
   const currentSubjectPracticeCoverage = useMemo(() => {
     return buildMaterialCoverage(practiceMaterials, practiceEntriesByMaterialId)
@@ -4707,9 +4707,12 @@ export function SubjectWheel({
                 ) : (
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                      <a
+                        href={buildMaterialViewerHref(material.id)}
+                        className="block min-w-0 truncate text-sm text-foreground hover:underline"
+                      >
                         {material.file_name}
-                      </span>
+                      </a>
                     </div>
                     <Button
                       type="button"

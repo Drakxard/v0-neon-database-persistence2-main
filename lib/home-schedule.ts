@@ -14,7 +14,15 @@ export function getHomeSubjectCountdown(subjectId: string, referenceDate: Date) 
   const date = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate())
   const jsDay = date.getDay()
   const currentWeekday = jsDay === 0 ? 6 : jsDay - 1
-  const daysUntil = (targetWeekday - currentWeekday + 7) % 7
+  let daysUntil = 0
+
+  if (currentWeekday === targetWeekday) {
+    daysUntil = 0
+  } else if (currentWeekday < targetWeekday) {
+    daysUntil = targetWeekday - currentWeekday
+  } else {
+    daysUntil = 7 - currentWeekday + targetWeekday
+  }
 
   return {
     daysUntil,
