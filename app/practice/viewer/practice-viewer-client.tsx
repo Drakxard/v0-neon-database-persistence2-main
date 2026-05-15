@@ -9,6 +9,7 @@ import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getSubjectById } from "@/lib/subjects"
+import { preloadPracticePdf, releasePracticePdf } from "./pdf-memory-cache"
 
 type MaterialContext = {
   id: number
@@ -220,6 +221,8 @@ export function PracticeViewerClient({
   const recordingChunksRef = useRef<Blob[]>([])
   const pairDraftRef = useRef<PairDraft | null>(null)
   const recordingRoleRef = useRef<PairRole | null>(null)
+  const activeCachedMaterialIdsRef = useRef<Set<number>>(new Set())
+  const materialFileUrlSourceRef = useRef<"workspace" | "cache" | null>(null)
 
   const [positions, setPositions] = useState<AudioPosition[]>([])
   const [positionsError, setPositionsError] = useState("")
@@ -860,7 +863,8 @@ export function PracticeViewerClient({
       }
 
       setMaterialFileUrl((previous) => {
-        if (previous) URL.revokeObjectURL(previous)
+        if (previous && materialFileUrlSourceRef.current === "workspace") URL.revokeObjectURL(previous)
+        materialFileUrlSourceRef.current = "workspace"
         return nextUrl
       })
     })()
@@ -869,6 +873,40 @@ export function PracticeViewerClient({
       cancelled = true
     }
   }, [isLocalMode, resolvedMaterial?.id])
+
+  useEffect(() => {
+    if (isLocalMode || !resolvedMaterial?.id) return
+
+    let cancelled = false
+    const currentMaterialId = resolvedMaterial.id
+    const currentFileName = resolvedMaterial.fileName
+
+    void preloadPracticePdf(currentMaterialId, currentFileName)
+      .then((cachedPdf) => {
+        if (cancelled) return
+        activeCachedMaterialIdsRef.current.add(currentMaterialId)
+        setMaterialFileUrl((previous) => {
+          if (previous && materialFileUrlSourceRef.current === "workspace") URL.revokeObjectURL(previous)
+          materialFileUrlSourceRef.current = "cache"
+          return cachedPdf.blobUrl
+        })
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error("Failed to preload practice PDF:", error)
+        setMaterialFileUrl((previous) => {
+          if (previous && materialFileUrlSourceRef.current === "workspace") {
+            URL.revokeObjectURL(previous)
+          }
+          materialFileUrlSourceRef.current = null
+          return null
+        })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [isLocalMode, resolvedMaterial?.fileName, resolvedMaterial?.id])
 
   useEffect(() => {
     void loadPositions()
@@ -916,14 +954,36 @@ export function PracticeViewerClient({
   }, [pairDraft])
 
   useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.key !== "Escape") return
+
+      if (isPairModalOpen) {
+        event.preventDefault()
+        closeRecorder()
+        return
+      }
+
+      event.preventDefault()
+      postToViewer({ type: "requestViewerEscape" })
+    }
+
+    window.addEventListener("keydown", handleGlobalKeyDown, true)
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown, true)
+  }, [closeRecorder, isPairModalOpen, postToViewer])
+
+  useEffect(() => {
     return () => {
       discardRecording()
       stopMediaTracks()
       stopPreviewPlayback()
       disposePairDraft(pairDraftRef.current)
       if (materialFileUrl) {
-        URL.revokeObjectURL(materialFileUrl)
+        if (materialFileUrlSourceRef.current === "workspace") {
+          URL.revokeObjectURL(materialFileUrl)
+        }
       }
+      activeCachedMaterialIdsRef.current.forEach((materialId) => releasePracticePdf(materialId))
+      activeCachedMaterialIdsRef.current.clear()
       playbackUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url))
       playbackUrlCacheRef.current.clear()
     }

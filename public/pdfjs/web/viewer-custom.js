@@ -628,6 +628,66 @@
     state.draftOverlay.dataset.open = shouldShow ? "true" : "false";
   }
 
+  function getCurrentViewerLocation() {
+    const currentScaleValue = state.app?.pdfViewer?.currentScaleValue;
+    const currentPageNumber = state.app?.pdfViewer?.currentPageNumber;
+    const pagesRotation = state.app?.pdfViewer?.pagesRotation;
+    const pdfOpenParams = state.app?.pdfViewer?._location?.pdfOpenParams || "";
+
+    return {
+      currentScaleValue: typeof currentScaleValue === "string" ? currentScaleValue : null,
+      currentPageNumber: Number.isInteger(currentPageNumber) ? currentPageNumber : null,
+      pagesRotation: Number.isFinite(pagesRotation) ? pagesRotation : null,
+      pdfOpenParams: typeof pdfOpenParams === "string" ? pdfOpenParams : "",
+    };
+  }
+
+  function restoreViewerLocation(location) {
+    if (!location || !state.app?.pdfViewer) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      try {
+        if (Number.isFinite(location.pagesRotation)) {
+          state.app.pdfViewer.pagesRotation = location.pagesRotation;
+        }
+        if (location.currentScaleValue) {
+          state.app.pdfViewer.currentScaleValue = location.currentScaleValue;
+        }
+        if (Number.isInteger(location.currentPageNumber)) {
+          state.app.pdfViewer.currentPageNumber = location.currentPageNumber;
+        }
+        if (location.pdfOpenParams) {
+          const nextHash = location.pdfOpenParams.startsWith("#")
+            ? location.pdfOpenParams.slice(1)
+            : location.pdfOpenParams;
+          state.app.pdfLinkService?.setHash?.(nextHash);
+        }
+      } catch (error) {
+        console.warn("Custom PDF.js could not restore viewer location:", error);
+      }
+    }, 0);
+  }
+
+  async function reopenDocumentInViewer(pdfBytes, fileName) {
+    if (!state.app?.open || !pdfBytes) {
+      throw new Error("No se pudo reabrir el PDF en caliente.");
+    }
+
+    const previousLocation = getCurrentViewerLocation();
+    showLoadingOverlay("Actualizando PDF...");
+    closeReplacementModal();
+
+    const uint8Bytes = pdfBytes instanceof Uint8Array ? pdfBytes : new Uint8Array(pdfBytes);
+    await state.app.open({
+      data: uint8Bytes,
+      filename: fileName || state.query.fileName || "material.pdf",
+    });
+    refreshDocumentViewerMetadata();
+    restoreViewerLocation(previousLocation);
+  }
+
   function buildReturnHref() {
     return state.query?.returnToken ? `/?returnToken=${encodeURIComponent(state.query.returnToken)}` : "/";
   }
@@ -649,6 +709,31 @@
     state.suppressUnloadSync = true;
     clearExitSyncTimer();
     window.location.assign(buildReturnHref());
+  }
+
+  function handleViewerEscape(event) {
+    if (event?.defaultPrevented) return;
+
+    if (state.replacementBackdrop?.dataset.open === "true") {
+      event?.preventDefault?.();
+      closeReplacementModal();
+      return;
+    }
+
+    if (state.modal?.dataset.open === "true") {
+      event?.preventDefault?.();
+      closeModal();
+      return;
+    }
+
+    if (state.selectionMode) {
+      event?.preventDefault?.();
+      leaveSelectionMode("Seleccion cancelada.");
+      return;
+    }
+
+    event?.preventDefault?.();
+    void navigateBackToApp();
   }
 
   function showLoadingOverlay(message) {
@@ -1946,6 +2031,7 @@
 
     try {
       const fileName = normalizePdfFileName(file.name || state.query.fileName || "material");
+      state.replacementCandidateBytes = new Uint8Array(await file.arrayBuffer());
       let sourceSnapshot = {
         sourcePdfFingerprint: "",
         snapshot: [],
@@ -2032,13 +2118,14 @@
       state.suppressUnloadSync = true;
       markDocumentAsSynced();
       refreshDocumentViewerMetadata();
-      closeReplacementModal();
       notifySubjectDayMaterialsRefresh();
       showStatus("PDF reemplazado.");
       scheduleHideStatus(2400);
-      window.setTimeout(() => {
-        window.location.reload();
-      }, 700);
+      const replacementBytes = state.replacementCandidateBytes;
+      if (!replacementBytes) {
+        throw new Error("Faltan los bytes del PDF reemplazado para reabrirlo en caliente.");
+      }
+      await reopenDocumentInViewer(replacementBytes, state.query.fileName || "material.pdf");
     } catch (error) {
       console.error("Custom PDF.js replacement commit failed:", error);
       showToast(error instanceof Error ? error.message : "No se pudo reemplazar el PDF.", "error", 4200);
@@ -2086,6 +2173,11 @@
       state.workspaceMode = "local";
       refreshSyncButtons();
       showLoadingOverlay("Cargando PDF local...");
+      return;
+    }
+
+    if (event.data.type === "requestViewerEscape") {
+      handleViewerEscape();
       return;
     }
 
@@ -2236,26 +2328,7 @@
     const key = event.key.toLowerCase();
 
     if (!event.ctrlKey && !event.altKey && !event.metaKey && key === "escape") {
-      if (state.replacementBackdrop?.dataset.open === "true") {
-        event.preventDefault();
-        closeReplacementModal();
-        return;
-      }
-
-      if (state.modal?.dataset.open === "true") {
-        event.preventDefault();
-        closeModal();
-        return;
-      }
-
-      if (state.selectionMode) {
-        event.preventDefault();
-        leaveSelectionMode("Seleccion cancelada.");
-        return;
-      }
-
-      event.preventDefault();
-      void navigateBackToApp();
+      handleViewerEscape(event);
       return;
     }
 
