@@ -6,7 +6,6 @@ import { isLocalStorageMode } from "@/lib/storage-mode"
 import { parseDateKey } from "@/lib/subject-utils"
 import { getSubjectById } from "@/lib/subjects"
 import { PracticeViewerClient } from "./practice-viewer-client"
-import { PracticeViewerShell } from "./practice-viewer-shell"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -31,6 +30,7 @@ type ViewerPageProps = {
     weekNumber?: string
     weekdayIndex?: string
     materialType?: string
+    returnToken?: string
   }>
 }
 
@@ -41,6 +41,7 @@ type DraftViewerContext = {
   weekNumber: number
   weekdayIndex: number
   materialType: "practice" | "theory"
+  returnToken?: string
 }
 
 type MaterialContext = {
@@ -51,6 +52,7 @@ type MaterialContext = {
   weekNumber: number
   weekdayIndex: number
   fileName: string
+  returnToken?: string
 }
 
 function normalizeSessionDateKey(sessionDate: string | Date) {
@@ -98,6 +100,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const parsedSessionDate = parseDateKey(sessionDate)
   const weekNumber = Number.parseInt(params.weekNumber || "", 10)
   const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
+  const returnToken = (params.returnToken || "").trim()
   const materialType =
     params.materialType === "practice" || params.materialType === "theory"
       ? params.materialType
@@ -140,14 +143,11 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       sessionDate,
       weekNumber,
       weekdayIndex,
-      materialType,
+      materialType: materialType as "practice" | "theory",
+      returnToken,
     }
 
-    if (isLocalStorageMode()) {
-      return <PracticeViewerClient draftContext={draftContext} />
-    }
-
-    return <PracticeViewerShell draftContext={draftContext} />
+    return <PracticeViewerClient draftContext={draftContext} />
   }
 
   if (!Number.isInteger(materialId)) {
@@ -166,7 +166,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   }
 
   if (isLocalStorageMode()) {
-    return <PracticeViewerClient materialId={materialId} />
+    return <PracticeViewerClient materialId={materialId} returnToken={returnToken} />
   }
 
   try {
@@ -226,7 +226,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
     }
 
     return (
-      <PracticeViewerShell
+      <PracticeViewerClient
         material={{
           id: material.id,
           subjectId: material.subject_id,
@@ -235,6 +235,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
           weekNumber: material.week_number,
           weekdayIndex: material.weekday_index,
           fileName: material.file_name,
+          returnToken,
         }}
       />
     )

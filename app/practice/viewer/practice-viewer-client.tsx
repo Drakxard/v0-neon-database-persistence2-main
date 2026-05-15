@@ -19,6 +19,7 @@ type MaterialContext = {
   weekdayIndex: number
   fileName: string
   workspaceFileId?: string | null
+  returnToken?: string
 }
 
 type DraftViewerContext = {
@@ -28,6 +29,7 @@ type DraftViewerContext = {
   weekNumber: number
   weekdayIndex: number
   materialType: "practice" | "theory"
+  returnToken?: string
 }
 
 type PairRole = "question" | "answer"
@@ -75,6 +77,8 @@ type ViewerMessage =
   | { type: "playAnchoredAudio"; entryId?: number }
   | { type: "deleteAnchoredAudio"; entryId?: number }
   | { type: "viewerReady" }
+  | { type: "viewerDocumentLoaded" }
+  | { type: "viewerDocumentError" }
   | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
 type DeleteEntriesResponse = {
@@ -132,12 +136,14 @@ function buildViewerSrc({
   fileUrl,
   localWorkspaceMode,
   pendingMaterialId,
+  returnToken,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
   fileUrl?: string | null
   localWorkspaceMode?: boolean
   pendingMaterialId?: number
+  returnToken?: string
 }) {
   const params = new URLSearchParams()
 
@@ -174,6 +180,10 @@ function buildViewerSrc({
     params.set("localWorkspace", "1")
   }
 
+  if (returnToken) {
+    params.set("returnToken", returnToken)
+  }
+
   return `/pdfjs/web/viewer.html?${params.toString()}#locale=es-AR`
 }
 
@@ -195,10 +205,12 @@ export function PracticeViewerClient({
   material,
   draftContext,
   materialId,
+  returnToken,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
   materialId?: number
+  returnToken?: string
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -222,9 +234,12 @@ export function PracticeViewerClient({
   const [uploadFeedback, setUploadFeedback] = useState("")
   const [resolvedMaterial, setResolvedMaterial] = useState<MaterialContext | undefined>(material)
   const [materialFileUrl, setMaterialFileUrl] = useState<string | null>(null)
+  const [isViewerReady, setIsViewerReady] = useState(false)
+  const [isViewerDocumentReady, setIsViewerDocumentReady] = useState(false)
   const { rootHandle } = useLocalWorkspace()
   const playbackUrlCacheRef = useRef(new Map<string, string>())
   const isLocalMode = isLocalStorageMode()
+  const expectsPdfDocument = Boolean(material) || Number.isInteger(materialId)
 
   const viewerSrc = useMemo(
     () =>
@@ -234,13 +249,16 @@ export function PracticeViewerClient({
         fileUrl: materialFileUrl,
         localWorkspaceMode: isLocalMode,
         pendingMaterialId: Number.isInteger(materialId) ? materialId : undefined,
+        returnToken: resolvedMaterial?.returnToken || draftContext?.returnToken || returnToken,
       }),
-    [draftContext, isLocalMode, materialFileUrl, materialId, resolvedMaterial]
+    [draftContext, isLocalMode, materialFileUrl, materialId, resolvedMaterial, returnToken]
   )
   const activeContext = resolvedMaterial ?? draftContext
   const hasMaterial = Boolean(resolvedMaterial)
   const isPairModalOpen = Boolean(resolvedMaterial && pairDraft)
   const isPairComplete = Boolean(pairDraft?.slots.question && pairDraft?.slots.answer)
+  const isViewerVisible = isViewerReady && (expectsPdfDocument ? isViewerDocumentReady : true)
+  const loadingLabel = expectsPdfDocument ? (isLocalMode ? "Cargando PDF local..." : "Cargando PDF...") : "Preparando visor..."
 
   const postToViewer = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
@@ -615,6 +633,10 @@ export function PracticeViewerClient({
       }
 
       if (event.data.type === "viewerReady") {
+        setIsViewerReady(true)
+        if (!expectsPdfDocument) {
+          setIsViewerDocumentReady(true)
+        }
         syncPositionsToViewer(hasMaterial ? positions : [])
         if (rootHandle) {
           postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
@@ -622,6 +644,11 @@ export function PracticeViewerClient({
         if (isLocalMode) {
           postToViewer({ type: "viewerWorkspaceMode", mode: "local" })
         }
+        return
+      }
+
+      if (event.data.type === "viewerDocumentLoaded" || event.data.type === "viewerDocumentError") {
+        setIsViewerDocumentReady(true)
         return
       }
 
@@ -766,6 +793,7 @@ export function PracticeViewerClient({
       activeEntryId,
       closeRecorder,
       hasMaterial,
+      expectsPdfDocument,
       isLocalMode,
       loadPositions,
       positions,
@@ -785,12 +813,18 @@ export function PracticeViewerClient({
   }, [material])
 
   useEffect(() => {
+    setIsViewerReady(false)
+    setIsViewerDocumentReady(false)
+  }, [viewerSrc])
+
+  useEffect(() => {
     if (!isLocalMode || material || !Number.isInteger(materialId)) return
 
     let cancelled = false
+    const resolvedMaterialId = materialId as number
 
     void (async () => {
-      const localMaterial = await getLocalMaterialById(materialId)
+      const localMaterial = await getLocalMaterialById(resolvedMaterialId)
       if (!localMaterial || cancelled) return
 
       setResolvedMaterial({
@@ -901,7 +935,7 @@ export function PracticeViewerClient({
         ref={iframeRef}
         title={`Visor PDF: ${resolvedMaterial?.fileName || "fragmentador"}`}
         src={viewerSrc}
-        className="h-screen w-full border-0"
+        className={`h-screen w-full border-0 transition-opacity duration-300 ${isViewerVisible ? "opacity-100" : "opacity-0"}`}
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
         onLoad={() => {
@@ -914,6 +948,15 @@ export function PracticeViewerClient({
           }
         }}
       />
+
+      {!isViewerVisible ? (
+        <div className="pointer-events-none fixed inset-0 z-[1300] flex items-center justify-center bg-slate-950/96 px-6">
+          <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-slate-900/90 px-6 py-5 text-center shadow-2xl">
+            <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-white/20 border-t-sky-400" />
+            <p className="mt-4 text-sm font-medium text-slate-100">{loadingLabel}</p>
+          </div>
+        </div>
+      ) : null}
 
       <audio ref={audioRef} hidden preload="none" />
       <audio ref={previewAudioRef} hidden preload="none" />

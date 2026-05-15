@@ -70,7 +70,14 @@
       key: String(params.get("key") || "").trim(),
       localWorkspace: params.get("localWorkspace") === "1",
       workspaceFileId: String(params.get("workspaceFileId") || "").trim(),
+      returnToken: String(params.get("returnToken") || "").trim(),
     };
+  }
+
+  function postToParent(message) {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, window.location.origin);
+    }
   }
 
   function isCronogramaResource() {
@@ -619,6 +626,29 @@
     if (!state.draftOverlay) return;
     const shouldShow = isDraftMode() && !state.app?.pdfDocument;
     state.draftOverlay.dataset.open = shouldShow ? "true" : "false";
+  }
+
+  function buildReturnHref() {
+    return state.query?.returnToken ? `/?returnToken=${encodeURIComponent(state.query.returnToken)}` : "/";
+  }
+
+  async function navigateBackToApp() {
+    if (state.isSyncing) {
+      showToast("Espera a que termine la sincronizacion.", "info");
+      return;
+    }
+
+    if (canSyncCurrentDocument() && hasUnsyncedAnnotations()) {
+      const synced = await syncAnnotatedPdf();
+      if (!synced) {
+        return;
+      }
+    }
+
+    state.pendingExitSync = false;
+    state.suppressUnloadSync = true;
+    clearExitSyncTimer();
+    window.location.assign(buildReturnHref());
   }
 
   function showLoadingOverlay(message) {
@@ -2196,6 +2226,7 @@
     applyEnhancedPdfReadability();
     refreshSyncButtons();
     hideLoadingOverlay();
+    postToParent({ type: "viewerDocumentLoaded" });
   }
 
   function handleKeyDown(event) {
@@ -2203,6 +2234,30 @@
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
+
+    if (!event.ctrlKey && !event.altKey && !event.metaKey && key === "escape") {
+      if (state.replacementBackdrop?.dataset.open === "true") {
+        event.preventDefault();
+        closeReplacementModal();
+        return;
+      }
+
+      if (state.modal?.dataset.open === "true") {
+        event.preventDefault();
+        closeModal();
+        return;
+      }
+
+      if (state.selectionMode) {
+        event.preventDefault();
+        leaveSelectionMode("Seleccion cancelada.");
+        return;
+      }
+
+      event.preventDefault();
+      void navigateBackToApp();
+      return;
+    }
 
     if (!event.ctrlKey && !event.altKey && !event.metaKey && key === "e") {
       state.enhancedPdfReadability = !state.enhancedPdfReadability;
@@ -2261,11 +2316,13 @@
       updateDraftOverlay();
       refreshSyncButtons();
       hideLoadingOverlay();
+      postToParent({ type: "viewerDocumentError" });
     });
     document.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("message", handleParentMessage);
+    postToParent({ type: "viewerReady" });
 
     if (!state.syncStatePoller) {
       state.syncStatePoller = window.setInterval(refreshSyncButtons, 400);

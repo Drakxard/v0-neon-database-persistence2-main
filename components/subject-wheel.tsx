@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -145,6 +145,75 @@ function buildMaterialViewerHref(materialId: number) {
   })
 
   return `/practice/viewer?${searchParams.toString()}`
+}
+
+const VIEWER_RETURN_STORAGE_PREFIX = "subject-wheel:return:"
+const VIEWER_RETURN_TTL_MS = 10 * 60 * 1000
+
+function buildMaterialViewerHrefWithReturnToken(materialId: number, returnToken?: string | null) {
+  const searchParams = new URLSearchParams({
+    materialId: String(materialId),
+  })
+
+  if (returnToken) {
+    searchParams.set("returnToken", returnToken)
+  }
+
+  return `/practice/viewer?${searchParams.toString()}`
+}
+
+function buildViewerReturnStorageKey(returnToken: string) {
+  return `${VIEWER_RETURN_STORAGE_PREFIX}${returnToken}`
+}
+
+function cleanupExpiredViewerReturnSnapshots() {
+  if (typeof window === "undefined") return
+
+  const now = Date.now()
+  for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.sessionStorage.key(index)
+    if (!key || !key.startsWith(VIEWER_RETURN_STORAGE_PREFIX)) continue
+
+    try {
+      const rawValue = window.sessionStorage.getItem(key)
+      if (!rawValue) {
+        window.sessionStorage.removeItem(key)
+        continue
+      }
+
+      const snapshot = JSON.parse(rawValue) as Partial<ViewerReturnSnapshot>
+      if (
+        typeof snapshot.createdAt !== "number" ||
+        now - snapshot.createdAt > VIEWER_RETURN_TTL_MS ||
+        snapshot.version !== 1
+      ) {
+        window.sessionStorage.removeItem(key)
+      }
+    } catch {
+      window.sessionStorage.removeItem(key)
+    }
+  }
+}
+
+function consumeViewerReturnSnapshot(returnToken: string) {
+  if (typeof window === "undefined" || !returnToken) return null
+
+  cleanupExpiredViewerReturnSnapshots()
+  const storageKey = buildViewerReturnStorageKey(returnToken)
+  const rawValue = window.sessionStorage.getItem(storageKey)
+  window.sessionStorage.removeItem(storageKey)
+
+  if (!rawValue) return null
+
+  try {
+    const snapshot = JSON.parse(rawValue) as ViewerReturnSnapshot
+    if (snapshot.version !== 1 || Date.now() - snapshot.createdAt > VIEWER_RETURN_TTL_MS) {
+      return null
+    }
+    return snapshot
+  } catch {
+    return null
+  }
 }
 
 function buildEntryAudioApiHref(entryId: number) {
@@ -308,6 +377,24 @@ type SubjectWheelSearchParams = {
   synthesisMode?: string
   synthesisWeek?: string
   synthesisSubject?: string
+  returnToken?: string
+}
+
+type ViewerReturnSnapshot = {
+  version: 1
+  createdAt: number
+  currentDateKey: string
+  showAllSubjectsForDay: boolean
+  currentSubjectId: string
+  dialogDateKey: string
+  practiceSectionView: "theory" | "exercises"
+  exerciseWeeklyScopeEnabled: boolean
+  subjectViewDateOverride: string | null
+  dialogShowAllSubjectsForDay: boolean
+  selectedPracticeMaterialId: number | null
+  isContinueOpen: boolean
+  continueMode: ContinueMode
+  continueMaterialId: number | null
 }
 
 type SubjectVisibilityState = {
@@ -1122,6 +1209,8 @@ export function SubjectWheel({
   const shortcutLongPressTimerRef = useRef<number | null>(null)
   const shouldSuppressShortcutClickRef = useRef(false)
   const subjectDayDataRequestIdRef = useRef(0)
+  const hasAttemptedViewerReturnRestoreRef = useRef(false)
+  const pendingViewerReturnContinueRef = useRef<Pick<ViewerReturnSnapshot, "continueMode" | "continueMaterialId"> | null>(null)
   const todayKey = getTodayDateString()
   const currentCalendarWeek = useMemo(() => getCurrentWeekNumber(now), [now])
   const homeSelectedDate = useMemo(() => parseDateKey(currentDateKey), [currentDateKey])
@@ -1915,6 +2004,67 @@ export function SubjectWheel({
       setStackedDayViewReturnState(null)
     }
   }
+
+  const createViewerReturnSnapshot = useCallback((): ViewerReturnSnapshot | null => {
+    if (!currentSubject) return null
+
+    return {
+      version: 1,
+      createdAt: Date.now(),
+      currentDateKey,
+      showAllSubjectsForDay,
+      currentSubjectId: currentSubject.id,
+      dialogDateKey,
+      practiceSectionView,
+      exerciseWeeklyScopeEnabled,
+      subjectViewDateOverride,
+      dialogShowAllSubjectsForDay,
+      selectedPracticeMaterialId,
+      isContinueOpen,
+      continueMode,
+      continueMaterialId: selectedPracticeMaterialId,
+    }
+  }, [
+    continueMode,
+    currentDateKey,
+    currentSubject,
+    dialogDateKey,
+    dialogShowAllSubjectsForDay,
+    exerciseWeeklyScopeEnabled,
+    isContinueOpen,
+    practiceSectionView,
+    selectedPracticeMaterialId,
+    showAllSubjectsForDay,
+    subjectViewDateOverride,
+  ])
+
+  const openMaterialViewerFromCurrentContext = useCallback(
+    (materialId: number, event?: React.MouseEvent<HTMLAnchorElement>) => {
+      if (event && !isPlainLeftClick(event)) {
+        return
+      }
+
+      const snapshot = createViewerReturnSnapshot()
+      if (event) {
+        event.preventDefault()
+      }
+
+      let nextHref = buildMaterialViewerHref(materialId)
+      if (snapshot && typeof window !== "undefined") {
+        cleanupExpiredViewerReturnSnapshots()
+        const returnToken =
+          typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `viewer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+        window.sessionStorage.setItem(buildViewerReturnStorageKey(returnToken), JSON.stringify(snapshot))
+        nextHref = buildMaterialViewerHrefWithReturnToken(materialId, returnToken)
+      }
+
+      window.location.assign(nextHref)
+    },
+    [createViewerReturnSnapshot]
+  )
 
   const cancelReview = () => {
     disposeReviewAudio(null)
@@ -3371,6 +3521,53 @@ export function SubjectWheel({
     void loadContinuePayload(mode, { silent: Boolean(localPayload), materialId })
   }
 
+  useEffect(() => {
+    cleanupExpiredViewerReturnSnapshots()
+  }, [])
+
+  useEffect(() => {
+    const returnToken = initialSearchParams?.returnToken?.trim()
+    if (!returnToken || hasAttemptedViewerReturnRestoreRef.current) return
+
+    hasAttemptedViewerReturnRestoreRef.current = true
+    const snapshot = consumeViewerReturnSnapshot(returnToken)
+    router.replace("/")
+
+    if (!snapshot) return
+
+    const subject = getSubjectById(snapshot.currentSubjectId, visibleSubjects)
+    if (!subject) return
+
+    setCurrentDateKey(snapshot.currentDateKey)
+    setShowAllSubjectsForDay(snapshot.showAllSubjectsForDay)
+    setCurrentSubject(subject)
+    setDialogDateKey(snapshot.dialogDateKey)
+    resetSubjectUiState()
+    setIsReviewOpen(false)
+    setSubjectDialogEntryMode("default")
+    setPracticeSectionView(snapshot.practiceSectionView)
+    setExerciseWeeklyScopeEnabled(snapshot.exerciseWeeklyScopeEnabled)
+    setSubjectViewDateOverride(snapshot.subjectViewDateOverride)
+    setDialogShowAllSubjectsForDay(snapshot.dialogShowAllSubjectsForDay)
+    setSelectedPracticeMaterialId(snapshot.selectedPracticeMaterialId)
+    setIsDialogOpen(true)
+
+    pendingViewerReturnContinueRef.current = snapshot.isContinueOpen
+      ? {
+          continueMode: snapshot.continueMode,
+          continueMaterialId: snapshot.continueMaterialId,
+        }
+      : null
+  }, [initialSearchParams?.returnToken, resetSubjectUiState, router, visibleSubjects])
+
+  useEffect(() => {
+    const pendingReturn = pendingViewerReturnContinueRef.current
+    if (!pendingReturn || !isDialogOpen || !currentSubject || !hasResolvedSubjectDayData) return
+
+    pendingViewerReturnContinueRef.current = null
+    void openContinueModal(pendingReturn.continueMode, pendingReturn.continueMaterialId ?? undefined)
+  }, [currentSubject, hasResolvedSubjectDayData, isDialogOpen, openContinueModal])
+
   const toggleMaterialCheckup = async (materialToUpdate: SubjectDayMaterial, checked: boolean) => {
     const mode: ContinueMode = materialToUpdate.material_type === "theory" ? "theory" : "practice"
     const isCurrentContinueMaterial = currentContinueMaterial?.id === materialToUpdate.id
@@ -3545,7 +3742,7 @@ export function SubjectWheel({
       if (!nextUrl) {
         const localEntry = LOCAL_STORAGE_MODE ? entries.find((entry) => entry.id === entryId) ?? null : null
         if (localEntry?.drive_file_id && isWorkspaceFileId(localEntry.drive_file_id)) {
-          nextUrl = await ensureLocalAudioSource(localEntry)
+          nextUrl = (await ensureLocalAudioSource(localEntry)) || undefined
         } else {
           setLoadingAudioEntryId(entryId)
           const response = await fetch(buildEntryAudioApiHref(entryId))
@@ -4104,7 +4301,7 @@ export function SubjectWheel({
       try {
         const payload = await fetchSocraticReviewQueue({ subjectId, weekNumber: "current" })
         if (socraticQueueRequestIdRef.current !== requestId) return
-        setSocraticQueue(payload.items)
+        setSocraticQueue(payload.items.filter((item): item is SocraticReviewQueueItem => item != null))
         setSocraticCurrentIndex(0)
 
         if (payload.items[0]) {
@@ -4709,6 +4906,7 @@ export function SubjectWheel({
                     <div className="min-w-0 flex-1">
                       <a
                         href={buildMaterialViewerHref(material.id)}
+                        onClick={(event) => openMaterialViewerFromCurrentContext(material.id, event)}
                         className="block min-w-0 truncate text-sm text-foreground hover:underline"
                       >
                         {material.file_name}
@@ -6035,6 +6233,7 @@ export function SubjectWheel({
                         />
                           <a
                             href={buildMaterialViewerHref(currentContinueMaterial.id)}
+                            onClick={(event) => openMaterialViewerFromCurrentContext(currentContinueMaterial.id, event)}
                             className="font-medium underline-offset-2 hover:underline"
                           >
                             {currentContinueMaterial.file_name}

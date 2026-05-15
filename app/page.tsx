@@ -7,6 +7,7 @@ type HomePageProps = {
     synthesisMode?: string
     synthesisWeek?: string
     synthesisSubject?: string
+    returnToken?: string
   }>
 }
 
