@@ -7796,7 +7796,11 @@ export function SubjectWheel({
       </Dialog>
 
       {activeInlineViewer ? (
-        <div className="fixed inset-0 z-[2200] bg-slate-950">
+        <div
+          className="fixed inset-0 z-[2200] overflow-hidden overscroll-none bg-slate-950"
+          onWheelCapture={(event) => event.stopPropagation()}
+          onTouchMoveCapture={(event) => event.stopPropagation()}
+        >
           <PracticeViewerClient
             material={activeInlineViewer.material}
             materialId={activeInlineViewer.materialId}

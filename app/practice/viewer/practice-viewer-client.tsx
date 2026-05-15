@@ -1006,12 +1006,12 @@ export function PracticeViewerClient({
   }, [discardRecording, disposePairDraft, materialFileUrl, stopMediaTracks, stopPreviewPlayback])
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 text-white">
       <iframe
         ref={iframeRef}
         title={`Visor PDF: ${resolvedMaterial?.fileName || "fragmentador"}`}
         src={viewerSrc}
-        className={`h-screen w-full border-0 transition-opacity duration-300 ${isViewerVisible ? "opacity-100" : "opacity-0"}`}
+        className={`block h-full w-full flex-1 border-0 transition-opacity duration-300 ${isViewerVisible ? "opacity-100" : "opacity-0"}`}
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
         onLoad={() => {
