@@ -109,7 +109,7 @@ export function LocalWorkspaceProvider({
     enabled ? "prompt" : "granted"
   )
   const [error, setError] = useState("")
-  const isReady = !enabled || bootState === "ready"
+  const isReady = !enabled || bootState === "ready" || bootState === "checking"
 
   useEffect(() => {
     if (!enabled) {
@@ -259,9 +259,9 @@ export function LocalWorkspaceProvider({
 
   return (
     <LocalWorkspaceContext.Provider value={value}>
-      {enabled && isReady ? <LocalFetchInterceptor /> : null}
+      {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady ? children : null}
-      {enabled && bootState !== "ready" ? (
+      {enabled && bootState !== "ready" && bootState !== "checking" ? (
         <WorkspaceModal
           bootState={bootState}
           error={error}

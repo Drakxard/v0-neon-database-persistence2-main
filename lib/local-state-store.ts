@@ -23,6 +23,15 @@ type LocalStateShape = {
     eFich: string | null
     figma: string | null
   }>
+  subjectOpenCounts: Record<string, {
+    id: number
+    week_number: number
+    subject_id: string
+    count: number
+    last_open_hour_key: string | null
+    created_at: string
+    updated_at: string
+  }>
 }
 
 const LOCAL_STATE_DIRECTORY = path.join(process.cwd(), ".local-data")
@@ -34,6 +43,7 @@ function createEmptyState(): LocalStateShape {
     dailySessions: {},
     subjectCompletions: {},
     subjectShortcuts: {},
+    subjectOpenCounts: {},
   }
 }
 
@@ -57,6 +67,7 @@ export async function readLocalState() {
       dailySessions: parsed.dailySessions ?? {},
       subjectCompletions: parsed.subjectCompletions ?? {},
       subjectShortcuts: parsed.subjectShortcuts ?? {},
+      subjectOpenCounts: parsed.subjectOpenCounts ?? {},
       aiPrompt: typeof parsed.aiPrompt === "string" ? parsed.aiPrompt : "",
     } satisfies LocalStateShape
   } catch {

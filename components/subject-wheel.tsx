@@ -23,6 +23,7 @@ import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/
 import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
 import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
+import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import { createObjectUrlForWorkspaceFile, isWorkspaceFileId } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import {
@@ -33,6 +34,7 @@ import {
   revealSocraticReviewTurn,
   saveSocraticReviewSettings,
 } from "@/lib/socratic-review-client"
+import { fetchSubjectOpenCounts, recordSubjectOpenCount } from "@/lib/subject-open-counts-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
@@ -49,6 +51,7 @@ import type {
   SubjectDayMaterial,
   SubjectMaterialSynthesisRecord,
   SubjectDayMaterialType,
+  SubjectOpenCountRecord,
   SubjectShortcutKey,
   SubjectShortcuts,
   SubjectSynthesisDerivedSummary,
@@ -476,6 +479,23 @@ function getSynthesisHeaderLabel(params: {
   if (!countdown) return prefix
   const dayLabel = countdown.daysUntil === 1 ? "dia" : "dias"
   return `${prefix}, falta ${countdown.daysUntil} ${dayLabel} para el ${countdown.weekdayLabel}`
+}
+
+const HOME_SUBJECT_DISPLAY_NAMES: Record<string, string> = {
+  algebra: "Álgebra 2",
+  calculo2: "Cálculo 2",
+  calculo3: "Cálculo 3",
+  fisica: "Física 1",
+  logica: "Lógica",
+  probabilidad: "Probabilidad",
+}
+
+function getHomeSubjectDisplayName(subject: Subject) {
+  return HOME_SUBJECT_DISPLAY_NAMES[subject.id] ?? getSubjectDisplayName(subject)
+}
+
+function getCurrentHourKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}`
 }
 
 function idsToSubjects(ids: string[], subjects: Subject[]): Subject[] {
@@ -910,6 +930,7 @@ export function SubjectWheel({
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
   const [showAllSubjectsForDay, setShowAllSubjectsForDay] = useState(false)
   const [allCompletedSubjectIds, setAllCompletedSubjectIds] = useState<string[]>([])
+  const [subjectOpenCounts, setSubjectOpenCounts] = useState<Record<string, SubjectOpenCountRecord>>({})
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
   const [materials, setMaterials] = useState<SubjectDayMaterial[]>([])
   const [pendingMaterials, setPendingMaterials] = useState<PendingSubjectDayMaterial[]>([])
@@ -1307,6 +1328,34 @@ export function SubjectWheel({
 
     return () => window.clearInterval(intervalId)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadSubjectOpenCounts = async () => {
+      try {
+        const records = await fetchSubjectOpenCounts(homeSelectedWeekNumber)
+        if (cancelled) return
+
+        setSubjectOpenCounts(
+          records.reduce<Record<string, SubjectOpenCountRecord>>((accumulator, record) => {
+            accumulator[record.subject_id] = record
+            return accumulator
+          }, {})
+        )
+      } catch (error) {
+        console.error("Failed to load subject open counts:", error)
+        if (cancelled) return
+        setSubjectOpenCounts({})
+      }
+    }
+
+    void loadSubjectOpenCounts()
+
+    return () => {
+      cancelled = true
+    }
+  }, [homeSelectedWeekNumber, visibleSubjectIds])
 
   useEffect(() => {
     if (!isSynthesisOpen || synthesisSubjects.length === 0) return
@@ -2006,6 +2055,23 @@ export function SubjectWheel({
     setPracticeSectionView("exercises")
     setExerciseWeeklyScopeEnabled(true)
     setIsDialogOpen(true)
+
+    void (async () => {
+      try {
+        const record = await recordSubjectOpenCount({
+          subjectId: subject.id,
+          weekNumber: homeSelectedWeekNumber,
+          hourKey: getCurrentHourKey(),
+        })
+
+        setSubjectOpenCounts((previous) => ({
+          ...previous,
+          [record.subject_id]: record,
+        }))
+      } catch (error) {
+        console.error("Failed to record subject open count:", error)
+      }
+    })()
   }
 
   const openSubjectDay = async (subjectId: string, dateKey: string) => {
@@ -4553,6 +4619,20 @@ export function SubjectWheel({
     () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => currentCalendarWeek - index),
     [currentCalendarWeek]
   )
+  const homeSubjectCards = useMemo(
+    () =>
+      visibleSubjects.map((subject) => {
+        const countdown = getHomeSubjectCountdown(subject.id, homeSelectedDate)
+
+        return {
+          subject,
+          daysRemainingLabel: countdown ? `${countdown.daysUntil}d` : "--",
+          displayName: getHomeSubjectDisplayName(subject),
+          openCount: subjectOpenCounts[subject.id]?.count ?? 0,
+        }
+      }),
+    [homeSelectedDate, subjectOpenCounts, visibleSubjects]
+  )
   const currentSubjectPracticeCoverage = useMemo(() => {
     return buildMaterialCoverage(practiceMaterials, practiceEntriesByMaterialId)
   }, [practiceEntriesByMaterialId, practiceMaterials])
@@ -5391,7 +5471,40 @@ export function SubjectWheel({
       </header>
 
       {/* Main Content */}
-      <main className="absolute inset-0 flex items-center justify-center overflow-hidden">
+      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
+        {homeSubjectCards.length > 0 ? (
+          <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
+            <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+              {homeSubjectCards.map((card) => (
+                <button
+                  key={card.subject.id}
+                  type="button"
+                  onClick={() => handleSubjectClick(card.subject)}
+                  className="flex h-[14rem] w-[14rem] flex-col items-center justify-between rounded-full px-5 py-5 text-center text-white shadow-[0_18px_40px_rgba(0,0,0,0.14)] transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98] sm:h-[16rem] sm:w-[16rem] sm:px-6 sm:py-6"
+                  style={{ backgroundColor: getSubjectVisualColor(card.subject) }}
+                >
+                  <span className="text-[2.2rem] font-light leading-none sm:text-[2.7rem]">
+                    {card.daysRemainingLabel}
+                  </span>
+                  <span className="text-balance text-[2rem] font-light leading-tight sm:text-[2.8rem]">
+                    {card.displayName}
+                  </span>
+                  <span className="text-[2.4rem] font-light leading-none sm:text-[3rem]">
+                    {card.openCount}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-full items-center justify-center text-center">
+            <div>
+              <h2 className="mb-2 text-2xl font-bold text-foreground">Sin materias visibles</h2>
+              <p className="text-muted-foreground">No hay materias habilitadas para este usuario.</p>
+            </div>
+          </div>
+        )}
+        <div className="hidden">
         {activeSubjects.length > 0 ? (
           <svg viewBox="0 0 320 320" className="aspect-square w-[min(92vw,92dvh,56rem)] max-w-full">
             <g>
@@ -5439,11 +5552,13 @@ export function SubjectWheel({
             <p className="text-muted-foreground">Todas las materias fueron vistas hoy</p>
           </div>
         )}
+        </div>
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground sm:px-4 sm:py-3">
-        {completedSubjects.length > 0 && (
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground [&>p:last-child]:hidden sm:px-4 sm:py-3">
+        <p>Cada materia suma una apertura por hora y el contador reinicia por semana.</p>
+        {false && completedSubjects.length > 0 && (
           <div className="pointer-events-auto mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
               <button

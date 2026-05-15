@@ -131,11 +131,13 @@ function buildViewerSrc({
   draftContext,
   fileUrl,
   localWorkspaceMode,
+  pendingMaterialId,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
   fileUrl?: string | null
   localWorkspaceMode?: boolean
+  pendingMaterialId?: number
 }) {
   const params = new URLSearchParams()
 
@@ -152,6 +154,9 @@ function buildViewerSrc({
     if (material.workspaceFileId) {
       params.set("workspaceFileId", material.workspaceFileId)
     }
+  } else if (Number.isInteger(pendingMaterialId)) {
+    params.set("materialId", String(pendingMaterialId))
+    params.set("key", `subject-day-material-pending-${pendingMaterialId}`)
   }
 
   if (draftContext) {
@@ -222,8 +227,15 @@ export function PracticeViewerClient({
   const isLocalMode = isLocalStorageMode()
 
   const viewerSrc = useMemo(
-    () => buildViewerSrc({ material: resolvedMaterial, draftContext, fileUrl: materialFileUrl, localWorkspaceMode: isLocalMode }),
-    [draftContext, isLocalMode, materialFileUrl, resolvedMaterial]
+    () =>
+      buildViewerSrc({
+        material: resolvedMaterial,
+        draftContext,
+        fileUrl: materialFileUrl,
+        localWorkspaceMode: isLocalMode,
+        pendingMaterialId: Number.isInteger(materialId) ? materialId : undefined,
+      }),
+    [draftContext, isLocalMode, materialFileUrl, materialId, resolvedMaterial]
   )
   const activeContext = resolvedMaterial ?? draftContext
   const hasMaterial = Boolean(resolvedMaterial)
@@ -882,18 +894,6 @@ export function PracticeViewerClient({
       playbackUrlCacheRef.current.clear()
     }
   }, [discardRecording, disposePairDraft, materialFileUrl, stopMediaTracks, stopPreviewPlayback])
-
-  if (isLocalMode && Number.isInteger(materialId) && (!resolvedMaterial || !materialFileUrl)) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
-        <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-6">
-          <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Visor PDF</p>
-          <h1 className="mt-3 text-2xl font-semibold">Abriendo material local</h1>
-          <p className="mt-3 text-sm text-slate-300">Recuperando el PDF desde la carpeta seleccionada.</p>
-        </div>
-      </main>
-    )
-  }
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">

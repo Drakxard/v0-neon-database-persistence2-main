@@ -15,6 +15,8 @@
     modalCancel: null,
     busy: null,
     busyText: null,
+    loadingOverlay: null,
+    loadingText: null,
     draftOverlay: null,
     syncButton: null,
     secondarySyncButton: null,
@@ -304,6 +306,15 @@
       document.body.appendChild(busy);
       state.busy = busy;
       state.busyText = busy.querySelector("#pdfjs-custom-busy-text");
+    }
+
+    if (!state.loadingOverlay) {
+      const overlay = document.createElement("div");
+      overlay.className = "pdfjs-custom-loading-overlay";
+      overlay.innerHTML = '<div class="pdfjs-custom-loading-card" id="pdfjs-custom-loading-text">Cargando PDF...</div>';
+      document.body.appendChild(overlay);
+      state.loadingOverlay = overlay;
+      state.loadingText = overlay.querySelector("#pdfjs-custom-loading-text");
     }
 
     if (!state.draftOverlay) {
@@ -608,6 +619,22 @@
     if (!state.draftOverlay) return;
     const shouldShow = isDraftMode() && !state.app?.pdfDocument;
     state.draftOverlay.dataset.open = shouldShow ? "true" : "false";
+  }
+
+  function showLoadingOverlay(message) {
+    ensureUi();
+    if (state.loadingText) {
+      state.loadingText.textContent = message || "Cargando PDF...";
+    }
+    if (state.loadingOverlay) {
+      state.loadingOverlay.dataset.open = "true";
+    }
+  }
+
+  function hideLoadingOverlay() {
+    if (state.loadingOverlay) {
+      state.loadingOverlay.dataset.open = "false";
+    }
   }
 
   function clearSelections() {
@@ -2028,6 +2055,7 @@
     if (event.data.type === "viewerWorkspaceMode" && event.data.mode === "local") {
       state.workspaceMode = "local";
       refreshSyncButtons();
+      showLoadingOverlay("Cargando PDF local...");
       return;
     }
 
@@ -2167,6 +2195,7 @@
     updateDraftOverlay();
     applyEnhancedPdfReadability();
     refreshSyncButtons();
+    hideLoadingOverlay();
   }
 
   function handleKeyDown(event) {
@@ -2213,6 +2242,7 @@
     state.app = app;
     state.query = parseQuery();
     ensureUi();
+    showLoadingOverlay(isLocalWorkspaceMode() ? "Cargando PDF local..." : "Cargando PDF...");
     bindSyncButtons();
     refreshLayers();
     updateDraftOverlay();
@@ -2230,6 +2260,7 @@
     eventBus.on("documenterror", () => {
       updateDraftOverlay();
       refreshSyncButtons();
+      hideLoadingOverlay();
     });
     document.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("beforeunload", handleBeforeUnload);

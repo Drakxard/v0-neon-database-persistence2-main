@@ -192,6 +192,33 @@
   display: flex;
 }
 
+.pdfjs-custom-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1240;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.88);
+}
+
+.pdfjs-custom-loading-overlay[data-open="true"] {
+  display: flex;
+}
+
+.pdfjs-custom-loading-card {
+  min-width: 260px;
+  max-width: 360px;
+  padding: 20px 22px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.96);
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.42);
+  text-align: center;
+  font: 600 14px/1.45 system-ui, sans-serif;
+}
+
 .pdfjs-custom-busy-card {
   min-width: 260px;
   max-width: 320px;

@@ -103,6 +103,16 @@ export type DailySessionRecord = {
   show_all_subjects: boolean
 }
 
+export type SubjectOpenCountRecord = {
+  id?: number
+  week_number: number
+  subject_id: string
+  count: number
+  last_open_hour_key: string | null
+  created_at?: string
+  updated_at?: string
+}
+
 export type SubjectSynthesisRecord = {
   subjectId: string
   weekNumber: number
