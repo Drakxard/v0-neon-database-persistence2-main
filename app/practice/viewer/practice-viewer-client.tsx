@@ -77,6 +77,7 @@ type ViewerMessage =
   | { type: "cancelAnchoredAudio" }
   | { type: "playAnchoredAudio"; entryId?: number }
   | { type: "deleteAnchoredAudio"; entryId?: number }
+  | { type: "viewerRequestClose" }
   | { type: "viewerReady" }
   | { type: "viewerDocumentLoaded" }
   | { type: "viewerDocumentError" }
@@ -137,6 +138,7 @@ function buildViewerSrc({
   fileUrl,
   localWorkspaceMode,
   pendingMaterialId,
+  mode,
   returnToken,
 }: {
   material?: MaterialContext
@@ -144,6 +146,7 @@ function buildViewerSrc({
   fileUrl?: string | null
   localWorkspaceMode?: boolean
   pendingMaterialId?: number
+  mode?: "inline" | "standalone"
   returnToken?: string
 }) {
   const params = new URLSearchParams()
@@ -181,6 +184,8 @@ function buildViewerSrc({
     params.set("localWorkspace", "1")
   }
 
+  params.set("viewerMode", mode === "inline" ? "inline" : "standalone")
+
   if (returnToken) {
     params.set("returnToken", returnToken)
   }
@@ -206,11 +211,15 @@ export function PracticeViewerClient({
   material,
   draftContext,
   materialId,
+  mode = "standalone",
+  onRequestClose,
   returnToken,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
   materialId?: number
+  mode?: "inline" | "standalone"
+  onRequestClose?: () => void
   returnToken?: string
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -252,9 +261,10 @@ export function PracticeViewerClient({
         fileUrl: materialFileUrl,
         localWorkspaceMode: isLocalMode,
         pendingMaterialId: Number.isInteger(materialId) ? materialId : undefined,
+        mode,
         returnToken: resolvedMaterial?.returnToken || draftContext?.returnToken || returnToken,
       }),
-    [draftContext, isLocalMode, materialFileUrl, materialId, resolvedMaterial, returnToken]
+    [draftContext, isLocalMode, materialFileUrl, materialId, mode, resolvedMaterial, returnToken]
   )
   const activeContext = resolvedMaterial ?? draftContext
   const hasMaterial = Boolean(resolvedMaterial)
@@ -655,6 +665,11 @@ export function PracticeViewerClient({
         return
       }
 
+      if (event.data.type === "viewerRequestClose") {
+        onRequestClose?.()
+        return
+      }
+
       if (event.data.type === "uploadPracticeFragment") {
         const payload = event.data.payload
         if (!payload?.blob || !(payload.blob instanceof Blob)) return
@@ -807,6 +822,7 @@ export function PracticeViewerClient({
       stopPreviewPlayback,
       syncPositionsToViewer,
       rootHandle,
+      onRequestClose,
       uploadPracticeFragment,
     ]
   )

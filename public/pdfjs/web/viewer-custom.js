@@ -70,6 +70,7 @@
       key: String(params.get("key") || "").trim(),
       localWorkspace: params.get("localWorkspace") === "1",
       workspaceFileId: String(params.get("workspaceFileId") || "").trim(),
+      viewerMode: String(params.get("viewerMode") || "standalone").trim() === "inline" ? "inline" : "standalone",
       returnToken: String(params.get("returnToken") || "").trim(),
     };
   }
@@ -692,6 +693,10 @@
     return state.query?.returnToken ? `/?returnToken=${encodeURIComponent(state.query.returnToken)}` : "/";
   }
 
+  function isInlineViewerMode() {
+    return state.query?.viewerMode === "inline";
+  }
+
   async function navigateBackToApp() {
     if (state.isSyncing) {
       showToast("Espera a que termine la sincronizacion.", "info");
@@ -708,6 +713,10 @@
     state.pendingExitSync = false;
     state.suppressUnloadSync = true;
     clearExitSyncTimer();
+    if (isInlineViewerMode()) {
+      postToParent({ type: "viewerRequestClose" });
+      return;
+    }
     window.location.assign(buildReturnHref());
   }
 

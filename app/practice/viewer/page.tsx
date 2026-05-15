@@ -147,7 +147,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
       returnToken,
     }
 
-    return <PracticeViewerClient draftContext={draftContext} />
+    return <PracticeViewerClient draftContext={draftContext} mode="standalone" />
   }
 
   if (!Number.isInteger(materialId)) {
@@ -166,7 +166,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   }
 
   if (isLocalStorageMode()) {
-    return <PracticeViewerClient materialId={materialId} returnToken={returnToken} />
+    return <PracticeViewerClient materialId={materialId} mode="standalone" returnToken={returnToken} />
   }
 
   try {
@@ -227,6 +227,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
 
     return (
       <PracticeViewerClient
+        mode="standalone"
         material={{
           id: material.id,
           subjectId: material.subject_id,
