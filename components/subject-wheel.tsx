@@ -34,7 +34,6 @@ import {
   revealSocraticReviewTurn,
   saveSocraticReviewSettings,
 } from "@/lib/socratic-review-client"
-import { fetchSubjectOpenCounts, recordSubjectOpenCount } from "@/lib/subject-open-counts-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
@@ -51,7 +50,6 @@ import type {
   SubjectDayMaterial,
   SubjectMaterialSynthesisRecord,
   SubjectDayMaterialType,
-  SubjectOpenCountRecord,
   SubjectShortcutKey,
   SubjectShortcuts,
   SubjectSynthesisDerivedSummary,
@@ -494,10 +492,6 @@ function getHomeSubjectDisplayName(subject: Subject) {
   return HOME_SUBJECT_DISPLAY_NAMES[subject.id] ?? getSubjectDisplayName(subject)
 }
 
-function getCurrentHourKey(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}`
-}
-
 function idsToSubjects(ids: string[], subjects: Subject[]): Subject[] {
   return ids.map((id) => subjects.find((subject) => subject.id === id)).filter(Boolean) as Subject[]
 }
@@ -930,7 +924,6 @@ export function SubjectWheel({
   const [currentDateKey, setCurrentDateKey] = useState(getTodayDateString())
   const [showAllSubjectsForDay, setShowAllSubjectsForDay] = useState(false)
   const [allCompletedSubjectIds, setAllCompletedSubjectIds] = useState<string[]>([])
-  const [subjectOpenCounts, setSubjectOpenCounts] = useState<Record<string, SubjectOpenCountRecord>>({})
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
   const [materials, setMaterials] = useState<SubjectDayMaterial[]>([])
   const [pendingMaterials, setPendingMaterials] = useState<PendingSubjectDayMaterial[]>([])
@@ -1328,34 +1321,6 @@ export function SubjectWheel({
 
     return () => window.clearInterval(intervalId)
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const loadSubjectOpenCounts = async () => {
-      try {
-        const records = await fetchSubjectOpenCounts(homeSelectedWeekNumber)
-        if (cancelled) return
-
-        setSubjectOpenCounts(
-          records.reduce<Record<string, SubjectOpenCountRecord>>((accumulator, record) => {
-            accumulator[record.subject_id] = record
-            return accumulator
-          }, {})
-        )
-      } catch (error) {
-        console.error("Failed to load subject open counts:", error)
-        if (cancelled) return
-        setSubjectOpenCounts({})
-      }
-    }
-
-    void loadSubjectOpenCounts()
-
-    return () => {
-      cancelled = true
-    }
-  }, [homeSelectedWeekNumber, visibleSubjectIds])
 
   useEffect(() => {
     if (!isSynthesisOpen || synthesisSubjects.length === 0) return
@@ -2051,27 +2016,10 @@ export function SubjectWheel({
     setCurrentSubject(subject)
     setDialogDateKey(currentDateKey)
     resetSubjectUiState()
-    setSubjectDialogEntryMode("theory_continue")
+    setSubjectDialogEntryMode("default")
     setPracticeSectionView("exercises")
     setExerciseWeeklyScopeEnabled(true)
     setIsDialogOpen(true)
-
-    void (async () => {
-      try {
-        const record = await recordSubjectOpenCount({
-          subjectId: subject.id,
-          weekNumber: homeSelectedWeekNumber,
-          hourKey: getCurrentHourKey(),
-        })
-
-        setSubjectOpenCounts((previous) => ({
-          ...previous,
-          [record.subject_id]: record,
-        }))
-      } catch (error) {
-        console.error("Failed to record subject open count:", error)
-      }
-    })()
   }
 
   const openSubjectDay = async (subjectId: string, dateKey: string) => {
@@ -4628,10 +4576,9 @@ export function SubjectWheel({
           subject,
           daysRemainingLabel: countdown ? `${countdown.daysUntil}d` : "--",
           displayName: getHomeSubjectDisplayName(subject),
-          openCount: subjectOpenCounts[subject.id]?.count ?? 0,
         }
       }),
-    [homeSelectedDate, subjectOpenCounts, visibleSubjects]
+    [homeSelectedDate, visibleSubjects]
   )
   const currentSubjectPracticeCoverage = useMemo(() => {
     return buildMaterialCoverage(practiceMaterials, practiceEntriesByMaterialId)
@@ -5489,9 +5436,7 @@ export function SubjectWheel({
                   <span className="text-balance text-[2rem] font-light leading-tight sm:text-[2.8rem]">
                     {card.displayName}
                   </span>
-                  <span className="text-[2.4rem] font-light leading-none sm:text-[3rem]">
-                    {card.openCount}
-                  </span>
+                  <span aria-hidden="true" className="block h-8 sm:h-10" />
                 </button>
               ))}
             </div>
@@ -5557,7 +5502,6 @@ export function SubjectWheel({
 
       {/* Footer - Completed Subjects */}
       <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground [&>p:last-child]:hidden sm:px-4 sm:py-3">
-        <p>Cada materia suma una apertura por hora y el contador reinicia por semana.</p>
         {false && completedSubjects.length > 0 && (
           <div className="pointer-events-auto mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
