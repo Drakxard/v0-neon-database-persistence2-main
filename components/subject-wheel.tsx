@@ -4900,7 +4900,8 @@ export function SubjectWheel({
                     <div className="min-w-0 flex-1">
                       <a
                         href={buildMaterialViewerHref(material.id)}
-                        onClick={(event) => openMaterialViewerFromCurrentContext(material.id, event)}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="block min-w-0 truncate text-sm text-foreground hover:underline"
                       >
                         {material.file_name}
@@ -6238,7 +6239,8 @@ export function SubjectWheel({
                         />
                           <a
                             href={buildMaterialViewerHref(currentContinueMaterial.id)}
-                            onClick={(event) => openMaterialViewerFromCurrentContext(currentContinueMaterial.id, event)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="font-medium underline-offset-2 hover:underline"
                           >
                             {currentContinueMaterial.file_name}

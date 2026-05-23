@@ -266,6 +266,7 @@ export function PracticeViewerClient({
       }),
     [draftContext, isLocalMode, materialFileUrl, materialId, mode, resolvedMaterial, returnToken]
   )
+  const isPdfJsViewer = viewerSrc.startsWith("/pdfjs/web/viewer.html?")
   const activeContext = resolvedMaterial ?? draftContext
   const hasMaterial = Boolean(resolvedMaterial)
   const isPairModalOpen = Boolean(resolvedMaterial && pairDraft)
@@ -1015,6 +1016,10 @@ export function PracticeViewerClient({
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
         onLoad={() => {
+          setIsViewerReady(true)
+          if (isPdfJsViewer && expectsPdfDocument) {
+            setIsViewerDocumentReady(true)
+          }
           syncPositionsToViewer(hasMaterial ? positions : [])
           if (rootHandle) {
             postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
