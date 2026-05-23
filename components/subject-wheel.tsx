@@ -5,7 +5,6 @@ import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, C
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
-import { PracticeViewerClient } from "@/app/practice/viewer/practice-viewer-client"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -384,20 +383,6 @@ type ViewerReturnSnapshot = {
   isContinueOpen: boolean
   continueMode: ContinueMode
   continueMaterialId: number | null
-}
-
-type ActiveInlineViewerContext = {
-  materialId: number
-  material?: {
-    id: number
-    subjectId: string
-    subjectName: string
-    sessionDate: string
-    weekNumber: number
-    weekdayIndex: number
-    fileName: string
-    workspaceFileId?: string | null
-  }
 }
 
 type SubjectVisibilityState = {
@@ -990,7 +975,6 @@ export function SubjectWheel({
   const [subjectViewDateOverride, setSubjectViewDateOverride] = useState<string | null>(null)
   const [dialogShowAllSubjectsForDay, setDialogShowAllSubjectsForDay] = useState(false)
   const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
-  const [activeInlineViewer, setActiveInlineViewer] = useState<ActiveInlineViewerContext | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
@@ -4681,57 +4665,6 @@ export function SubjectWheel({
       }, {}),
     [materials, pendingMaterials]
   )
-  const closeInlineViewer = useCallback(() => {
-    setActiveInlineViewer(null)
-  }, [])
-  const openInlineViewer = useCallback(
-    (materialId: number) => {
-      const material = materialById[materialId]
-      if (material && !("is_pending_upload" in material)) {
-        setActiveInlineViewer({
-          materialId,
-          material: {
-            id: material.id,
-            subjectId: material.subject_id,
-            subjectName: getSubjectDisplayName(getSubjectById(material.subject_id, visibleSubjects)),
-            sessionDate: material.session_date,
-            weekNumber: material.week_number,
-            weekdayIndex: material.weekday_index,
-            fileName: material.file_name,
-            workspaceFileId: material.drive_file_id,
-          },
-        })
-        return
-      }
-
-      setActiveInlineViewer({ materialId })
-    },
-    [materialById, visibleSubjects]
-  )
-  useEffect(() => {
-    if (!activeInlineViewer) return
-
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-
-    return () => {
-      document.body.style.overflow = previousOverflow
-    }
-  }, [activeInlineViewer])
-  const openMaterialViewerFromCurrentContext = useCallback(
-    (materialId: number, event?: React.MouseEvent<HTMLAnchorElement>) => {
-      if (event && !isPlainLeftClick(event)) {
-        return
-      }
-
-      if (event) {
-        event.preventDefault()
-      }
-
-      openInlineViewer(materialId)
-    },
-    [openInlineViewer]
-  )
   const moveEntryMaterialOptions = useMemo(
     () =>
       moveEntryTarget
@@ -5190,7 +5123,7 @@ export function SubjectWheel({
   return (
     <div className="relative min-h-dvh max-h-dvh overflow-hidden bg-background text-foreground transition-colors duration-300">
       {/* Header */}
-      <header className={cn("pointer-events-none absolute inset-x-0 top-0 z-20", activeInlineViewer ? "select-none opacity-85" : "")}>
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
         <div className="flex flex-col gap-1 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
             <div className="pointer-events-auto flex shrink-0 items-center">
@@ -5318,13 +5251,7 @@ export function SubjectWheel({
       </header>
 
       {/* Main Content */}
-      <main
-        className={cn(
-          "absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28",
-          activeInlineViewer ? "pointer-events-none select-none overflow-hidden" : ""
-        )}
-        aria-hidden={activeInlineViewer ? true : undefined}
-      >
+      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
         {homeSubjectCards.length > 0 ? (
           <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
             <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
@@ -5407,12 +5334,7 @@ export function SubjectWheel({
       </main>
 
       {/* Footer - Completed Subjects */}
-      <footer
-        className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground [&>p:last-child]:hidden sm:px-4 sm:py-3",
-          activeInlineViewer ? "select-none opacity-85" : ""
-        )}
-      >
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 py-2 text-center text-xs text-muted-foreground [&>p:last-child]:hidden sm:px-4 sm:py-3">
         {false && completedSubjects.length > 0 && (
           <div className="pointer-events-auto mb-1.5 flex flex-wrap justify-center gap-1.5 sm:mb-2 sm:gap-2">
             {completedSubjects.map((subject) => (
@@ -7797,20 +7719,6 @@ export function SubjectWheel({
         </DialogContent>
       </Dialog>
 
-      {activeInlineViewer ? (
-        <div
-          className="fixed inset-0 z-[2200] overflow-hidden overscroll-none bg-slate-950"
-          onWheelCapture={(event) => event.stopPropagation()}
-          onTouchMoveCapture={(event) => event.stopPropagation()}
-        >
-          <PracticeViewerClient
-            material={activeInlineViewer.material}
-            materialId={activeInlineViewer.materialId}
-            mode="inline"
-            onRequestClose={closeInlineViewer}
-          />
-        </div>
-      ) : null}
     </div>
   )
 }
