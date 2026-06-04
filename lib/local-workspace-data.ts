@@ -257,6 +257,12 @@ async function deleteJsonFile(pathSegments: string[]) {
   await directoryHandle.removeEntry(fileName).catch(() => {})
 }
 
+async function jsonFileExists(pathSegments: string[]) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const fileHandle = await getFileHandleBySegments(rootHandle, pathSegments, false).catch(() => null)
+  return Boolean(fileHandle)
+}
+
 async function persistWorkspaceBlob(workspaceId: string, blob: Blob) {
   const rootHandle = await ensureWorkspaceRootHandle()
   const fileHandle = await getFileHandleBySegments(rootHandle, workspaceIdToSegments(workspaceId), true)
@@ -472,18 +478,9 @@ async function listWeekNumbersForManifestKind(kind: "materials" | "entries", sub
     const match = /^week-(\d+)\.json$/i.exec(name)
     if (match) {
       const weekNumber = Number.parseInt(match[1], 10)
-      if (kind === MATERIALS_DIR) {
-        const manifest = await readMaterialManifest(subjectId, weekNumber)
-        if (manifest.materials.length === 0) {
-          await deleteJsonFile(materialManifestPath(subjectId, weekNumber))
-          continue
-        }
-      } else {
-        const manifest = await readEntryManifest(subjectId, weekNumber)
-        if (manifest.entries.length === 0) {
-          await deleteJsonFile(entryManifestPath(subjectId, weekNumber))
-          continue
-        }
+      const cleanup = await cleanupLocalSubjectWeekIfEmpty(subjectId, weekNumber)
+      if (!cleanup.hasContent) {
+        continue
       }
 
       weekNumbers.push(weekNumber)
@@ -503,9 +500,8 @@ async function listSynthesisWeekNumbersForSubject(subjectId: string) {
     if (!match) continue
 
     const weekNumber = Number.parseInt(match[1], 10)
-    const items = await readSynthesisProgressManifest(subjectId, weekNumber)
-    if (items.length === 0) {
-      await deleteJsonFile(synthesisProgressPath(subjectId, weekNumber))
+    const cleanup = await cleanupLocalSubjectWeekIfEmpty(subjectId, weekNumber)
+    if (!cleanup.hasContent) {
       continue
     }
 
@@ -596,6 +592,59 @@ export async function saveLocalSynthesisProgress(
   const normalizedItems = coerceSynthesisProgressItems(items)
   await writeSynthesisProgressManifest(subjectId, weekNumber, normalizedItems)
   return normalizedItems
+}
+
+export async function hasLocalWeekContent(subjectId: string, weekNumber: number) {
+  const [materialManifest, entryManifest, synthesisItems] = await Promise.all([
+    readMaterialManifest(subjectId, weekNumber),
+    readEntryManifest(subjectId, weekNumber),
+    readSynthesisProgressManifest(subjectId, weekNumber),
+  ])
+
+  return materialManifest.materials.length > 0 || entryManifest.entries.length > 0 || synthesisItems.length > 0
+}
+
+export async function cleanupLocalSubjectWeekIfEmpty(subjectId: string, weekNumber: number) {
+  const [hasMaterialManifest, hasEntryManifest, hasSynthesisManifest] = await Promise.all([
+    jsonFileExists(materialManifestPath(subjectId, weekNumber)),
+    jsonFileExists(entryManifestPath(subjectId, weekNumber)),
+    jsonFileExists(synthesisProgressPath(subjectId, weekNumber)),
+  ])
+  const hadPersistedArtifacts = hasMaterialManifest || hasEntryManifest || hasSynthesisManifest
+  const hasContent = await hasLocalWeekContent(subjectId, weekNumber)
+
+  if (hasContent) {
+    return {
+      hasContent: true,
+      cleaned: false,
+      hadPersistedArtifacts,
+    }
+  }
+
+  await Promise.all([
+    hasMaterialManifest ? deleteJsonFile(materialManifestPath(subjectId, weekNumber)) : Promise.resolve(),
+    hasEntryManifest ? deleteJsonFile(entryManifestPath(subjectId, weekNumber)) : Promise.resolve(),
+    hasSynthesisManifest ? deleteJsonFile(synthesisProgressPath(subjectId, weekNumber)) : Promise.resolve(),
+  ])
+
+  return {
+    hasContent: false,
+    cleaned: hadPersistedArtifacts,
+    hadPersistedArtifacts,
+  }
+}
+
+export async function findNearestWeekWithContent(subjectId: string, fromWeekNumber: number, direction: -1 | 1) {
+  const weekNumbers = await listLocalSubjectWeekNumbersWithContent(subjectId)
+  if (direction > 0) {
+    return [...weekNumbers]
+      .sort((left, right) => left - right)
+      .find((weekNumber) => weekNumber > fromWeekNumber) ?? null
+  }
+
+  return [...weekNumbers]
+    .sort((left, right) => right - left)
+    .find((weekNumber) => weekNumber < fromWeekNumber) ?? null
 }
 
 export async function listLocalSubjectWeekNumbersWithContent(subjectId: string) {

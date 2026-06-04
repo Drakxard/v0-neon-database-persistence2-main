@@ -25,7 +25,9 @@ import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cr
 import { saveDailySession } from "@/lib/daily-study-client"
 import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
+  cleanupLocalSubjectWeekIfEmpty,
   createObjectUrlForWorkspaceFile,
+  findNearestWeekWithContent,
   isWorkspaceFileId,
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
@@ -1324,57 +1326,31 @@ export function SubjectWheel({
     currentCalendarWeekRef.current = currentCalendarWeek
   }, [currentCalendarWeek])
 
-  useEffect(() => {
+  const refreshLocalWeekOptions = useCallback(async () => {
     if (!LOCAL_STORAGE_MODE) return
 
-    let isCancelled = false
-    void listLocalWeekNumbersWithContent(synthesisSubjects.map((subject) => subject.id))
-      .then((weekNumbers) => {
-        if (!isCancelled) {
-          setLocalSynthesisWeekOptions(weekNumbers)
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load local synthesis week options:", error)
-        if (!isCancelled) {
-          setLocalSynthesisWeekOptions([])
-        }
-      })
+    const [synthesisWeekNumbers, practiceWeekNumbers] = await Promise.all([
+      listLocalWeekNumbersWithContent(synthesisSubjects.map((subject) => subject.id)),
+      (
+        practiceSubjectId.trim().length > 0
+          ? listLocalSubjectWeekNumbersWithContent(practiceSubjectId)
+          : listLocalWeekNumbersWithContent(visibleSubjects.map((subject) => subject.id))
+      ),
+    ])
 
-    return () => {
-      isCancelled = true
-    }
-  }, [synthesisSubjects])
+    setLocalSynthesisWeekOptions(synthesisWeekNumbers)
+    setLocalPracticeWeekOptions(practiceWeekNumbers.map(String))
+  }, [practiceSubjectId, synthesisSubjects, visibleSubjects])
 
   useEffect(() => {
     if (!LOCAL_STORAGE_MODE) return
 
-    let isCancelled = false
-    const targetSubjectIds =
-      practiceSubjectId.trim().length > 0 ? [practiceSubjectId] : visibleSubjects.map((subject) => subject.id)
-
-    const weekOptionsPromise =
-      targetSubjectIds.length === 1
-        ? listLocalSubjectWeekNumbersWithContent(targetSubjectIds[0]!)
-        : listLocalWeekNumbersWithContent(targetSubjectIds)
-
-    void weekOptionsPromise
-      .then((weekNumbers) => {
-        if (!isCancelled) {
-          setLocalPracticeWeekOptions(weekNumbers.map(String))
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to load local practice week options:", error)
-        if (!isCancelled) {
-          setLocalPracticeWeekOptions([])
-        }
-      })
-
-    return () => {
-      isCancelled = true
-    }
-  }, [practiceSubjectId, visibleSubjects])
+    void refreshLocalWeekOptions().catch((error) => {
+      console.error("Failed to load local week options:", error)
+      setLocalSynthesisWeekOptions([])
+      setLocalPracticeWeekOptions([])
+    })
+  }, [refreshLocalWeekOptions])
 
   useEffect(() => {
     if (!LOCAL_STORAGE_MODE) return
@@ -2152,7 +2128,29 @@ export function SubjectWheel({
     const maxNavigableWeekNumber = currentCalendarWeek + 1
     if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
 
+    if (LOCAL_STORAGE_MODE && currentSubject) {
+      const cleanup = await cleanupLocalSubjectWeekIfEmpty(currentSubject.id, nextWeekNumber)
+      if (!cleanup.hasContent) {
+        const nearestWeekNumber = await findNearestWeekWithContent(currentSubject.id, nextWeekNumber, direction)
+        await refreshLocalWeekOptions()
+
+        if (nearestWeekNumber != null) {
+          const nearestWeekStart = getWeekDates(nearestWeekNumber)[0]
+          if (nearestWeekStart) {
+            setDialogDateKey(formatDateKey(nearestWeekStart))
+            setSelectedPracticeMaterialId(null)
+            return
+          }
+        }
+
+        if (direction < 0) {
+          return
+        }
+      }
+    }
+
     setDialogDateKey(formatDateKey(nextDate))
+    setSelectedPracticeMaterialId(null)
   }
 
   const returnToCurrentDayView = async () => {
