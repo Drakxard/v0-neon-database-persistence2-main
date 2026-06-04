@@ -2292,14 +2292,14 @@ export function SubjectWheel({
     }, 180)
   }, [clearNextWeekHoldRaf, openTransientNextWeekFromHold])
 
-  const startNextWeekHold = useCallback((enabled: boolean) => {
+  const startNextWeekHold = useCallback((enabled: boolean, source: "pointer" | "keyboard" = "pointer") => {
     if (!enabled) return
 
     clearNextWeekHoldRaf()
     nextWeekHoldActiveRef.current = true
     nextWeekHoldCompletedRef.current = false
     shouldSuppressNextWeekClickRef.current = false
-    keyboardNextWeekHoldActiveRef.current = false
+    keyboardNextWeekHoldActiveRef.current = source === "keyboard"
     nextWeekHoldStartRef.current = performance.now()
     setIsNextWeekHoldActive(true)
     setNextWeekHoldProgress(0)
@@ -2512,7 +2512,7 @@ export function SubjectWheel({
 
         if (!canCreateTransientNextWeek || keyboardNextWeekHoldActiveRef.current) return
         keyboardNextWeekHoldActiveRef.current = true
-        startNextWeekHold(true)
+        startNextWeekHold(true, "keyboard")
       }
     }
 
