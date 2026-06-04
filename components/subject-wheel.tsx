@@ -1012,6 +1012,8 @@ export function SubjectWheel({
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
   const [localSynthesisWeekOptions, setLocalSynthesisWeekOptions] = useState<number[]>([])
   const [localPracticeWeekOptions, setLocalPracticeWeekOptions] = useState<string[]>([])
+  const [isNextWeekHoldActive, setIsNextWeekHoldActive] = useState(false)
+  const [nextWeekHoldProgress, setNextWeekHoldProgress] = useState(0)
   const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
   const [practiceVisibleEntries, setPracticeVisibleEntries] = useState<SubjectDayEntry[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
@@ -1031,6 +1033,10 @@ export function SubjectWheel({
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<StackedDayViewReturnState | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
   const [isSocraticReviewOpen, setIsSocraticReviewOpen] = useState(false)
+  const nextWeekHoldRafRef = useRef<number | null>(null)
+  const nextWeekHoldStartRef = useRef(0)
+  const nextWeekHoldCompletedRef = useRef(false)
+  const shouldSuppressNextWeekClickRef = useRef(false)
 
   useEffect(() => {
     setSession(authSession)
@@ -1303,6 +1309,9 @@ export function SubjectWheel({
       synthesisAutosaveTimersRef.current.clear()
       if (shortcutLongPressTimerRef.current !== null) {
         window.clearTimeout(shortcutLongPressTimerRef.current)
+      }
+      if (nextWeekHoldRafRef.current !== null) {
+        window.cancelAnimationFrame(nextWeekHoldRafRef.current)
       }
       const speechSynthesisInstance = getSpeechSynthesisInstance()
       speechSynthesisInstance?.cancel()
@@ -2152,6 +2161,151 @@ export function SubjectWheel({
     setDialogDateKey(formatDateKey(nextDate))
     setSelectedPracticeMaterialId(null)
   }
+
+  const clearNextWeekHoldRaf = useCallback(() => {
+    if (nextWeekHoldRafRef.current !== null) {
+      window.cancelAnimationFrame(nextWeekHoldRafRef.current)
+      nextWeekHoldRafRef.current = null
+    }
+  }, [])
+
+  const cancelNextWeekHold = useCallback(() => {
+    clearNextWeekHoldRaf()
+    nextWeekHoldStartRef.current = 0
+    nextWeekHoldCompletedRef.current = false
+    setIsNextWeekHoldActive(false)
+    setNextWeekHoldProgress(0)
+  }, [clearNextWeekHoldRaf])
+
+  const completeNextWeekHold = useCallback(() => {
+    if (nextWeekHoldCompletedRef.current) return
+
+    nextWeekHoldCompletedRef.current = true
+    shouldSuppressNextWeekClickRef.current = true
+    setIsNextWeekHoldActive(false)
+    setNextWeekHoldProgress(1)
+    clearNextWeekHoldRaf()
+    void moveWeek(1)
+    window.setTimeout(() => {
+      setNextWeekHoldProgress(0)
+    }, 180)
+  }, [clearNextWeekHoldRaf, moveWeek])
+
+  const startNextWeekHold = useCallback((enabled: boolean) => {
+    if (!enabled) return
+
+    clearNextWeekHoldRaf()
+    nextWeekHoldCompletedRef.current = false
+    shouldSuppressNextWeekClickRef.current = false
+    nextWeekHoldStartRef.current = performance.now()
+    setIsNextWeekHoldActive(true)
+    setNextWeekHoldProgress(0)
+
+    const HOLD_THRESHOLD_MS = 680
+    const tick = (timestamp: number) => {
+      const elapsed = timestamp - nextWeekHoldStartRef.current
+      const progress = Math.max(0, Math.min(1, elapsed / HOLD_THRESHOLD_MS))
+      setNextWeekHoldProgress(progress)
+
+      if (progress >= 1) {
+        completeNextWeekHold()
+        return
+      }
+
+      nextWeekHoldRafRef.current = window.requestAnimationFrame(tick)
+    }
+
+    nextWeekHoldRafRef.current = window.requestAnimationFrame(tick)
+  }, [clearNextWeekHoldRaf, completeNextWeekHold])
+
+  useEffect(() => {
+    if (isDialogOpen) return
+    cancelNextWeekHold()
+  }, [cancelNextWeekHold, isDialogOpen])
+
+  const isWeeklyAdvanceContext = practiceSectionView === "exercises" && !subjectViewDateOverride
+  const isNextWeekAdvanceDisabled = isWeeklyAdvanceContext
+    ? dialogSelectedWeekNumber >= currentCalendarWeek + 1
+    : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
+
+  const renderNextWeekAdvanceButton = useCallback(
+    (size: "desktop" | "mobile") => {
+      const enabled = isWeeklyAdvanceContext && !isNextWeekAdvanceDisabled
+      const buttonSizeClass = size === "desktop" ? "h-10 w-10 sm:h-12 sm:w-12" : "h-9 w-9"
+      const iconSizeClass = size === "desktop" ? "h-5 w-5" : "h-4 w-4"
+      const plusSize = size === "desktop" ? 26 : 22
+      const haloSize = size === "desktop" ? 60 : 50
+      const plusTranslateY = size === "desktop" ? -20 : -16
+      const scale = 0.72 + nextWeekHoldProgress * 0.7
+      const haloScale = 0.58 + nextWeekHoldProgress * 0.7
+      const plusOpacity = enabled ? 0.25 + nextWeekHoldProgress * 0.75 : 0
+      const haloOpacity = enabled ? 0.14 + nextWeekHoldProgress * 0.42 : 0
+
+      return (
+        <div className="relative inline-flex items-center justify-center">
+          {enabled ? (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-1/2 z-10 rounded-full transition-[opacity,transform] duration-200 ease-out"
+              style={{
+                width: haloSize,
+                height: haloSize,
+                opacity: haloOpacity,
+                transform: `translate(-50%, calc(-50% + ${plusTranslateY}px)) scale(${haloScale})`,
+                background:
+                  "radial-gradient(circle, color-mix(in srgb, var(--chart-3) 68%, white 10%) 0%, color-mix(in srgb, var(--chart-3) 34%, transparent) 52%, transparent 74%)",
+                filter: `blur(${10 + nextWeekHoldProgress * 6}px)`,
+              }}
+            />
+          ) : null}
+          {enabled ? (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-1/2 z-20 flex items-center justify-center rounded-full transition-[opacity,transform] duration-200 ease-out"
+              style={{
+                width: plusSize,
+                height: plusSize,
+                opacity: plusOpacity,
+                transform: `translate(-50%, calc(-50% + ${plusTranslateY}px)) scale(${scale})`,
+                color: "color-mix(in srgb, var(--chart-3) 86%, white 14%)",
+                textShadow: `0 0 ${10 + nextWeekHoldProgress * 8}px color-mix(in srgb, var(--chart-3) 72%, white 12%)`,
+              }}
+            >
+              <Plus className={size === "desktop" ? "h-5 w-5" : "h-[18px] w-[18px]"} strokeWidth={2.35} />
+            </div>
+          ) : null}
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => {
+              if (shouldSuppressNextWeekClickRef.current) {
+                shouldSuppressNextWeekClickRef.current = false
+                return
+              }
+              void (isWeeklyAdvanceContext ? moveWeek(1) : moveDay(1))
+            }}
+            onPointerDown={() => startNextWeekHold(enabled)}
+            onPointerUp={cancelNextWeekHold}
+            onPointerLeave={cancelNextWeekHold}
+            onPointerCancel={cancelNextWeekHold}
+            disabled={isNextWeekAdvanceDisabled}
+            className={`${buttonSizeClass} rounded-full border-border ${size === "desktop" ? "border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25" : ""}`}
+          >
+            <ChevronRight className={iconSizeClass} />
+          </Button>
+        </div>
+      )
+    },
+    [
+      cancelNextWeekHold,
+      isNextWeekAdvanceDisabled,
+      isWeeklyAdvanceContext,
+      moveDay,
+      moveWeek,
+      nextWeekHoldProgress,
+      startNextWeekHold,
+    ]
+  )
 
   const returnToCurrentDayView = async () => {
     await flushPendingFeaturedUpdate()
@@ -5758,19 +5912,9 @@ export function SubjectWheel({
             >
               <ChevronLeft className="h-5 w-5" />
             </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
-              disabled={
-                practiceSectionView === "exercises" && !subjectViewDateOverride
-                  ? dialogSelectedWeekNumber >= maxNavigableWeekNumber
-                  : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
-              }
-              className="absolute right-3 top-1/2 z-20 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:flex sm:h-12 sm:w-12"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </Button>
+            <div className="absolute right-3 top-1/2 z-20 hidden -translate-y-1/2 sm:flex">
+              {renderNextWeekAdvanceButton("desktop")}
+            </div>
 
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="space-y-3">
@@ -5808,19 +5952,7 @@ export function SubjectWheel({
                       ? `Semana ${dialogSelectedWeekNumber}`
                       : getWeekdayLabel(subjectDialogDateKey)}
                   </div>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
-                    disabled={
-                      practiceSectionView === "exercises" && !subjectViewDateOverride
-                        ? dialogSelectedWeekNumber >= maxNavigableWeekNumber
-                        : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
-                    }
-                    className="h-9 w-9 rounded-full border-border"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+                  {renderNextWeekAdvanceButton("mobile")}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
