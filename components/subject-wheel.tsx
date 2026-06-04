@@ -1037,6 +1037,7 @@ export function SubjectWheel({
   const nextWeekHoldRafRef = useRef<number | null>(null)
   const nextWeekHoldStartRef = useRef(0)
   const nextWeekHoldCompletedRef = useRef(false)
+  const nextWeekHoldActiveRef = useRef(false)
   const shouldSuppressNextWeekClickRef = useRef(false)
   const keyboardNextWeekHoldActiveRef = useRef(false)
 
@@ -2225,6 +2226,7 @@ export function SubjectWheel({
 
   const cancelNextWeekHold = useCallback(() => {
     clearNextWeekHoldRaf()
+    nextWeekHoldActiveRef.current = false
     nextWeekHoldStartRef.current = 0
     nextWeekHoldCompletedRef.current = false
     keyboardNextWeekHoldActiveRef.current = false
@@ -2233,9 +2235,10 @@ export function SubjectWheel({
   }, [clearNextWeekHoldRaf])
 
   const completeNextWeekHold = useCallback(() => {
-    if (nextWeekHoldCompletedRef.current) return
+    if (!nextWeekHoldActiveRef.current || nextWeekHoldCompletedRef.current) return
 
     nextWeekHoldCompletedRef.current = true
+    nextWeekHoldActiveRef.current = false
     shouldSuppressNextWeekClickRef.current = true
     setIsNextWeekHoldActive(false)
     setNextWeekHoldProgress(1)
@@ -2250,6 +2253,7 @@ export function SubjectWheel({
     if (!enabled) return
 
     clearNextWeekHoldRaf()
+    nextWeekHoldActiveRef.current = true
     nextWeekHoldCompletedRef.current = false
     shouldSuppressNextWeekClickRef.current = false
     keyboardNextWeekHoldActiveRef.current = false
@@ -2259,6 +2263,8 @@ export function SubjectWheel({
 
     const HOLD_THRESHOLD_MS = 680
     const tick = (timestamp: number) => {
+      if (!nextWeekHoldActiveRef.current) return
+
       const elapsed = timestamp - nextWeekHoldStartRef.current
       const progress = Math.max(0, Math.min(1, elapsed / HOLD_THRESHOLD_MS))
       setNextWeekHoldProgress(progress)
