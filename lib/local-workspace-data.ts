@@ -246,6 +246,17 @@ async function writeJsonFile(pathSegments: string[], value: unknown) {
   await writable.close()
 }
 
+async function deleteJsonFile(pathSegments: string[]) {
+  if (pathSegments.length === 0) return
+
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const directorySegments = pathSegments.slice(0, -1)
+  const fileName = pathSegments[pathSegments.length - 1]
+  const directoryHandle = await getDirectoryHandleBySegments(rootHandle, directorySegments, false).catch(() => null)
+  if (!directoryHandle) return
+  await directoryHandle.removeEntry(fileName).catch(() => {})
+}
+
 async function persistWorkspaceBlob(workspaceId: string, blob: Blob) {
   const rootHandle = await ensureWorkspaceRootHandle()
   const fileHandle = await getFileHandleBySegments(rootHandle, workspaceIdToSegments(workspaceId), true)
@@ -319,9 +330,38 @@ function synthesisProgressPath(subjectId: string, weekNumber: number) {
   return [MANIFESTS_DIR, "synthesis", subjectId, `week-${weekNumber}.json`]
 }
 
+function hasMeaningfulSynthesisProgressItem(item: SubjectMaterialSynthesisRecord) {
+  return (
+    item.exerciseScopeText.trim().length > 0 ||
+    item.exerciseSolvedCount > 0 ||
+    item.exerciseTotalCount > 0
+  )
+}
+
+function normalizeSynthesisProgressItems(items: SubjectMaterialSynthesisRecord[]) {
+  return items.filter((item) => hasMeaningfulSynthesisProgressItem(item))
+}
+
+function coerceSynthesisProgressItems(
+  items: Array<Omit<SubjectMaterialSynthesisRecord, "updatedAt"> & { updatedAt?: string | null }>
+): SubjectMaterialSynthesisRecord[] {
+  const timestamp = nowIso()
+  return items.map((item) => ({
+    ...item,
+    exerciseScopeText: item.exerciseScopeText ?? "",
+    exerciseSolvedCount: Math.max(0, Number(item.exerciseSolvedCount) || 0),
+    exerciseTotalCount: Math.max(0, Number(item.exerciseTotalCount) || 0),
+    updatedAt: item.updatedAt ?? timestamp,
+  }))
+}
+
 async function readSynthesisProgressManifest(subjectId: string, weekNumber: number) {
   const payload = await readJsonFile<SubjectMaterialSynthesisRecord[] | null>(synthesisProgressPath(subjectId, weekNumber), null)
-  return Array.isArray(payload) ? payload : []
+  const items = Array.isArray(payload) ? normalizeSynthesisProgressItems(payload) : []
+  if (Array.isArray(payload) && items.length === 0) {
+    await deleteJsonFile(synthesisProgressPath(subjectId, weekNumber))
+  }
+  return items
 }
 
 async function writeSynthesisProgressManifest(
@@ -329,7 +369,13 @@ async function writeSynthesisProgressManifest(
   weekNumber: number,
   items: SubjectMaterialSynthesisRecord[]
 ) {
-  await writeJsonFile(synthesisProgressPath(subjectId, weekNumber), items)
+  const normalizedItems = normalizeSynthesisProgressItems(items)
+  if (normalizedItems.length === 0) {
+    await deleteJsonFile(synthesisProgressPath(subjectId, weekNumber))
+    return
+  }
+
+  await writeJsonFile(synthesisProgressPath(subjectId, weekNumber), normalizedItems)
 }
 
 async function readSocraticSettingsManifest() {
@@ -377,11 +423,17 @@ async function readMaterialManifest(subjectId: string, weekNumber: number): Prom
 }
 
 async function writeMaterialManifest(subjectId: string, weekNumber: number, materials: SubjectDayMaterial[]) {
+  const sortedMaterials = sortMaterials(materials)
+  if (sortedMaterials.length === 0) {
+    await deleteJsonFile(materialManifestPath(subjectId, weekNumber))
+    return
+  }
+
   await writeJsonFile(materialManifestPath(subjectId, weekNumber), {
     version: 1,
     subjectId,
     weekNumber,
-    materials: sortMaterials(materials),
+    materials: sortedMaterials,
   } satisfies MaterialManifest)
 }
 
@@ -396,11 +448,17 @@ async function readEntryManifest(subjectId: string, weekNumber: number): Promise
 }
 
 async function writeEntryManifest(subjectId: string, weekNumber: number, entries: SubjectDayEntry[]) {
+  const sortedEntries = sortEntries(entries).map(withEntryDefaults)
+  if (sortedEntries.length === 0) {
+    await deleteJsonFile(entryManifestPath(subjectId, weekNumber))
+    return
+  }
+
   await writeJsonFile(entryManifestPath(subjectId, weekNumber), {
     version: 1,
     subjectId,
     weekNumber,
-    entries: sortEntries(entries).map(withEntryDefaults),
+    entries: sortedEntries,
   } satisfies EntryManifest)
 }
 
@@ -413,9 +471,47 @@ async function listWeekNumbersForManifestKind(kind: "materials" | "entries", sub
   for await (const [name] of manifestRoot.entries()) {
     const match = /^week-(\d+)\.json$/i.exec(name)
     if (match) {
-      weekNumbers.push(Number.parseInt(match[1], 10))
+      const weekNumber = Number.parseInt(match[1], 10)
+      if (kind === MATERIALS_DIR) {
+        const manifest = await readMaterialManifest(subjectId, weekNumber)
+        if (manifest.materials.length === 0) {
+          await deleteJsonFile(materialManifestPath(subjectId, weekNumber))
+          continue
+        }
+      } else {
+        const manifest = await readEntryManifest(subjectId, weekNumber)
+        if (manifest.entries.length === 0) {
+          await deleteJsonFile(entryManifestPath(subjectId, weekNumber))
+          continue
+        }
+      }
+
+      weekNumbers.push(weekNumber)
     }
   }
+  return weekNumbers
+}
+
+async function listSynthesisWeekNumbersForSubject(subjectId: string) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const manifestRoot = await getDirectoryHandleBySegments(rootHandle, [MANIFESTS_DIR, "synthesis", subjectId], false).catch(() => null)
+  if (!manifestRoot) return []
+
+  const weekNumbers: number[] = []
+  for await (const [name] of manifestRoot.entries()) {
+    const match = /^week-(\d+)\.json$/i.exec(name)
+    if (!match) continue
+
+    const weekNumber = Number.parseInt(match[1], 10)
+    const items = await readSynthesisProgressManifest(subjectId, weekNumber)
+    if (items.length === 0) {
+      await deleteJsonFile(synthesisProgressPath(subjectId, weekNumber))
+      continue
+    }
+
+    weekNumbers.push(weekNumber)
+  }
+
   return weekNumbers
 }
 
@@ -495,10 +591,26 @@ export async function getLocalSynthesisProgress(subjectId: string, weekNumber: n
 export async function saveLocalSynthesisProgress(
   subjectId: string,
   weekNumber: number,
-  items: SubjectMaterialSynthesisRecord[]
+  items: Array<Omit<SubjectMaterialSynthesisRecord, "updatedAt"> & { updatedAt?: string | null }>
 ) {
-  await writeSynthesisProgressManifest(subjectId, weekNumber, items)
-  return items
+  const normalizedItems = coerceSynthesisProgressItems(items)
+  await writeSynthesisProgressManifest(subjectId, weekNumber, normalizedItems)
+  return normalizedItems
+}
+
+export async function listLocalSubjectWeekNumbersWithContent(subjectId: string) {
+  const [materialWeeks, entryWeeks, synthesisWeeks] = await Promise.all([
+    listWeekNumbersForManifestKind(MATERIALS_DIR, subjectId),
+    listWeekNumbersForManifestKind(ENTRIES_DIR, subjectId),
+    listSynthesisWeekNumbersForSubject(subjectId),
+  ])
+
+  return Array.from(new Set([...materialWeeks, ...entryWeeks, ...synthesisWeeks])).sort((left, right) => right - left)
+}
+
+export async function listLocalWeekNumbersWithContent(subjectIds: string[]) {
+  const weeksBySubject = await Promise.all(subjectIds.map((subjectId) => listLocalSubjectWeekNumbersWithContent(subjectId)))
+  return Array.from(new Set(weeksBySubject.flat())).sort((left, right) => right - left)
 }
 
 export async function getLocalSocraticReviewSettings() {

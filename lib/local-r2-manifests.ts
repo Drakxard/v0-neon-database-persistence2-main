@@ -300,7 +300,7 @@ async function bootstrapMaterialManifest(subjectId: string, weekNumber: number) 
 
   const metadatas = await getR2ObjectMetadatas(objectKeys)
   const materials = metadatas
-    .map((metadata, index) => {
+    .map<LocalSubjectDayMaterial | null>((metadata, index) => {
       if (metadata.mimeType !== "application/pdf") return null
       return (
         buildMaterialFromR2Metadata({
@@ -318,7 +318,7 @@ async function bootstrapMaterialManifest(subjectId: string, weekNumber: number) 
         })
       )
     })
-    .filter((material): material is LocalSubjectDayMaterial => Boolean(material))
+    .filter((material): material is LocalSubjectDayMaterial => material !== null)
 
   return {
     version: 1,
@@ -342,16 +342,29 @@ export async function readMaterialManifest(subjectId: string, weekNumber: number
   }
 
   const bootstrapped = await bootstrapMaterialManifest(subjectId, weekNumber)
-  await writeJsonManifest(key, bootstrapped)
+  if (bootstrapped.materials.length > 0) {
+    await writeJsonManifest(key, bootstrapped)
+  }
   return bootstrapped
 }
 
 export async function saveMaterialManifest(subjectId: string, weekNumber: number, materials: LocalSubjectDayMaterial[]) {
+  const sortedMaterials = sortMaterials(materials)
+  if (sortedMaterials.length === 0) {
+    await deleteR2Object(materialManifestKey(subjectId, weekNumber))
+    return {
+      version: 1,
+      subjectId,
+      weekNumber,
+      materials: [],
+    } satisfies MaterialManifest
+  }
+
   const manifest = {
     version: 1,
     subjectId,
     weekNumber,
-    materials: sortMaterials(materials),
+    materials: sortedMaterials,
   } satisfies MaterialManifest
   await writeJsonManifest(materialManifestKey(subjectId, weekNumber), manifest)
   return manifest
@@ -425,11 +438,22 @@ export async function readEntryManifest(subjectId: string, weekNumber: number) {
 }
 
 export async function saveEntryManifest(subjectId: string, weekNumber: number, entries: LocalSubjectDayEntry[]) {
+  const sortedEntries = sortEntries(entries)
+  if (sortedEntries.length === 0) {
+    await deleteR2Object(entryManifestKey(subjectId, weekNumber))
+    return {
+      version: 1,
+      subjectId,
+      weekNumber,
+      entries: [],
+    } satisfies EntryManifest
+  }
+
   const manifest = {
     version: 1,
     subjectId,
     weekNumber,
-    entries: sortEntries(entries),
+    entries: sortedEntries,
   } satisfies EntryManifest
   await writeJsonManifest(entryManifestKey(subjectId, weekNumber), manifest)
   return manifest

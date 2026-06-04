@@ -24,7 +24,12 @@ import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
 import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { getHomeSubjectCountdown } from "@/lib/home-schedule"
-import { createObjectUrlForWorkspaceFile, isWorkspaceFileId } from "@/lib/local-workspace-data"
+import {
+  createObjectUrlForWorkspaceFile,
+  isWorkspaceFileId,
+  listLocalSubjectWeekNumbersWithContent,
+  listLocalWeekNumbersWithContent,
+} from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { cn } from "@/lib/utils"
 import {
@@ -1003,6 +1008,8 @@ export function SubjectWheel({
   const [practiceSubjectIndex, setPracticeSubjectIndex] = useState<number | null>(null)
   const [practiceSubjectId, setPracticeSubjectId] = useState<string>("")
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
+  const [localSynthesisWeekOptions, setLocalSynthesisWeekOptions] = useState<number[]>([])
+  const [localPracticeWeekOptions, setLocalPracticeWeekOptions] = useState<string[]>([])
   const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
   const [practiceVisibleEntries, setPracticeVisibleEntries] = useState<SubjectDayEntry[]>([])
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState(0)
@@ -1316,6 +1323,65 @@ export function SubjectWheel({
   useEffect(() => {
     currentCalendarWeekRef.current = currentCalendarWeek
   }, [currentCalendarWeek])
+
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE) return
+
+    let isCancelled = false
+    void listLocalWeekNumbersWithContent(synthesisSubjects.map((subject) => subject.id))
+      .then((weekNumbers) => {
+        if (!isCancelled) {
+          setLocalSynthesisWeekOptions(weekNumbers)
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load local synthesis week options:", error)
+        if (!isCancelled) {
+          setLocalSynthesisWeekOptions([])
+        }
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [synthesisSubjects])
+
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE) return
+
+    let isCancelled = false
+    const targetSubjectIds =
+      practiceSubjectId.trim().length > 0 ? [practiceSubjectId] : visibleSubjects.map((subject) => subject.id)
+
+    const weekOptionsPromise =
+      targetSubjectIds.length === 1
+        ? listLocalSubjectWeekNumbersWithContent(targetSubjectIds[0]!)
+        : listLocalWeekNumbersWithContent(targetSubjectIds)
+
+    void weekOptionsPromise
+      .then((weekNumbers) => {
+        if (!isCancelled) {
+          setLocalPracticeWeekOptions(weekNumbers.map(String))
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load local practice week options:", error)
+        if (!isCancelled) {
+          setLocalPracticeWeekOptions([])
+        }
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [practiceSubjectId, visibleSubjects])
+
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE) return
+    if (practiceWeekNumber && localPracticeWeekOptions.includes(practiceWeekNumber)) return
+
+    setPracticeWeekNumber(localPracticeWeekOptions[0] ?? "")
+  }, [localPracticeWeekOptions, practiceWeekNumber])
 
   useEffect(() => {
     const previousWeekNumber = previousCalendarWeekRef.current
@@ -2083,8 +2149,8 @@ export function SubjectWheel({
     nextDate.setDate(nextDate.getDate() + direction * 7)
 
     const nextWeekNumber = getWeekNumberForDate(nextDate)
-    const latestWeekNumber = getCurrentWeekNumber()
-    if (nextWeekNumber < 0 || nextWeekNumber > latestWeekNumber) return
+    const maxNavigableWeekNumber = currentCalendarWeek + 1
+    if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
 
     setDialogDateKey(formatDateKey(nextDate))
   }
@@ -2133,6 +2199,34 @@ export function SubjectWheel({
 
     await closeSubjectDialog()
   }
+
+  useEffect(() => {
+    if (!isDialogOpen) return
+
+    const handleDialogArrowNavigation = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat) return
+
+      const target = event.target as HTMLElement | null
+      const tagName = target?.tagName
+      const isEditable = Boolean(target?.isContentEditable)
+      if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || isEditable) return
+
+      const shouldMoveByWeek = practiceSectionView === "exercises" && !subjectViewDateOverride
+      if (event.key === "ArrowLeft") {
+        event.preventDefault()
+        void (shouldMoveByWeek ? moveWeek(-1) : moveDay(-1))
+        return
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault()
+        void (shouldMoveByWeek ? moveWeek(1) : moveDay(1))
+      }
+    }
+
+    window.addEventListener("keydown", handleDialogArrowNavigation)
+    return () => window.removeEventListener("keydown", handleDialogArrowNavigation)
+  }, [isDialogOpen, moveDay, moveWeek, practiceSectionView, subjectViewDateOverride])
 
   const startNextWeek = async () => {
     await flushPendingFeaturedUpdate()
@@ -4495,7 +4589,7 @@ export function SubjectWheel({
     () => getDisplaySubjectsForDate(dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects),
     [dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects]
   )
-  const latestWeekNumber = currentCalendarWeek
+  const maxNavigableWeekNumber = currentCalendarWeek + 1
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
@@ -4608,10 +4702,10 @@ export function SubjectWheel({
       }),
     [homeSelectedDate, synthesisSubjectStateMap, synthesisSubjects, synthesisWeekNumber]
   )
-  const synthesisWeekOptions = useMemo(
-    () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => currentCalendarWeek - index),
-    [currentCalendarWeek]
-  )
+  const synthesisWeekOptions = useMemo(() => {
+    if (LOCAL_STORAGE_MODE) return localSynthesisWeekOptions
+    return Array.from({ length: currentCalendarWeek + 1 }, (_, index) => currentCalendarWeek - index)
+  }, [currentCalendarWeek, localSynthesisWeekOptions])
   const homeSubjectCards = useMemo(
     () =>
       visibleSubjects.map((subject) => {
@@ -4781,10 +4875,10 @@ export function SubjectWheel({
   const socraticCurrentPair = socraticQueue[socraticCurrentIndex] ?? null
   const socraticCounterLabel = socraticQueue.length > 0 ? `${Math.min(socraticCurrentIndex + 1, socraticQueue.length)}/${socraticQueue.length}` : "0/0"
   const canUseSocraticSpeech = Boolean(getSpeechSynthesisInstance())
-  const practiceWeekOptions = useMemo(
-    () => Array.from({ length: currentCalendarWeek + 1 }, (_, index) => String(index)),
-    [currentCalendarWeek]
-  )
+  const practiceWeekOptions = useMemo(() => {
+    if (LOCAL_STORAGE_MODE) return localPracticeWeekOptions
+    return Array.from({ length: currentCalendarWeek + 1 }, (_, index) => String(index))
+  }, [currentCalendarWeek, localPracticeWeekOptions])
   const renderMaterialManagerSection = (mode: ContinueMode) => {
     const isTheorySection = mode === "theory"
     const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
@@ -5672,7 +5766,7 @@ export function SubjectWheel({
               onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
               disabled={
                 practiceSectionView === "exercises" && !subjectViewDateOverride
-                  ? dialogSelectedWeekNumber >= latestWeekNumber
+                  ? dialogSelectedWeekNumber >= maxNavigableWeekNumber
                   : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
               }
               className="absolute right-3 top-1/2 z-20 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:flex sm:h-12 sm:w-12"
@@ -5722,7 +5816,7 @@ export function SubjectWheel({
                     onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(1) : moveDay(1))}
                     disabled={
                       practiceSectionView === "exercises" && !subjectViewDateOverride
-                        ? dialogSelectedWeekNumber >= latestWeekNumber
+                        ? dialogSelectedWeekNumber >= maxNavigableWeekNumber
                         : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
                     }
                     className="h-9 w-9 rounded-full border-border"
