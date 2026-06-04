@@ -1038,6 +1038,7 @@ export function SubjectWheel({
   const nextWeekHoldStartRef = useRef(0)
   const nextWeekHoldCompletedRef = useRef(false)
   const shouldSuppressNextWeekClickRef = useRef(false)
+  const keyboardNextWeekHoldActiveRef = useRef(false)
 
   useEffect(() => {
     setSession(authSession)
@@ -2226,6 +2227,7 @@ export function SubjectWheel({
     clearNextWeekHoldRaf()
     nextWeekHoldStartRef.current = 0
     nextWeekHoldCompletedRef.current = false
+    keyboardNextWeekHoldActiveRef.current = false
     setIsNextWeekHoldActive(false)
     setNextWeekHoldProgress(0)
   }, [clearNextWeekHoldRaf])
@@ -2250,6 +2252,7 @@ export function SubjectWheel({
     clearNextWeekHoldRaf()
     nextWeekHoldCompletedRef.current = false
     shouldSuppressNextWeekClickRef.current = false
+    keyboardNextWeekHoldActiveRef.current = false
     nextWeekHoldStartRef.current = performance.now()
     setIsNextWeekHoldActive(true)
     setNextWeekHoldProgress(0)
@@ -2425,7 +2428,7 @@ export function SubjectWheel({
     if (!isDialogOpen) return
 
     const handleDialogArrowNavigation = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat) return
+      if (event.defaultPrevented) return
 
       const target = event.target as HTMLElement | null
       const tagName = target?.tagName
@@ -2434,20 +2437,57 @@ export function SubjectWheel({
 
       const shouldMoveByWeek = practiceSectionView === "exercises" && !subjectViewDateOverride
       if (event.key === "ArrowLeft") {
+        if (event.repeat) return
         event.preventDefault()
+        cancelNextWeekHold()
         void (shouldMoveByWeek ? moveWeek(-1) : moveDay(-1))
         return
       }
 
       if (event.key === "ArrowRight") {
         event.preventDefault()
-        void (shouldMoveByWeek ? moveWeek(1) : moveDay(1))
+        if (!shouldMoveByWeek) {
+          if (event.repeat) return
+          void moveDay(1)
+          return
+        }
+
+        if (hasNextWeeklyContent) {
+          if (event.repeat) return
+          cancelNextWeekHold()
+          void moveWeek(1)
+          return
+        }
+
+        if (!canCreateTransientNextWeek || keyboardNextWeekHoldActiveRef.current) return
+        keyboardNextWeekHoldActiveRef.current = true
+        startNextWeekHold(true)
+      }
+    }
+
+    const handleDialogArrowKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "ArrowRight" && keyboardNextWeekHoldActiveRef.current) {
+        cancelNextWeekHold()
       }
     }
 
     window.addEventListener("keydown", handleDialogArrowNavigation)
-    return () => window.removeEventListener("keydown", handleDialogArrowNavigation)
-  }, [isDialogOpen, moveDay, moveWeek, practiceSectionView, subjectViewDateOverride])
+    window.addEventListener("keyup", handleDialogArrowKeyUp)
+    return () => {
+      window.removeEventListener("keydown", handleDialogArrowNavigation)
+      window.removeEventListener("keyup", handleDialogArrowKeyUp)
+    }
+  }, [
+    cancelNextWeekHold,
+    canCreateTransientNextWeek,
+    hasNextWeeklyContent,
+    isDialogOpen,
+    moveDay,
+    moveWeek,
+    practiceSectionView,
+    startNextWeekHold,
+    subjectViewDateOverride,
+  ])
 
   const startNextWeek = async () => {
     await flushPendingFeaturedUpdate()
