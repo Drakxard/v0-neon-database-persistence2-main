@@ -27,7 +27,6 @@ import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
   cleanupLocalSubjectWeekIfEmpty,
   createObjectUrlForWorkspaceFile,
-  findNearestWeekWithContent,
   isWorkspaceFileId,
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
@@ -1012,6 +1011,8 @@ export function SubjectWheel({
   const [practiceWeekNumber, setPracticeWeekNumber] = useState<string>("")
   const [localSynthesisWeekOptions, setLocalSynthesisWeekOptions] = useState<number[]>([])
   const [localPracticeWeekOptions, setLocalPracticeWeekOptions] = useState<string[]>([])
+  const [currentSubjectContentWeeks, setCurrentSubjectContentWeeks] = useState<number[]>([])
+  const [currentSubjectHasAnyContent, setCurrentSubjectHasAnyContent] = useState(true)
   const [isNextWeekHoldActive, setIsNextWeekHoldActive] = useState(false)
   const [nextWeekHoldProgress, setNextWeekHoldProgress] = useState(0)
   const [practiceFilters, setPracticeFilters] = useState<PracticeFilters>({ random: false, unanswered: false, erre: false })
@@ -1351,6 +1352,22 @@ export function SubjectWheel({
     setLocalPracticeWeekOptions(practiceWeekNumbers.map(String))
   }, [practiceSubjectId, synthesisSubjects, visibleSubjects])
 
+  const loadCurrentSubjectWeekState = useCallback(
+    async (subjectId: string) => {
+      if (!LOCAL_STORAGE_MODE) {
+        setCurrentSubjectContentWeeks([])
+        setCurrentSubjectHasAnyContent(true)
+        return []
+      }
+
+      const weekNumbers = await listLocalSubjectWeekNumbersWithContent(subjectId)
+      setCurrentSubjectContentWeeks(weekNumbers)
+      setCurrentSubjectHasAnyContent(weekNumbers.length > 0)
+      return weekNumbers
+    },
+    []
+  )
+
   useEffect(() => {
     if (!LOCAL_STORAGE_MODE) return
 
@@ -1367,6 +1384,14 @@ export function SubjectWheel({
 
     setPracticeWeekNumber(localPracticeWeekOptions[0] ?? "")
   }, [localPracticeWeekOptions, practiceWeekNumber])
+
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE || !isDialogOpen || !currentSubject) return
+
+    void loadCurrentSubjectWeekState(currentSubject.id).catch((error) => {
+      console.error("Failed to refresh current subject week state:", error)
+    })
+  }, [LOCAL_STORAGE_MODE, currentSubject, entries.length, isDialogOpen, loadCurrentSubjectWeekState, materials.length])
 
   useEffect(() => {
     const previousWeekNumber = previousCalendarWeekRef.current
@@ -2072,12 +2097,20 @@ export function SubjectWheel({
     cancelAudioPairReview()
     setIsDialogOpen(false)
     setCurrentSubject(null)
+    setCurrentSubjectContentWeeks([])
+    setCurrentSubjectHasAnyContent(true)
     resetSubjectUiState()
   }
 
-  const handleSubjectClick = (subject: Subject) => {
+  const handleSubjectClick = async (subject: Subject) => {
+    const weekNumbers = await loadCurrentSubjectWeekState(subject.id)
     setCurrentSubject(subject)
-    setDialogDateKey(currentDateKey)
+    if (LOCAL_STORAGE_MODE && weekNumbers.length > 0) {
+      const latestWeekStart = getWeekDates(weekNumbers[0])[0]
+      setDialogDateKey(latestWeekStart ? formatDateKey(latestWeekStart) : currentDateKey)
+    } else {
+      setDialogDateKey(currentDateKey)
+    }
     resetSubjectUiState()
     setSubjectDialogEntryMode("default")
     setPracticeSectionView("exercises")
@@ -2090,6 +2123,7 @@ export function SubjectWheel({
     const subject = getSubjectById(subjectId, visibleSubjects)
     if (!subject) return
 
+    await loadCurrentSubjectWeekState(subject.id)
     setCurrentSubject(subject)
     setDialogDateKey(dateKey)
     resetSubjectUiState()
@@ -2128,37 +2162,56 @@ export function SubjectWheel({
     setSelectedPracticeMaterialId(null)
   }
 
-  const moveWeek = async (direction: -1 | 1) => {
+  const moveWeek = async (direction: -1 | 1, options?: { allowTransientForward?: boolean }) => {
     await flushPendingFeaturedUpdate()
-    const nextDate = parseDateKey(dialogDateKey)
-    nextDate.setDate(nextDate.getDate() + direction * 7)
-
-    const nextWeekNumber = getWeekNumberForDate(nextDate)
+    const nextWeekNumber = dialogSelectedWeekNumber + direction
     const maxNavigableWeekNumber = currentCalendarWeek + 1
     if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
 
     if (LOCAL_STORAGE_MODE && currentSubject) {
-      const cleanup = await cleanupLocalSubjectWeekIfEmpty(currentSubject.id, nextWeekNumber)
-      if (!cleanup.hasContent) {
-        const nearestWeekNumber = await findNearestWeekWithContent(currentSubject.id, nextWeekNumber, direction)
-        await refreshLocalWeekOptions()
+      const cleanedCurrentWeekNumbers = await loadCurrentSubjectWeekState(currentSubject.id)
+      await refreshLocalWeekOptions()
 
-        if (nearestWeekNumber != null) {
-          const nearestWeekStart = getWeekDates(nearestWeekNumber)[0]
-          if (nearestWeekStart) {
-            setDialogDateKey(formatDateKey(nearestWeekStart))
-            setSelectedPracticeMaterialId(null)
-            return
-          }
-        }
-
-        if (direction < 0) {
+      if (direction < 0) {
+        const previousWeekNumber = [...cleanedCurrentWeekNumbers]
+          .sort((left, right) => right - left)
+          .find((weekNumber) => weekNumber < dialogSelectedWeekNumber)
+        if (!previousWeekNumber) {
           return
         }
+
+        const previousWeekStart = getWeekDates(previousWeekNumber)[0]
+        if (previousWeekStart) {
+          setDialogDateKey(formatDateKey(previousWeekStart))
+          setSelectedPracticeMaterialId(null)
+        }
+        return
+      }
+
+      const nextExistingWeekNumber = [...cleanedCurrentWeekNumbers]
+        .sort((left, right) => left - right)
+        .find((weekNumber) => weekNumber > dialogSelectedWeekNumber)
+      if (nextExistingWeekNumber != null) {
+        const nextExistingWeekStart = getWeekDates(nextExistingWeekNumber)[0]
+        if (nextExistingWeekStart) {
+          setDialogDateKey(formatDateKey(nextExistingWeekStart))
+          setSelectedPracticeMaterialId(null)
+        }
+        return
+      }
+
+      const cleanup = await cleanupLocalSubjectWeekIfEmpty(currentSubject.id, nextWeekNumber)
+      await refreshLocalWeekOptions()
+      await loadCurrentSubjectWeekState(currentSubject.id)
+
+      if (!cleanup.hasContent && !options?.allowTransientForward) {
+        return
       }
     }
 
-    setDialogDateKey(formatDateKey(nextDate))
+    const nextWeekStart = getWeekDates(nextWeekNumber)[0]
+    if (!nextWeekStart) return
+    setDialogDateKey(formatDateKey(nextWeekStart))
     setSelectedPracticeMaterialId(null)
   }
 
@@ -2185,7 +2238,7 @@ export function SubjectWheel({
     setIsNextWeekHoldActive(false)
     setNextWeekHoldProgress(1)
     clearNextWeekHoldRaf()
-    void moveWeek(1)
+    void moveWeek(1, { allowTransientForward: true })
     window.setTimeout(() => {
       setNextWeekHoldProgress(0)
     }, 180)
@@ -2224,13 +2277,25 @@ export function SubjectWheel({
   }, [cancelNextWeekHold, isDialogOpen])
 
   const isWeeklyAdvanceContext = practiceSectionView === "exercises" && !subjectViewDateOverride
+  const hasPreviousWeeklyContent = LOCAL_STORAGE_MODE
+    ? currentSubjectContentWeeks.some((weekNumber) => weekNumber < dialogSelectedWeekNumber)
+    : dialogSelectedWeekNumber > 0
+  const hasNextWeeklyContent = LOCAL_STORAGE_MODE
+    ? currentSubjectContentWeeks.some((weekNumber) => weekNumber > dialogSelectedWeekNumber)
+    : dialogSelectedWeekNumber < currentCalendarWeek
+  const canCreateTransientNextWeek = isWeeklyAdvanceContext && dialogSelectedWeekNumber < currentCalendarWeek + 1
+  const isPreviousWeekAdvanceDisabled = isWeeklyAdvanceContext
+    ? !hasPreviousWeeklyContent
+    : subjectDialogDayIndex <= 0
   const isNextWeekAdvanceDisabled = isWeeklyAdvanceContext
-    ? dialogSelectedWeekNumber >= currentCalendarWeek + 1
+    ? !hasNextWeeklyContent && !canCreateTransientNextWeek
     : subjectDialogDayIndex === -1 || subjectDialogDayIndex >= lastVisibleDayIndex
 
   const renderNextWeekAdvanceButton = useCallback(
     (size: "desktop" | "mobile") => {
-      const enabled = isWeeklyAdvanceContext && !isNextWeekAdvanceDisabled
+      const canUseHold = isWeeklyAdvanceContext && canCreateTransientNextWeek
+      const canUseClick = isWeeklyAdvanceContext ? hasNextWeeklyContent : !isNextWeekAdvanceDisabled
+      const showHoldVisual = canUseHold && (isNextWeekHoldActive || nextWeekHoldProgress > 0.01)
       const buttonSizeClass = size === "desktop" ? "h-10 w-10 sm:h-12 sm:w-12" : "h-9 w-9"
       const iconSizeClass = size === "desktop" ? "h-5 w-5" : "h-4 w-4"
       const plusSize = size === "desktop" ? 26 : 22
@@ -2238,12 +2303,12 @@ export function SubjectWheel({
       const plusTranslateY = size === "desktop" ? -20 : -16
       const scale = 0.72 + nextWeekHoldProgress * 0.7
       const haloScale = 0.58 + nextWeekHoldProgress * 0.7
-      const plusOpacity = enabled ? 0.25 + nextWeekHoldProgress * 0.75 : 0
-      const haloOpacity = enabled ? 0.14 + nextWeekHoldProgress * 0.42 : 0
+      const plusOpacity = showHoldVisual ? 0.25 + nextWeekHoldProgress * 0.75 : 0
+      const haloOpacity = showHoldVisual ? 0.14 + nextWeekHoldProgress * 0.42 : 0
 
       return (
         <div className="relative inline-flex items-center justify-center">
-          {enabled ? (
+          {showHoldVisual ? (
             <div
               aria-hidden="true"
               className="pointer-events-none absolute left-1/2 top-1/2 z-10 rounded-full transition-[opacity,transform] duration-200 ease-out"
@@ -2258,7 +2323,7 @@ export function SubjectWheel({
               }}
             />
           ) : null}
-          {enabled ? (
+          {showHoldVisual ? (
             <div
               aria-hidden="true"
               className="pointer-events-none absolute left-1/2 top-1/2 z-20 flex items-center justify-center rounded-full transition-[opacity,transform] duration-200 ease-out"
@@ -2282,9 +2347,10 @@ export function SubjectWheel({
                 shouldSuppressNextWeekClickRef.current = false
                 return
               }
+              if (!canUseClick) return
               void (isWeeklyAdvanceContext ? moveWeek(1) : moveDay(1))
             }}
-            onPointerDown={() => startNextWeekHold(enabled)}
+            onPointerDown={() => startNextWeekHold(canUseHold)}
             onPointerUp={cancelNextWeekHold}
             onPointerLeave={cancelNextWeekHold}
             onPointerCancel={cancelNextWeekHold}
@@ -2297,7 +2363,10 @@ export function SubjectWheel({
       )
     },
     [
+      canCreateTransientNextWeek,
       cancelNextWeekHold,
+      hasNextWeeklyContent,
+      isNextWeekHoldActive,
       isNextWeekAdvanceDisabled,
       isWeeklyAdvanceContext,
       moveDay,
@@ -4741,7 +4810,6 @@ export function SubjectWheel({
     () => getDisplaySubjectsForDate(dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects),
     [dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects]
   )
-  const maxNavigableWeekNumber = currentCalendarWeek + 1
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
@@ -5903,11 +5971,7 @@ export function SubjectWheel({
               variant="outline"
               size="icon"
               onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(-1) : moveDay(-1))}
-              disabled={
-                practiceSectionView === "exercises" && !subjectViewDateOverride
-                  ? dialogSelectedWeekNumber <= 0
-                  : subjectDialogDayIndex <= 0
-              }
+              disabled={isPreviousWeekAdvanceDisabled}
               className="absolute left-3 top-1/2 z-20 hidden h-10 w-10 -translate-y-1/2 rounded-full border border-border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25 sm:flex sm:h-12 sm:w-12"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -5938,11 +6002,7 @@ export function SubjectWheel({
                     variant="outline"
                     size="icon"
                     onClick={() => void (practiceSectionView === "exercises" && !subjectViewDateOverride ? moveWeek(-1) : moveDay(-1))}
-                    disabled={
-                      practiceSectionView === "exercises" && !subjectViewDateOverride
-                        ? dialogSelectedWeekNumber <= 0
-                        : subjectDialogDayIndex <= 0
-                    }
+                    disabled={isPreviousWeekAdvanceDisabled}
                     className="h-9 w-9 rounded-full border-border"
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -6035,6 +6095,12 @@ export function SubjectWheel({
                 <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Actualizando...
+                </div>
+              ) : null}
+
+              {LOCAL_STORAGE_MODE && isWeeklyAdvanceContext && !currentSubjectHasAnyContent ? (
+                <div className="mb-4 rounded-2xl border border-[color:color-mix(in_srgb,var(--chart-3)_32%,var(--border))] bg-[color:color-mix(in_srgb,var(--chart-3)_10%,var(--card))] px-4 py-3 text-sm text-foreground">
+                  Esta materia todavia no tiene semanas con contenido. Manten pulsado el boton <span className="font-semibold text-[color:var(--chart-3)]">+</span> sobre la flecha derecha para crear una nueva.
                 </div>
               ) : null}
 
