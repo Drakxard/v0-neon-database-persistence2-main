@@ -2164,7 +2164,7 @@ export function SubjectWheel({
     setSelectedPracticeMaterialId(null)
   }
 
-  const moveWeek = async (direction: -1 | 1, options?: { allowTransientForward?: boolean }) => {
+  const moveWeek = async (direction: -1 | 1) => {
     await flushPendingFeaturedUpdate()
     const nextWeekNumber = dialogSelectedWeekNumber + direction
     const maxNavigableWeekNumber = currentCalendarWeek + 1
@@ -2206,7 +2206,7 @@ export function SubjectWheel({
       await refreshLocalWeekOptions()
       await loadCurrentSubjectWeekState(currentSubject.id)
 
-      if (!cleanup.hasContent && !options?.allowTransientForward) {
+      if (!cleanup.hasContent) {
         return
       }
     }
@@ -2217,6 +2217,46 @@ export function SubjectWheel({
     setSelectedPracticeMaterialId(null)
   }
 
+  const openTransientNextWeekFromHold = useCallback(async () => {
+    await flushPendingFeaturedUpdate()
+    const nextWeekNumber = dialogSelectedWeekNumber + 1
+    const maxNavigableWeekNumber = currentCalendarWeek + 1
+    if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
+
+    if (LOCAL_STORAGE_MODE && currentSubject) {
+      const cleanedCurrentWeekNumbers = await loadCurrentSubjectWeekState(currentSubject.id)
+      await refreshLocalWeekOptions()
+
+      const nextExistingWeekNumber = [...cleanedCurrentWeekNumbers]
+        .sort((left, right) => left - right)
+        .find((weekNumber) => weekNumber > dialogSelectedWeekNumber)
+      if (nextExistingWeekNumber != null) {
+        const nextExistingWeekStart = getWeekDates(nextExistingWeekNumber)[0]
+        if (nextExistingWeekStart) {
+          setDialogDateKey(formatDateKey(nextExistingWeekStart))
+          setSelectedPracticeMaterialId(null)
+        }
+        return
+      }
+
+      await cleanupLocalSubjectWeekIfEmpty(currentSubject.id, nextWeekNumber)
+      await refreshLocalWeekOptions()
+      await loadCurrentSubjectWeekState(currentSubject.id)
+    }
+
+    const nextWeekStart = getWeekDates(nextWeekNumber)[0]
+    if (!nextWeekStart) return
+    setDialogDateKey(formatDateKey(nextWeekStart))
+    setSelectedPracticeMaterialId(null)
+  }, [
+    currentCalendarWeek,
+    currentSubject,
+    dialogSelectedWeekNumber,
+    flushPendingFeaturedUpdate,
+    refreshLocalWeekOptions,
+    loadCurrentSubjectWeekState,
+  ])
+
   const clearNextWeekHoldRaf = useCallback(() => {
     if (nextWeekHoldRafRef.current !== null) {
       window.cancelAnimationFrame(nextWeekHoldRafRef.current)
@@ -2226,6 +2266,9 @@ export function SubjectWheel({
 
   const cancelNextWeekHold = useCallback(() => {
     clearNextWeekHoldRaf()
+    if (!nextWeekHoldCompletedRef.current) {
+      shouldSuppressNextWeekClickRef.current = false
+    }
     nextWeekHoldActiveRef.current = false
     nextWeekHoldStartRef.current = 0
     nextWeekHoldCompletedRef.current = false
@@ -2243,11 +2286,11 @@ export function SubjectWheel({
     setIsNextWeekHoldActive(false)
     setNextWeekHoldProgress(1)
     clearNextWeekHoldRaf()
-    void moveWeek(1, { allowTransientForward: true })
+    void openTransientNextWeekFromHold()
     window.setTimeout(() => {
       setNextWeekHoldProgress(0)
     }, 180)
-  }, [clearNextWeekHoldRaf, moveWeek])
+  }, [clearNextWeekHoldRaf, openTransientNextWeekFromHold])
 
   const startNextWeekHold = useCallback((enabled: boolean) => {
     if (!enabled) return
@@ -2302,8 +2345,9 @@ export function SubjectWheel({
 
   const renderNextWeekAdvanceButton = useCallback(
     (size: "desktop" | "mobile") => {
-      const canUseHold = isWeeklyAdvanceContext && canCreateTransientNextWeek
+      const canUseHold = isWeeklyAdvanceContext && !hasNextWeeklyContent && canCreateTransientNextWeek
       const canUseClick = isWeeklyAdvanceContext ? hasNextWeeklyContent : !isNextWeekAdvanceDisabled
+      const isButtonDisabled = isWeeklyAdvanceContext ? !canUseClick && !canUseHold : isNextWeekAdvanceDisabled
       const showHoldVisual = canUseHold && (isNextWeekHoldActive || nextWeekHoldProgress > 0.01)
       const buttonSizeClass = size === "desktop" ? "h-10 w-10 sm:h-12 sm:w-12" : "h-9 w-9"
       const iconSizeClass = size === "desktop" ? "h-5 w-5" : "h-4 w-4"
@@ -2363,7 +2407,8 @@ export function SubjectWheel({
             onPointerUp={cancelNextWeekHold}
             onPointerLeave={cancelNextWeekHold}
             onPointerCancel={cancelNextWeekHold}
-            disabled={isNextWeekAdvanceDisabled}
+            disabled={isButtonDisabled}
+            aria-disabled={isButtonDisabled}
             className={`${buttonSizeClass} rounded-full border-border ${size === "desktop" ? "border bg-card text-foreground opacity-70 hover:bg-accent hover:opacity-100 disabled:opacity-25" : ""}`}
           >
             <ChevronRight className={iconSizeClass} />
