@@ -27,6 +27,37 @@ function workspaceStateKey(email: string) {
   return `${WORKSPACE_STATE_PREFIX}${sanitizePathSegment(email)}.json`
 }
 
+function normalizeCustomSubjects(input: Partial<WorkspaceState>["customSubjects"]) {
+  if (!input || typeof input !== "object") return {}
+
+  return Object.entries(input).reduce<WorkspaceState["customSubjects"]>((accumulator, [subjectId, subject]) => {
+    if (
+      !subject ||
+      typeof subject.id !== "string" ||
+      typeof subject.name !== "string" ||
+      typeof subject.color !== "string" ||
+      typeof subject.tabId !== "string" ||
+      typeof subject.createdAt !== "string"
+    ) {
+      return accumulator
+    }
+
+    const parsedWeekday = Number(subject.targetWeekday)
+    const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+
+    accumulator[subjectId] = {
+      id: subject.id,
+      name: subject.name,
+      color: subject.color,
+      tabId: subject.tabId,
+      createdAt: subject.createdAt,
+      targetWeekday,
+    }
+
+    return accumulator
+  }, {})
+}
+
 function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefined): WorkspaceState {
   return {
     workspaceTabs: input?.workspaceTabs && typeof input.workspaceTabs === "object" ? input.workspaceTabs : {},
@@ -34,7 +65,7 @@ function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefin
       typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
         ? input.activeWorkspaceTabId.trim()
         : MAIN_WORKSPACE_TAB_ID,
-    customSubjects: input?.customSubjects && typeof input.customSubjects === "object" ? input.customSubjects : {},
+    customSubjects: normalizeCustomSubjects(input?.customSubjects),
   }
 }
 

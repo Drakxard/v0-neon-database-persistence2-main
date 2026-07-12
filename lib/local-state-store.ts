@@ -49,6 +49,7 @@ export type CustomSubjectState = {
   color: string
   tabId: string
   createdAt: string
+  targetWeekday: number
 }
 
 export type WorkspaceState = {

@@ -84,6 +84,7 @@ type WorkspaceTab = {
 type CustomSubject = Subject & {
   tabId: string
   createdAt: string
+  targetWeekday: number
 }
 
 type WorkspaceTabsState = {
@@ -93,6 +94,10 @@ type WorkspaceTabsState = {
 }
 
 type WorkspaceTabTransitionDirection = "left" | "right" | "fade"
+
+type DeleteConfirmationTarget =
+  | { type: "tab"; id: string; label: string }
+  | { type: "subject"; id: string; label: string }
 
 const NIGHT_SUBJECT_COLORS: Record<string, string> = {
   algebra: "#366476",
@@ -107,6 +112,14 @@ const LOCAL_STORAGE_MODE = isLocalStorageMode()
 const MAIN_WORKSPACE_TAB_ID = "main"
 const WORKSPACE_TABS_STORAGE_KEY = "subject-wheel:workspace-tabs:v1"
 const CUSTOM_SUBJECT_PALETTE = ["#0098C8", "#2563eb", "#ea580c", "#dc2626", "#16a34a", "#a855f7", "#0f766e", "#4f46e5"] as const
+const CUSTOM_SUBJECT_WEEKDAYS = [
+  { label: "Lunes", value: 0 },
+  { label: "Martes", value: 1 },
+  { label: "Miercoles", value: 2 },
+  { label: "Jueves", value: 3 },
+  { label: "Viernes", value: 4 },
+] as const
+const LONG_PRESS_DELETE_MS = 2000
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -464,6 +477,34 @@ function getWorkspaceTabList(workspaceTabs: Record<string, WorkspaceTab>) {
   ]
 }
 
+function normalizeCustomSubject(subject: CustomSubject | (Subject & Partial<CustomSubject>)): CustomSubject | null {
+  if (!subject || typeof subject.id !== "string" || typeof subject.name !== "string" || typeof subject.color !== "string") {
+    return null
+  }
+
+  const parsedWeekday = Number(subject.targetWeekday)
+  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+
+  return {
+    id: subject.id,
+    name: subject.name,
+    color: subject.color,
+    tabId: typeof subject.tabId === "string" && subject.tabId.trim() ? subject.tabId : "",
+    createdAt: typeof subject.createdAt === "string" && subject.createdAt.trim() ? subject.createdAt : new Date(0).toISOString(),
+    targetWeekday,
+  }
+}
+
+function normalizeCustomSubjects(customSubjects: Record<string, CustomSubject>) {
+  return Object.entries(customSubjects).reduce<Record<string, CustomSubject>>((accumulator, [subjectId, subject]) => {
+    const normalizedSubject = normalizeCustomSubject(subject)
+    if (normalizedSubject) {
+      accumulator[subjectId] = normalizedSubject
+    }
+    return accumulator
+  }, {})
+}
+
 function loadWorkspaceTabsState(): WorkspaceTabsState {
   if (typeof window === "undefined") return createEmptyWorkspaceTabsState()
 
@@ -482,7 +523,7 @@ function loadWorkspaceTabsState(): WorkspaceTabsState {
     return {
       workspaceTabs,
       activeWorkspaceTabId,
-      customSubjects,
+      customSubjects: normalizeCustomSubjects(customSubjects as Record<string, CustomSubject>),
     }
   } catch {
     return createEmptyWorkspaceTabsState()
@@ -540,6 +581,30 @@ function getScheduledSubjectIdsForDate(date: Date) {
   const jsDay = date.getDay()
   const weekdayIndex = jsDay === 0 ? 6 : jsDay - 1
   return SUBJECT_IDS_BY_WEEKDAY[weekdayIndex] ?? []
+}
+
+function getCountdownForWeekday(targetWeekday: number, referenceDate: Date) {
+  const date = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate())
+  const jsDay = date.getDay()
+  const currentWeekday = jsDay === 0 ? 6 : jsDay - 1
+  const daysUntil = currentWeekday <= targetWeekday ? targetWeekday - currentWeekday : 7 - currentWeekday + targetWeekday
+
+  return {
+    daysUntil,
+    targetWeekday,
+  }
+}
+
+function isCustomSubject(subject: Subject): subject is CustomSubject {
+  return "tabId" in subject && "targetWeekday" in subject
+}
+
+function getHomeCardCountdown(subject: Subject, referenceDate: Date) {
+  if (isCustomSubject(subject)) {
+    return getCountdownForWeekday(subject.targetWeekday, referenceDate)
+  }
+
+  return getHomeSubjectCountdown(subject.id, referenceDate)
 }
 
 function getDisplaySubjectIdsForDate(date: Date, showAllSubjects: boolean, visibleSubjectIds: string[]) {
@@ -1040,11 +1105,17 @@ export function SubjectWheel({
   const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(() => loadWorkspaceTabsState().workspaceTabs)
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(() => loadWorkspaceTabsState().activeWorkspaceTabId)
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(() => loadWorkspaceTabsState().customSubjects)
+  const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
+  const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
   const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
+  const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
+  const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const hasUserChangedWorkspaceStateRef = useRef(false)
+  const longPressDeleteTimerRef = useRef<number | null>(null)
+  const shouldSuppressLongPressClickRef = useRef(false)
   const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
   const activeWorkspaceTab = useMemo(
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
@@ -1095,7 +1166,7 @@ export function SubjectWheel({
         if (hasWorkspaceTabsStateContent(persistentState) && !hasUserChangedWorkspaceStateRef.current) {
           setWorkspaceTabs(persistentState.workspaceTabs)
           setActiveWorkspaceTabId(persistentState.activeWorkspaceTabId)
-          setCustomSubjects(persistentState.customSubjects)
+          setCustomSubjects(normalizeCustomSubjects(persistentState.customSubjects))
         } else if (hasWorkspaceTabsStateContent(localSnapshot)) {
           await persistWorkspaceTabsState(localSnapshot)
         }
@@ -1147,10 +1218,13 @@ export function SubjectWheel({
   }, [activeWorkspaceTabId, workspaceTabList])
 
   const createWorkspaceTab = useCallback(() => {
+    const name = workspaceTabNameDraft.trim()
+    if (!name) return
+
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const nextTab: WorkspaceTab = {
       id,
-      name: `Pestaña ${Object.keys(workspaceTabs).length + 1}`,
+      name,
       color: "#111827",
       createdAt: new Date().toISOString(),
       subjectIds: [],
@@ -1163,7 +1237,9 @@ export function SubjectWheel({
     }))
     setWorkspaceTabTransitionDirection("fade")
     setActiveWorkspaceTabId(id)
-  }, [workspaceTabs])
+    setWorkspaceTabNameDraft("")
+    setIsCreateWorkspaceTabOpen(false)
+  }, [workspaceTabNameDraft])
 
   const createCustomSubject = useCallback(() => {
     const name = customSubjectNameDraft.trim()
@@ -1176,6 +1252,7 @@ export function SubjectWheel({
       color: customSubjectColorDraft,
       tabId: activeWorkspaceTabId,
       createdAt: new Date().toISOString(),
+      targetWeekday: customSubjectWeekdayDraft,
     }
 
     hasUserChangedWorkspaceStateRef.current = true
@@ -1197,8 +1274,85 @@ export function SubjectWheel({
     })
     setCustomSubjectNameDraft("")
     setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
+    setCustomSubjectWeekdayDraft(0)
     setIsCreateCustomSubjectOpen(false)
-  }, [activeWorkspaceTabId, customSubjectColorDraft, customSubjectNameDraft])
+  }, [activeWorkspaceTabId, customSubjectColorDraft, customSubjectNameDraft, customSubjectWeekdayDraft])
+
+  const clearLongPressDeleteTimer = useCallback(() => {
+    if (longPressDeleteTimerRef.current != null) {
+      window.clearTimeout(longPressDeleteTimerRef.current)
+      longPressDeleteTimerRef.current = null
+    }
+  }, [])
+
+  const startLongPressDelete = useCallback((target: DeleteConfirmationTarget) => {
+    clearLongPressDeleteTimer()
+    shouldSuppressLongPressClickRef.current = false
+    longPressDeleteTimerRef.current = window.setTimeout(() => {
+      longPressDeleteTimerRef.current = null
+      shouldSuppressLongPressClickRef.current = true
+      setDeleteConfirmationTarget(target)
+    }, LONG_PRESS_DELETE_MS)
+  }, [clearLongPressDeleteTimer])
+
+  const consumeLongPressClick = useCallback(() => {
+    if (!shouldSuppressLongPressClickRef.current) return false
+    shouldSuppressLongPressClickRef.current = false
+    return true
+  }, [])
+
+  const cancelLongPressDelete = useCallback(() => {
+    clearLongPressDeleteTimer()
+  }, [clearLongPressDeleteTimer])
+
+  useEffect(() => {
+    return () => clearLongPressDeleteTimer()
+  }, [clearLongPressDeleteTimer])
+
+  const confirmDeleteTarget = useCallback(() => {
+    if (!deleteConfirmationTarget) return
+
+    hasUserChangedWorkspaceStateRef.current = true
+
+    if (deleteConfirmationTarget.type === "subject") {
+      const subjectId = deleteConfirmationTarget.id
+      setCustomSubjects((previous) => {
+        const next = { ...previous }
+        delete next[subjectId]
+        return next
+      })
+      setWorkspaceTabs((previous) => {
+        const nextTabs = { ...previous }
+        for (const [tabId, tab] of Object.entries(nextTabs)) {
+          if (!tab.subjectIds.includes(subjectId)) continue
+          nextTabs[tabId] = {
+            ...tab,
+            subjectIds: tab.subjectIds.filter((currentSubjectId) => currentSubjectId !== subjectId),
+          }
+        }
+        return nextTabs
+      })
+    } else {
+      const tabToDelete = workspaceTabs[deleteConfirmationTarget.id]
+      const deletedSubjectIds = new Set(tabToDelete?.subjectIds ?? [])
+
+      setWorkspaceTabs((previous) => {
+        const next = { ...previous }
+        delete next[deleteConfirmationTarget.id]
+        return next
+      })
+      setCustomSubjects((previous) =>
+        Object.fromEntries(Object.entries(previous).filter(([subjectId]) => !deletedSubjectIds.has(subjectId)))
+      )
+
+      if (activeWorkspaceTabId === deleteConfirmationTarget.id) {
+        setWorkspaceTabTransitionDirection("fade")
+        setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
+      }
+    }
+
+    setDeleteConfirmationTarget(null)
+  }, [activeWorkspaceTabId, deleteConfirmationTarget, workspaceTabs])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -1852,7 +2006,9 @@ export function SubjectWheel({
       const isEditable = Boolean(target?.isContentEditable)
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return
 
-      if (!isDialogOpen && !isAiOpen && !isCreateCustomSubjectOpen) {
+      const isWorkspaceModalOpen = isCreateWorkspaceTabOpen || isCreateCustomSubjectOpen || Boolean(deleteConfirmationTarget)
+
+      if (!isDialogOpen && !isAiOpen && !isWorkspaceModalOpen) {
         if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
           const currentIndex = workspaceTabList.findIndex((tab) => tab.id === activeWorkspaceTab.id)
           if (currentIndex >= 0) {
@@ -1887,7 +2043,17 @@ export function SubjectWheel({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeWorkspaceTab, isAiOpen, isCreateCustomSubjectOpen, isDialogOpen, openAiModal, selectWorkspaceTab, workspaceTabList])
+  }, [
+    activeWorkspaceTab,
+    deleteConfirmationTarget,
+    isAiOpen,
+    isCreateCustomSubjectOpen,
+    isCreateWorkspaceTabOpen,
+    isDialogOpen,
+    openAiModal,
+    selectWorkspaceTab,
+    workspaceTabList,
+  ])
 
   // Auto-scroll AI response box
   useEffect(() => {
@@ -5250,7 +5416,7 @@ export function SubjectWheel({
   const homeSubjectCards = useMemo(
     () =>
       visibleSubjects.map((subject) => {
-        const countdown = getHomeSubjectCountdown(subject.id, new Date())
+        const countdown = getHomeCardCountdown(subject, new Date())
 
         return {
           subject,
@@ -5764,12 +5930,23 @@ export function SubjectWheel({
             <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {workspaceTabList.map((tab) => {
                 const isActive = tab.id === activeWorkspaceTab.id
+                const canDeleteTab = tab.id !== MAIN_WORKSPACE_TAB_ID
 
                 return (
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => selectWorkspaceTab(tab.id)}
+                    onClick={() => {
+                      if (consumeLongPressClick()) return
+                      selectWorkspaceTab(tab.id)
+                    }}
+                    onPointerDown={() => {
+                      if (!canDeleteTab) return
+                      startLongPressDelete({ type: "tab", id: tab.id, label: tab.name })
+                    }}
+                    onPointerUp={cancelLongPressDelete}
+                    onPointerLeave={cancelLongPressDelete}
+                    onPointerCancel={cancelLongPressDelete}
                     className={cn(
                       "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none",
                       isActive
@@ -5825,7 +6002,7 @@ export function SubjectWheel({
                 className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
                 aria-label="Nueva pestaña"
                 title="Nueva pestaña"
-                onClick={createWorkspaceTab}
+                onClick={() => setIsCreateWorkspaceTabOpen(true)}
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -5865,23 +6042,37 @@ export function SubjectWheel({
           {homeSubjectCards.length > 0 ? (
             <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
             <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
-              {homeSubjectCards.map((card) => (
-                <button
-                  key={card.subject.id}
-                  type="button"
-                  onClick={() => handleSubjectClick(card.subject)}
-                  className="flex h-[14rem] w-[14rem] flex-col items-center justify-between rounded-full px-5 py-5 text-center text-white shadow-[0_18px_40px_rgba(0,0,0,0.14)] transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98] sm:h-[16rem] sm:w-[16rem] sm:px-6 sm:py-6"
-                  style={{ backgroundColor: getSubjectVisualColor(card.subject) }}
-                >
-                  <span className="text-[2.2rem] font-light leading-none sm:text-[2.7rem]">
-                    {card.daysRemainingLabel}
-                  </span>
-                  <span className="text-balance text-[2rem] font-light leading-tight sm:text-[2.8rem]">
-                    {card.displayName}
-                  </span>
-                  <span aria-hidden="true" className="block h-8 sm:h-10" />
-                </button>
-              ))}
+              {homeSubjectCards.map((card) => {
+                const canDeleteSubject = isCustomSubject(card.subject)
+
+                return (
+                  <button
+                    key={card.subject.id}
+                    type="button"
+                    onClick={() => {
+                      if (consumeLongPressClick()) return
+                      handleSubjectClick(card.subject)
+                    }}
+                    onPointerDown={() => {
+                      if (!canDeleteSubject) return
+                      startLongPressDelete({ type: "subject", id: card.subject.id, label: card.displayName })
+                    }}
+                    onPointerUp={cancelLongPressDelete}
+                    onPointerLeave={cancelLongPressDelete}
+                    onPointerCancel={cancelLongPressDelete}
+                    className="flex h-[14rem] w-[14rem] flex-col items-center justify-between rounded-full px-5 py-5 text-center text-white shadow-[0_18px_40px_rgba(0,0,0,0.14)] transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98] sm:h-[16rem] sm:w-[16rem] sm:px-6 sm:py-6"
+                    style={{ backgroundColor: getSubjectVisualColor(card.subject) }}
+                  >
+                    <span className="text-[2.2rem] font-light leading-none sm:text-[2.7rem]">
+                      {card.daysRemainingLabel}
+                    </span>
+                    <span className="text-balance text-[2rem] font-light leading-tight sm:text-[2.8rem]">
+                      {card.displayName}
+                    </span>
+                    <span aria-hidden="true" className="block h-8 sm:h-10" />
+                  </button>
+                )
+              })}
             </div>
           </div>
           ) : (
@@ -6043,12 +6234,48 @@ export function SubjectWheel({
       </Dialog>
 
       <Dialog
+        open={isCreateWorkspaceTabOpen}
+        onOpenChange={(open) => {
+          setIsCreateWorkspaceTabOpen(open)
+          if (!open) {
+            setWorkspaceTabNameDraft("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Nueva pestaña</DialogTitle>
+          </DialogHeader>
+
+          <Input
+            value={workspaceTabNameDraft}
+            onChange={(event) => setWorkspaceTabNameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                createWorkspaceTab()
+              }
+            }}
+            placeholder="Nombre"
+            autoFocus
+          />
+
+          <DialogFooter>
+            <Button type="button" onClick={createWorkspaceTab} disabled={!workspaceTabNameDraft.trim()}>
+              Crear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={isCreateCustomSubjectOpen}
         onOpenChange={(open) => {
           setIsCreateCustomSubjectOpen(open)
           if (!open) {
             setCustomSubjectNameDraft("")
             setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
+            setCustomSubjectWeekdayDraft(0)
           }
         }}
       >
@@ -6086,11 +6313,57 @@ export function SubjectWheel({
                 />
               ))}
             </div>
+
+            <div className="flex flex-wrap gap-2">
+              {CUSTOM_SUBJECT_WEEKDAYS.map((weekday) => (
+                <button
+                  key={weekday.value}
+                  type="button"
+                  onClick={() => setCustomSubjectWeekdayDraft(weekday.value)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-sm transition-colors",
+                    customSubjectWeekdayDraft === weekday.value
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-background text-foreground hover:bg-accent"
+                  )}
+                >
+                  {weekday.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <DialogFooter>
             <Button type="button" onClick={createCustomSubject} disabled={!customSubjectNameDraft.trim()}>
               Crear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteConfirmationTarget)} onOpenChange={(open) => (!open ? setDeleteConfirmationTarget(null) : undefined)}>
+        <DialogContent
+          className="max-w-xs"
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault()
+              confirmDeleteTarget()
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Borrar?</DialogTitle>
+            <DialogDescription>{deleteConfirmationTarget?.label ?? ""}</DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancelar
+              </Button>
+            </DialogClose>
+            <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
+              Borrar
             </Button>
           </DialogFooter>
         </DialogContent>
