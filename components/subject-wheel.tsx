@@ -929,6 +929,7 @@ export function SubjectWheel({
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubjectDefinition>>({})
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(MAIN_WORKSPACE_TAB_ID)
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
+  const [isWorkspaceMutationPending, setIsWorkspaceMutationPending] = useState(false)
   const [isCreateSubjectDialogOpen, setIsCreateSubjectDialogOpen] = useState(false)
   const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
@@ -951,10 +952,11 @@ export function SubjectWheel({
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
 
   useEffect(() => {
+    if (isWorkspaceLoading || isWorkspaceMutationPending) return
     if (activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
     if (workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)) return
     setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
-  }, [activeWorkspaceTabId, workspaceTabList])
+  }, [activeWorkspaceTabId, isWorkspaceLoading, isWorkspaceMutationPending, workspaceTabList])
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
@@ -1659,7 +1661,7 @@ export function SubjectWheel({
 
   const selectWorkspaceTab = useCallback(
     async (tabId: string) => {
-      setActiveWorkspaceTabId(tabId)
+      setIsWorkspaceMutationPending(true)
       try {
         const response = await fetch("/api/workspace-tabs", {
           method: "POST",
@@ -1674,12 +1676,15 @@ export function SubjectWheel({
         applyWorkspacePayload(payload)
       } catch (error) {
         console.error("Failed to select workspace tab:", error)
+      } finally {
+        setIsWorkspaceMutationPending(false)
       }
     },
     [applyWorkspacePayload]
   )
 
   const createWorkspaceTab = useCallback(async () => {
+    setIsWorkspaceMutationPending(true)
     try {
       const response = await fetch("/api/workspace-tabs", {
         method: "POST",
@@ -1694,6 +1699,8 @@ export function SubjectWheel({
       applyWorkspacePayload(payload)
     } catch (error) {
       console.error("Failed to create workspace tab:", error)
+    } finally {
+      setIsWorkspaceMutationPending(false)
     }
   }, [applyWorkspacePayload])
 
