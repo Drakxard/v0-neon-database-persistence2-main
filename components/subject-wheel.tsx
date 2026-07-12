@@ -119,7 +119,7 @@ const CUSTOM_SUBJECT_WEEKDAYS = [
   { label: "Jueves", value: 3 },
   { label: "Viernes", value: 4 },
 ] as const
-const LONG_PRESS_DELETE_MS = 2000
+const LONG_PRESS_DELETE_MS = 800
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -5925,9 +5925,9 @@ export function SubjectWheel({
     <div className="relative min-h-dvh max-h-dvh overflow-hidden bg-background text-foreground transition-colors duration-300">
       {/* Header */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
-        <div className="flex flex-col gap-1 px-3 py-3 sm:px-4 sm:py-4">
-          <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-start justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <div className="pointer-events-auto flex max-h-[calc(100dvh-8rem)] min-w-0 flex-col items-start gap-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {workspaceTabList.map((tab) => {
                 const isActive = tab.id === activeWorkspaceTab.id
                 const canDeleteTab = tab.id !== MAIN_WORKSPACE_TAB_ID
@@ -5948,7 +5948,7 @@ export function SubjectWheel({
                     onPointerLeave={cancelLongPressDelete}
                     onPointerCancel={cancelLongPressDelete}
                     className={cn(
-                      "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none",
+                      "max-w-[8.5rem] shrink-0 truncate rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none sm:max-w-[11rem]",
                       isActive
                         ? "scale-[1.03] border-transparent bg-foreground text-background shadow-sm"
                         : "border-border bg-background/70 text-foreground hover:bg-background/90"
@@ -5959,8 +5959,26 @@ export function SubjectWheel({
                 )
               })}
             </div>
+            <div className="pointer-events-none flex min-h-4 items-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
+              {saveStatus === "saving" && (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  <span>Guardando...</span>
+                </>
+              )}
+              {saveStatus === "saved" && (
+                <>
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                  <span className="text-green-500">Guardado</span>
+                </>
+              )}
+              {saveStatus === "error" && (
+                <span className="text-red-500">Error al guardar</span>
+              )}
+            </div>
+          </div>
 
-            <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -6006,31 +6024,12 @@ export function SubjectWheel({
               >
                 <Plus className="h-4 w-4" />
               </Button>
-            </div>
-          </div>
-
-          <div className="pointer-events-none flex min-h-4 items-center justify-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
-            {saveStatus === "saving" && (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                <span>Guardando...</span>
-              </>
-            )}
-            {saveStatus === "saved" && (
-              <>
-                <Check className="h-3.5 w-3.5 text-green-500" />
-                <span className="text-green-500">Guardado</span>
-              </>
-            )}
-            {saveStatus === "error" && (
-              <span className="text-center text-red-500">Error al guardar</span>
-            )}
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
+      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28 lg:pl-40">
         <div
           key={activeWorkspaceTab.id}
           className={cn(
@@ -6040,8 +6039,8 @@ export function SubjectWheel({
           )}
         >
           {homeSubjectCards.length > 0 ? (
-            <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
-            <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+            <div className="mx-auto flex min-h-[calc(100dvh-12rem)] max-w-5xl items-center justify-center py-4 sm:min-h-[calc(100dvh-13rem)] lg:min-h-[calc(100dvh-9rem)]">
+            <div className="grid w-full max-w-[56rem] grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
               {homeSubjectCards.map((card) => {
                 const canDeleteSubject = isCustomSubject(card.subject)
 
