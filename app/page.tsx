@@ -1,5 +1,6 @@
 import { SubjectWheel } from "@/components/subject-wheel"
 import { getRequestAuthSession } from "@/lib/authz"
+import { redirect } from "next/navigation"
 
 type HomePageProps = {
   searchParams: Promise<{
@@ -10,7 +11,7 @@ type HomePageProps = {
 export default async function Home({ searchParams }: HomePageProps) {
   const session = await getRequestAuthSession()
   if (!session) {
-    return null
+    redirect("/login?next=/")
   }
 
   return <SubjectWheel authSession={session} initialSearchParams={await searchParams} />
