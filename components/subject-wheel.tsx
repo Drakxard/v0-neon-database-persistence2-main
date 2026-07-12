@@ -6016,10 +6016,10 @@ export function SubjectWheel({
       </header>
 
       {/* Main Content */}
-      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
-        <div className="min-h-full">
+      <main className="absolute inset-0 overflow-y-auto px-4 py-12 sm:px-6">
+        <div className="flex min-h-[calc(100dvh-6rem)] items-center justify-center">
           {homeSubjectCards.length > 0 ? (
-            <div className="mx-auto flex min-h-[calc(100dvh-12rem)] w-full max-w-5xl items-center justify-center py-4 sm:min-h-[calc(100dvh-13rem)] lg:min-h-[calc(100dvh-9rem)]">
+            <div className="mx-auto flex w-full max-w-5xl items-center justify-center">
             <div className="flex w-full max-w-[58rem] flex-wrap justify-center gap-6 lg:gap-8">
               {homeSubjectCards.map((card) => {
                 const canDeleteSubject = isCustomSubject(card.subject)
