@@ -5,6 +5,7 @@ import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { deleteLocalMaterial, findLocalMaterialById, upsertLocalMaterial } from "@/lib/local-r2-manifests"
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
 import { isLocalStorageMode } from "@/lib/storage-mode"
+import { getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 export const runtime = "nodejs"
 
@@ -52,6 +53,56 @@ function normalizeRow(row: SubjectDayMaterialRow | null) {
   }
 }
 
+function parseMaterialPatchBody(body: unknown) {
+  const payload = body && typeof body === "object" ? body as Record<string, unknown> : {}
+  const patch: Partial<{
+    fileName: string
+    materialType: "theory" | "practice"
+    sessionDate: string
+    weekNumber: number
+    isCheckupDone: boolean
+  }> = {}
+
+  if ("fileName" in payload) {
+    const fileName = String(payload.fileName || "").trim()
+    if (!fileName) return { error: "Invalid fileName" }
+    patch.fileName = fileName
+  }
+
+  if ("materialType" in payload) {
+    if (payload.materialType !== "theory" && payload.materialType !== "practice") {
+      return { error: "Invalid materialType" }
+    }
+    patch.materialType = payload.materialType
+  }
+
+  if ("sessionDate" in payload) {
+    const sessionDate = String(payload.sessionDate || "").trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate) || Number.isNaN(parseDateKey(sessionDate).getTime())) {
+      return { error: "Invalid sessionDate" }
+    }
+    patch.sessionDate = sessionDate
+  }
+
+  if ("weekNumber" in payload) {
+    const weekNumber = Number.parseInt(String(payload.weekNumber), 10)
+    if (!Number.isInteger(weekNumber) || weekNumber < 0) {
+      return { error: "Invalid weekNumber" }
+    }
+    patch.weekNumber = weekNumber
+  }
+
+  if ("isCheckupDone" in payload) {
+    if (typeof payload.isCheckupDone !== "boolean") {
+      return { error: "Invalid isCheckupDone value" }
+    }
+    patch.isCheckupDone = payload.isCheckupDone
+  }
+
+  if (Object.keys(patch).length === 0) return { error: "Missing patch fields" }
+  return { patch }
+}
+
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireAuthSession()
@@ -72,19 +123,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       const forbidden = ensureSubjectAccess(auth.session!, material.subject_id)
       if (forbidden) return forbidden
 
-      const body = await request.json()
-      if (typeof body.isCheckupDone !== "boolean") {
-        return NextResponse.json({ error: "Invalid isCheckupDone value" }, { status: 400 })
-      }
+      const parsed = parseMaterialPatchBody(await request.json())
+      if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
+      const patch = parsed.patch
 
       const updatedMaterial = {
         ...material,
-        is_checkup_done: body.isCheckupDone,
+        file_name: patch.fileName ?? material.file_name,
+        material_type: patch.materialType ?? material.material_type,
+        session_date: patch.sessionDate ?? material.session_date,
+        week_number: patch.weekNumber ?? material.week_number,
+        weekday_index: getWeekdayIndexFromDateKey(patch.sessionDate ?? material.session_date),
+        is_checkup_done: patch.isCheckupDone ?? material.is_checkup_done,
         updated_at: new Date().toISOString(),
       }
 
       await upsertLocalMaterial(updatedMaterial)
       return NextResponse.json(updatedMaterial)
+    }
+
+    if (!sql) {
+      return NextResponse.json({ error: "DATABASE_URL is not configured" }, { status: 503 })
     }
 
     const scopeRows = await sql`
@@ -100,15 +159,30 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const forbidden = ensureSubjectAccess(auth.session!, scopeRows[0].subject_id)
     if (forbidden) return forbidden
 
-    const body = await request.json()
-    if (typeof body.isCheckupDone !== "boolean") {
-      return NextResponse.json({ error: "Invalid isCheckupDone value" }, { status: 400 })
+    const parsed = parseMaterialPatchBody(await request.json())
+    if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
+    const patch = parsed.patch
+    const currentRows = await sql`
+      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      FROM subject_day_materials
+      WHERE id = ${materialId}
+      LIMIT 1
+    ` as SubjectDayMaterialRow[]
+    const currentMaterial = currentRows[0]
+    if (!currentMaterial) {
+      return NextResponse.json({ error: "Material not found" }, { status: 404 })
     }
+    const nextSessionDate = patch.sessionDate ?? normalizeSessionDateKey(currentMaterial.session_date)
 
     const rows = await sql`
       UPDATE subject_day_materials
       SET
-        is_checkup_done = ${body.isCheckupDone},
+        file_name = ${patch.fileName ?? currentMaterial.file_name},
+        material_type = ${patch.materialType ?? currentMaterial.material_type},
+        session_date = ${nextSessionDate},
+        week_number = ${patch.weekNumber ?? currentMaterial.week_number},
+        weekday_index = ${getWeekdayIndexFromDateKey(nextSessionDate)},
+        is_checkup_done = ${patch.isCheckupDone ?? currentMaterial.is_checkup_done},
         updated_at = NOW()
       WHERE id = ${materialId}
       RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
@@ -161,6 +235,10 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
       }
 
       return NextResponse.json({ success: true, id: material.id })
+    }
+
+    if (!sql) {
+      return NextResponse.json({ error: "DATABASE_URL is not configured" }, { status: 503 })
     }
 
     const materials = await sql`
