@@ -3,10 +3,6 @@ import { getRequestAuthSession } from "@/lib/authz"
 
 type HomePageProps = {
   searchParams: Promise<{
-    view?: string
-    synthesisMode?: string
-    synthesisWeek?: string
-    synthesisSubject?: string
     returnToken?: string
   }>
 }

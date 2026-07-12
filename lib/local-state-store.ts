@@ -1,15 +1,21 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
 
+import type { CustomSubjectDefinition, WorkspaceTab } from "@/lib/study-types"
+
 type LocalStateShape = {
   aiPrompt: string
   dailySessions: Record<string, {
     id: number
     date: string
+    tab_id?: string
     active_subject_ids: string[]
     completed_subjects: Record<string, boolean>
     show_all_subjects: boolean
   }>
+  workspaceTabs: Record<string, WorkspaceTab>
+  activeWorkspaceTabId: string
+  customSubjects: Record<string, CustomSubjectDefinition>
   subjectCompletions: Record<string, {
     id: number
     date: string
@@ -41,6 +47,9 @@ function createEmptyState(): LocalStateShape {
   return {
     aiPrompt: "",
     dailySessions: {},
+    workspaceTabs: {},
+    activeWorkspaceTabId: "main",
+    customSubjects: {},
     subjectCompletions: {},
     subjectShortcuts: {},
     subjectOpenCounts: {},
@@ -65,6 +74,9 @@ export async function readLocalState() {
       ...createEmptyState(),
       ...parsed,
       dailySessions: parsed.dailySessions ?? {},
+      workspaceTabs: parsed.workspaceTabs ?? {},
+      activeWorkspaceTabId: typeof parsed.activeWorkspaceTabId === "string" && parsed.activeWorkspaceTabId.trim() ? parsed.activeWorkspaceTabId : "main",
+      customSubjects: parsed.customSubjects ?? {},
       subjectCompletions: parsed.subjectCompletions ?? {},
       subjectShortcuts: parsed.subjectShortcuts ?? {},
       subjectOpenCounts: parsed.subjectOpenCounts ?? {},

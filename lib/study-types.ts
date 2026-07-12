@@ -4,6 +4,22 @@ export type SubjectDayEntryLink = {
   url: string
 }
 
+export type WorkspaceTab = {
+  id: string
+  name: string
+  color: string
+  createdAt: string
+  subjectIds: string[]
+}
+
+export type CustomSubjectDefinition = {
+  id: string
+  name: string
+  color: string
+  tabId: string
+  createdAt: string
+}
+
 export type SubjectDayEntry = {
   id: number
   subject_day_material_id: number | null
@@ -98,6 +114,7 @@ export type SubjectShortcuts = {
 export type DailySessionRecord = {
   id?: number
   date: string
+  tab_id?: string
   active_subject_ids: string[]
   completed_subjects: Record<string, boolean>
   show_all_subjects: boolean
