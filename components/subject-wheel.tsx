@@ -73,6 +73,25 @@ interface Subject {
   color: string
 }
 
+type WorkspaceTab = {
+  id: string
+  name: string
+  color: string
+  createdAt: string
+  subjectIds: string[]
+}
+
+type CustomSubject = Subject & {
+  tabId: string
+  createdAt: string
+}
+
+type WorkspaceTabsState = {
+  workspaceTabs: Record<string, WorkspaceTab>
+  activeWorkspaceTabId: string
+  customSubjects: Record<string, CustomSubject>
+}
+
 const NIGHT_SUBJECT_COLORS: Record<string, string> = {
   algebra: "#366476",
   calculo2: "#3f5f94",
@@ -83,6 +102,9 @@ const NIGHT_SUBJECT_COLORS: Record<string, string> = {
 }
 
 const LOCAL_STORAGE_MODE = isLocalStorageMode()
+const MAIN_WORKSPACE_TAB_ID = "main"
+const WORKSPACE_TABS_STORAGE_KEY = "subject-wheel:workspace-tabs:v1"
+const CUSTOM_SUBJECT_PALETTE = ["#0098C8", "#2563eb", "#ea580c", "#dc2626", "#16a34a", "#a855f7", "#0f766e", "#4f46e5"] as const
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -413,6 +435,64 @@ const SUBJECT_IDS_BY_WEEKDAY: Record<number, string[]> = {
 function getTodayDateString() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+}
+
+function getMainWorkspaceTab(): WorkspaceTab {
+  return {
+    id: MAIN_WORKSPACE_TAB_ID,
+    name: "Inicio",
+    color: "#111827",
+    createdAt: new Date(0).toISOString(),
+    subjectIds: SUBJECTS.map((subject) => subject.id),
+  }
+}
+
+function createEmptyWorkspaceTabsState(): WorkspaceTabsState {
+  return {
+    workspaceTabs: {},
+    activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
+    customSubjects: {},
+  }
+}
+
+function getWorkspaceTabList(workspaceTabs: Record<string, WorkspaceTab>) {
+  return [
+    getMainWorkspaceTab(),
+    ...Object.values(workspaceTabs).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+  ]
+}
+
+function loadWorkspaceTabsState(): WorkspaceTabsState {
+  if (typeof window === "undefined") return createEmptyWorkspaceTabsState()
+
+  try {
+    const rawValue = window.localStorage.getItem(WORKSPACE_TABS_STORAGE_KEY)
+    if (!rawValue) return createEmptyWorkspaceTabsState()
+
+    const parsed = JSON.parse(rawValue) as Partial<WorkspaceTabsState>
+    const workspaceTabs = parsed.workspaceTabs && typeof parsed.workspaceTabs === "object" ? parsed.workspaceTabs : {}
+    const customSubjects = parsed.customSubjects && typeof parsed.customSubjects === "object" ? parsed.customSubjects : {}
+    const activeWorkspaceTabId =
+      typeof parsed.activeWorkspaceTabId === "string" && parsed.activeWorkspaceTabId.trim()
+        ? parsed.activeWorkspaceTabId.trim()
+        : MAIN_WORKSPACE_TAB_ID
+
+    return {
+      workspaceTabs,
+      activeWorkspaceTabId,
+      customSubjects,
+    }
+  } catch {
+    return createEmptyWorkspaceTabsState()
+  }
+}
+
+function saveWorkspaceTabsState(state: WorkspaceTabsState) {
+  if (typeof window === "undefined") return
+
+  try {
+    window.localStorage.setItem(WORKSPACE_TABS_STORAGE_KEY, JSON.stringify(state))
+  } catch {}
 }
 
 function getSubjectById(subjectId: string, subjects: Subject[]) {
@@ -916,10 +996,28 @@ export function SubjectWheel({
 }) {
   const router = useRouter()
   const [session, setSession] = useState<AuthSession>(authSession)
-  const visibleSubjects = useMemo<Subject[]>(
+  const builtInVisibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
     [session.allowedSubjectIds, session.isAdmin]
   )
+  const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(() => loadWorkspaceTabsState().workspaceTabs)
+  const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(() => loadWorkspaceTabsState().activeWorkspaceTabId)
+  const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(() => loadWorkspaceTabsState().customSubjects)
+  const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
+  const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
+  const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
+  const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
+  const activeWorkspaceTab = useMemo(
+    () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
+    [activeWorkspaceTabId, workspaceTabList]
+  )
+  const visibleSubjects = useMemo<Subject[]>(() => {
+    if (activeWorkspaceTab.id === MAIN_WORKSPACE_TAB_ID) return builtInVisibleSubjects
+
+    return activeWorkspaceTab.subjectIds
+      .map((subjectId) => customSubjects[subjectId])
+      .filter((subject): subject is CustomSubject => Boolean(subject))
+  }, [activeWorkspaceTab, builtInVisibleSubjects, customSubjects])
   const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
@@ -932,6 +1030,76 @@ export function SubjectWheel({
   useEffect(() => {
     setThemeMenuMounted(true)
   }, [])
+
+  useEffect(() => {
+    const hasActiveTab = workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)
+    if (!hasActiveTab) {
+      setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
+    }
+  }, [activeWorkspaceTabId, workspaceTabList])
+
+  useEffect(() => {
+    saveWorkspaceTabsState({
+      workspaceTabs,
+      activeWorkspaceTabId,
+      customSubjects,
+    })
+  }, [activeWorkspaceTabId, customSubjects, workspaceTabs])
+
+  const selectWorkspaceTab = useCallback((tabId: string) => {
+    setActiveWorkspaceTabId(tabId)
+  }, [])
+
+  const createWorkspaceTab = useCallback(() => {
+    const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const nextTab: WorkspaceTab = {
+      id,
+      name: `Pestaña ${Object.keys(workspaceTabs).length + 1}`,
+      color: "#111827",
+      createdAt: new Date().toISOString(),
+      subjectIds: [],
+    }
+
+    setWorkspaceTabs((previous) => ({
+      ...previous,
+      [id]: nextTab,
+    }))
+    setActiveWorkspaceTabId(id)
+  }, [workspaceTabs])
+
+  const createCustomSubject = useCallback(() => {
+    const name = customSubjectNameDraft.trim()
+    if (!name || activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
+
+    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const nextSubject: CustomSubject = {
+      id,
+      name,
+      color: customSubjectColorDraft,
+      tabId: activeWorkspaceTabId,
+      createdAt: new Date().toISOString(),
+    }
+
+    setCustomSubjects((previous) => ({
+      ...previous,
+      [id]: nextSubject,
+    }))
+    setWorkspaceTabs((previous) => {
+      const currentTab = previous[activeWorkspaceTabId]
+      if (!currentTab) return previous
+
+      return {
+        ...previous,
+        [activeWorkspaceTabId]: {
+          ...currentTab,
+          subjectIds: [...currentTab.subjectIds, id],
+        },
+      }
+    })
+    setCustomSubjectNameDraft("")
+    setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
+    setIsCreateCustomSubjectOpen(false)
+  }, [activeWorkspaceTabId, customSubjectColorDraft, customSubjectNameDraft])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -1045,26 +1213,7 @@ export function SubjectWheel({
     setSession(authSession)
   }, [authSession])
 
-  useEffect(() => {
-    let isCancelled = false
-
-    const loadRemoteCronograma = async () => {
-      try {
-        const remoteCronograma = await fetchCronograma()
-        if (!isCancelled) {
-          setCronogramaPdfName(remoteCronograma?.fileName ?? "")
-        }
-      } catch (error) {
-        console.error("Failed to load remote cronograma PDF:", error)
-      }
-    }
-
-    void loadRemoteCronograma()
-
-    return () => {
-      isCancelled = true
-    }
-  }, [])
+  useEffect(() => undefined, [])
 
   useEffect(() => {
     if (LOCAL_STORAGE_MODE) return
@@ -1604,6 +1753,27 @@ export function SubjectWheel({
       const isEditable = Boolean(target?.isContentEditable)
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return
 
+      if (!isDialogOpen && !isAiOpen && !isCreateCustomSubjectOpen) {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          const currentIndex = workspaceTabList.findIndex((tab) => tab.id === activeWorkspaceTab.id)
+          if (currentIndex >= 0) {
+            const nextIndex = e.key === "ArrowLeft" ? currentIndex - 1 : currentIndex + 1
+            const nextTab = workspaceTabList[nextIndex]
+            if (nextTab) {
+              e.preventDefault()
+              selectWorkspaceTab(nextTab.id)
+              return
+            }
+          }
+        }
+
+        if ((e.key === "+" || e.code === "NumpadAdd") && activeWorkspaceTab.id !== MAIN_WORKSPACE_TAB_ID) {
+          e.preventDefault()
+          setIsCreateCustomSubjectOpen(true)
+          return
+        }
+      }
+
       if (e.ctrlKey && e.key === "Enter") {
         e.preventDefault()
         if (homeSelectedWeekNumberRef.current < currentCalendarWeekRef.current + 1) {
@@ -1618,7 +1788,7 @@ export function SubjectWheel({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [openAiModal])
+  }, [activeWorkspaceTab, isAiOpen, isCreateCustomSubjectOpen, isDialogOpen, openAiModal, selectWorkspaceTab, workspaceTabList])
 
   // Auto-scroll AI response box
   useEffect(() => {
@@ -4270,51 +4440,12 @@ export function SubjectWheel({
 
   useEffect(() => {
     if (hasResolvedInitialSynthesisRouteRef.current) return
-
-    if (initialSearchParams?.view !== "synthesis") {
-      hasResolvedInitialSynthesisRouteRef.current = true
-      return
-    }
-
-    const firstSubject = synthesisSubjects[0] ?? null
-    if (!firstSubject) return
-
-    const requestedWeekNumber = Number.parseInt(initialSearchParams.synthesisWeek ?? "", 10)
-    const nextWeekNumber =
-      Number.isInteger(requestedWeekNumber) && requestedWeekNumber > 0
-        ? requestedWeekNumber
-        : homeSelectedWeekNumber
-    const nextMode: SynthesisViewMode = initialSearchParams.synthesisMode === "detail" ? "detail" : "overview"
-    const requestedSubjectId = initialSearchParams.synthesisSubject ?? ""
-    const nextSubject = synthesisSubjects.find((subject) => subject.id === requestedSubjectId) ?? firstSubject
-
-    resetSynthesisPlayback()
-    setSynthesisWeekNumber(nextWeekNumber)
-    setSynthesisSubjectId(nextSubject.id)
-    setSynthesisSubjectStateMap({})
-    setSynthesisViewMode(nextMode)
-    setIsSynthesisWeekSelectorOpen(false)
-    setIsSynthesisOpen(true)
-    shouldSyncSynthesisRouteRef.current = true
     hasResolvedInitialSynthesisRouteRef.current = true
-  }, [homeSelectedWeekNumber, initialSearchParams, resetSynthesisPlayback, synthesisSubjects])
+  }, [])
 
   useEffect(() => {
-    if (!hasResolvedInitialSynthesisRouteRef.current || !shouldSyncSynthesisRouteRef.current) return
-
-    const nextHref =
-      isSynthesisOpen && synthesisWeekNumber > 0
-        ? buildSynthesisHref({
-            weekNumber: synthesisWeekNumber,
-            mode: synthesisViewMode,
-            subjectId: synthesisViewMode === "detail" ? synthesisSubjectId : null,
-          })
-        : "/"
-    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
-
-    if (currentHref === nextHref) return
-    window.history.replaceState(null, "", nextHref)
-  }, [isSynthesisOpen, synthesisSubjectId, synthesisViewMode, synthesisWeekNumber])
+    return undefined
+  }, [])
 
   const handleStartSynthesisPlayback = useCallback((mode: ContinueMode) => {
     const entriesByMaterialId = (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -5531,47 +5662,26 @@ export function SubjectWheel({
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
         <div className="flex flex-col gap-1 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="pointer-events-auto flex shrink-0 items-center">
-              <input
-                ref={cronogramaFileInputRef}
-                type="file"
-                accept="application/pdf"
-                className="hidden"
-                onChange={handleCronogramaFileChange}
-              />
-              {cronogramaPdfName ? (
-                <Button
-                  asChild
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                  aria-label={`Abrir cronograma ${cronogramaPdfName}`}
-                  title={`Cronograma: ${cronogramaPdfName}`}
-                >
-                  <a
-                    href={buildCronogramaViewerHref(cronogramaPdfName)}
-                    onClick={(event) => {
-                      if (!isPlainLeftClick(event)) return
-                      event.preventDefault()
-                      void handleCronogramaButtonClick()
-                    }}
+            <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {workspaceTabList.map((tab) => {
+                const isActive = tab.id === activeWorkspaceTab.id
+
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => selectWorkspaceTab(tab.id)}
+                    className={cn(
+                      "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      isActive
+                        ? "border-transparent bg-foreground text-background"
+                        : "border-border bg-background/70 text-foreground"
+                    )}
                   >
-                    {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
-                  </a>
-                </Button>
-              ) : (
-                <Button
-                  onClick={() => void handleCronogramaButtonClick()}
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                  aria-label="Seleccionar cronograma"
-                  title="Seleccionar cronograma"
-                  disabled={isCronogramaLoading}
-                >
-                  {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
-                </Button>
-              )}
+                    {tab.name}
+                  </button>
+                )
+              })}
             </div>
 
             <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -5611,26 +5721,14 @@ export function SubjectWheel({
                 </DropdownMenuContent>
               </DropdownMenu>
               <Button
-                asChild
                 variant="outline"
                 size="icon"
                 className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Sintesis"
-                title="Sintesis"
+                aria-label="Nueva pestaña"
+                title="Nueva pestaña"
+                onClick={createWorkspaceTab}
               >
-                <a
-                  href={buildSynthesisHref({
-                    weekNumber: homeSelectedWeekNumber,
-                    mode: "overview",
-                  })}
-                  onClick={(event) => {
-                    if (!isPlainLeftClick(event)) return
-                    event.preventDefault()
-                    openSynthesisModal()
-                  }}
-                >
-                  <BarChart3 className="h-4 w-4" />
-                </a>
+                <Plus className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -5680,12 +5778,7 @@ export function SubjectWheel({
             </div>
           </div>
         ) : (
-          <div className="flex min-h-full items-center justify-center text-center">
-            <div>
-              <h2 className="mb-2 text-2xl font-bold text-foreground">Sin materias visibles</h2>
-              <p className="text-muted-foreground">No hay materias habilitadas para este usuario.</p>
-            </div>
-          </div>
+          <div className="flex min-h-full items-center justify-center text-center" />
         )}
         <div className="hidden">
         {activeSubjects.length > 0 ? (
@@ -5837,6 +5930,60 @@ export function SubjectWheel({
                 Cerrar
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isCreateCustomSubjectOpen}
+        onOpenChange={(open) => {
+          setIsCreateCustomSubjectOpen(open)
+          if (!open) {
+            setCustomSubjectNameDraft("")
+            setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Nueva materia</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <Input
+              value={customSubjectNameDraft}
+              onChange={(event) => setCustomSubjectNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  createCustomSubject()
+                }
+              }}
+              placeholder="Nombre"
+              autoFocus
+            />
+
+            <div className="flex flex-wrap gap-2">
+              {CUSTOM_SUBJECT_PALETTE.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => setCustomSubjectColorDraft(color)}
+                  className={cn(
+                    "h-9 w-9 rounded-full border-2 transition-transform",
+                    customSubjectColorDraft === color ? "scale-105 border-foreground" : "border-transparent"
+                  )}
+                  style={{ backgroundColor: color }}
+                  aria-label={`Color ${color}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" onClick={createCustomSubject} disabled={!customSubjectNameDraft.trim()}>
+              Crear
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
