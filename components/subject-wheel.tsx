@@ -6029,7 +6029,7 @@ export function SubjectWheel({
       </header>
 
       {/* Main Content */}
-      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28 lg:pl-40">
+      <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
         <div
           key={activeWorkspaceTab.id}
           className={cn(
@@ -6039,7 +6039,7 @@ export function SubjectWheel({
           )}
         >
           {homeSubjectCards.length > 0 ? (
-            <div className="mx-auto flex min-h-[calc(100dvh-12rem)] max-w-5xl items-center justify-center py-4 sm:min-h-[calc(100dvh-13rem)] lg:min-h-[calc(100dvh-9rem)]">
+            <div className="mx-auto flex min-h-[calc(100dvh-12rem)] w-full max-w-5xl items-center justify-center py-4 sm:min-h-[calc(100dvh-13rem)] lg:min-h-[calc(100dvh-9rem)]">
             <div className="grid w-full max-w-[56rem] grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
               {homeSubjectCards.map((card) => {
                 const canDeleteSubject = isCustomSubject(card.subject)
