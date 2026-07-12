@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { APP_AUTH_COOKIE_NAME, getAppAuthConfig, verifySessionToken, type AppSessionTokenPayload } from "@/lib/app-auth"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS, normalizeAllowedSubjectIds, getSubjectIdFromIndex } from "@/lib/subjects"
+import { listWorkspaceCustomSubjectIdsForUser } from "@/lib/workspace-state"
 
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
@@ -53,15 +54,18 @@ export async function getCurrentSessionForEmail(email: string): Promise<AuthSess
   if (!normalizedEmail) return null
 
   if (normalizedEmail === getAdminEmail()) {
+    const customSubjectIds = await listWorkspaceCustomSubjectIdsForUser(normalizedEmail).catch(() => [])
     return {
       email: normalizedEmail,
       ...getAdminSession(),
+      allowedSubjectIds: Array.from(new Set([...getAdminSession().allowedSubjectIds, ...customSubjectIds])),
       expiresAtMs: 0,
     }
   }
 
   const allowedAccount = await getAllowedAccountByEmail(normalizedEmail)
-  const allowedSubjectIds = allowedAccount?.allowed_subject_ids ?? []
+  const customSubjectIds = await listWorkspaceCustomSubjectIdsForUser(normalizedEmail).catch(() => [])
+  const allowedSubjectIds = Array.from(new Set([...(allowedAccount?.allowed_subject_ids ?? []), ...customSubjectIds]))
   if (allowedSubjectIds.length === 0) return null
 
   return {
