@@ -78,6 +78,7 @@ type WorkspaceTab = {
   name: string
   color: string
   createdAt: string
+  orderIndex?: number
   subjectIds: string[]
 }
 
@@ -479,7 +480,12 @@ function createEmptyWorkspaceTabsState(): WorkspaceTabsState {
 function getWorkspaceTabList(workspaceTabs: Record<string, WorkspaceTab>) {
   return [
     getMainWorkspaceTab(),
-    ...Object.values(workspaceTabs).sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    ...Object.values(workspaceTabs).sort((left, right) => {
+      const leftOrder = typeof left.orderIndex === "number" ? left.orderIndex : Number.POSITIVE_INFINITY
+      const rightOrder = typeof right.orderIndex === "number" ? right.orderIndex : Number.POSITIVE_INFINITY
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder
+      return left.createdAt.localeCompare(right.createdAt)
+    }),
   ]
 }
 
@@ -1114,6 +1120,7 @@ export function SubjectWheel({
   const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
   const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
+  const [editingCustomSubjectId, setEditingCustomSubjectId] = useState<string | null>(null)
   const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
   const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
@@ -1122,6 +1129,8 @@ export function SubjectWheel({
   const hasUserChangedWorkspaceStateRef = useRef(false)
   const longPressDeleteTimerRef = useRef<number | null>(null)
   const shouldSuppressLongPressClickRef = useRef(false)
+  const draggedWorkspaceTabIdRef = useRef<string | null>(null)
+  const [draggedWorkspaceTabId, setDraggedWorkspaceTabId] = useState<string | null>(null)
   const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
   const activeWorkspaceTab = useMemo(
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
@@ -1221,6 +1230,7 @@ export function SubjectWheel({
       name,
       color: "#111827",
       createdAt: new Date().toISOString(),
+      orderIndex: workspaceTabList.filter((tab) => tab.id !== MAIN_WORKSPACE_TAB_ID).length,
       subjectIds: [],
     }
 
@@ -1232,11 +1242,49 @@ export function SubjectWheel({
     setActiveWorkspaceTabId(id)
     setWorkspaceTabNameDraft("")
     setIsCreateWorkspaceTabOpen(false)
-  }, [workspaceTabNameDraft])
+  }, [workspaceTabList, workspaceTabNameDraft])
 
-  const createCustomSubject = useCallback(() => {
+  const resetCustomSubjectDraft = useCallback(() => {
+    setEditingCustomSubjectId(null)
+    setCustomSubjectNameDraft("")
+    setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
+    setCustomSubjectWeekdayDraft(0)
+  }, [])
+
+  const openCustomSubjectEditDialog = useCallback((subject: CustomSubject) => {
+    setEditingCustomSubjectId(subject.id)
+    setCustomSubjectNameDraft(subject.name)
+    setCustomSubjectColorDraft(subject.color)
+    setCustomSubjectWeekdayDraft(subject.targetWeekday)
+    setIsCreateCustomSubjectOpen(true)
+  }, [])
+
+  const saveCustomSubject = useCallback(() => {
     const name = customSubjectNameDraft.trim()
     if (!name || activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
+
+    if (editingCustomSubjectId) {
+      const existingSubject = customSubjects[editingCustomSubjectId]
+      if (!existingSubject) return
+
+      hasUserChangedWorkspaceStateRef.current = true
+      const nextSubject: CustomSubject = {
+        ...existingSubject,
+        name,
+        color: customSubjectColorDraft,
+        targetWeekday: customSubjectWeekdayDraft,
+      }
+      setCustomSubjects((previous) => ({
+        ...previous,
+        [editingCustomSubjectId]: nextSubject,
+      }))
+      setActiveSubjects((previous) => previous.map((subject) => (subject.id === nextSubject.id ? nextSubject : subject)))
+      setCompletedSubjects((previous) => previous.map((subject) => (subject.id === nextSubject.id ? nextSubject : subject)))
+      setCurrentSubject((previous) => (previous?.id === nextSubject.id ? nextSubject : previous))
+      resetCustomSubjectDraft()
+      setIsCreateCustomSubjectOpen(false)
+      return
+    }
 
     const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const nextSubject: CustomSubject = {
@@ -1265,11 +1313,54 @@ export function SubjectWheel({
         },
       }
     })
-    setCustomSubjectNameDraft("")
-    setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
-    setCustomSubjectWeekdayDraft(0)
+    resetCustomSubjectDraft()
     setIsCreateCustomSubjectOpen(false)
-  }, [activeWorkspaceTabId, customSubjectColorDraft, customSubjectNameDraft, customSubjectWeekdayDraft])
+  }, [
+    activeWorkspaceTabId,
+    completedSubjects,
+    customSubjectColorDraft,
+    customSubjectNameDraft,
+    customSubjectWeekdayDraft,
+    customSubjects,
+    editingCustomSubjectId,
+    resetCustomSubjectDraft,
+  ])
+
+  const reorderWorkspaceTabs = useCallback((draggedTabId: string, targetTabId: string) => {
+    if (
+      draggedTabId === targetTabId ||
+      draggedTabId === MAIN_WORKSPACE_TAB_ID ||
+      targetTabId === MAIN_WORKSPACE_TAB_ID
+    ) {
+      return
+    }
+
+    const customTabIds = workspaceTabList
+      .filter((tab) => tab.id !== MAIN_WORKSPACE_TAB_ID)
+      .map((tab) => tab.id)
+    const fromIndex = customTabIds.indexOf(draggedTabId)
+    const toIndex = customTabIds.indexOf(targetTabId)
+    if (fromIndex < 0 || toIndex < 0) return
+
+    const nextIds = [...customTabIds]
+    const [movedTabId] = nextIds.splice(fromIndex, 1)
+    nextIds.splice(toIndex, 0, movedTabId)
+
+    hasUserChangedWorkspaceStateRef.current = true
+    setWorkspaceTabs((previous) => {
+      const nextTabs = { ...previous }
+      nextIds.forEach((tabId, index) => {
+        const tab = nextTabs[tabId]
+        if (tab) {
+          nextTabs[tabId] = {
+            ...tab,
+            orderIndex: index,
+          }
+        }
+      })
+      return nextTabs
+    })
+  }, [workspaceTabList])
 
   const clearLongPressDeleteTimer = useCallback(() => {
     if (longPressDeleteTimerRef.current != null) {
@@ -2027,6 +2118,7 @@ export function SubjectWheel({
 
         if ((e.key === "+" || e.code === "NumpadAdd") && activeWorkspaceTab.id !== MAIN_WORKSPACE_TAB_ID) {
           e.preventDefault()
+          resetCustomSubjectDraft()
           setIsCreateCustomSubjectOpen(true)
           return
         }
@@ -2054,6 +2146,7 @@ export function SubjectWheel({
     isCreateWorkspaceTabOpen,
     isDialogOpen,
     openAiModal,
+    resetCustomSubjectDraft,
     selectWorkspaceTab,
     workspaceTabList,
   ])
@@ -5741,14 +5834,14 @@ export function SubjectWheel({
                 ) : (
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <button
-                        type="button"
-                        onClick={() => openMaterialEditDialog(material)}
-                        className="block w-full min-w-0 truncate text-left text-sm text-foreground underline-offset-2 hover:underline"
-                        title="Editar objeto"
+                      <a
+                        href={buildMaterialViewerHref(material.id)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block min-w-0 truncate text-sm text-foreground hover:underline"
                       >
                         {material.file_name}
-                      </button>
+                      </a>
                     </div>
                     <Button
                       type="button"
@@ -6058,11 +6151,38 @@ export function SubjectWheel({
                     onPointerUp={cancelLongPressDelete}
                     onPointerLeave={cancelLongPressDelete}
                     onPointerCancel={cancelLongPressDelete}
+                    draggable={canDeleteTab}
+                    onDragStart={(event) => {
+                      if (!canDeleteTab) return
+                      clearLongPressDeleteTimer()
+                      draggedWorkspaceTabIdRef.current = tab.id
+                      setDraggedWorkspaceTabId(tab.id)
+                      event.dataTransfer.effectAllowed = "move"
+                      event.dataTransfer.setData("text/plain", tab.id)
+                    }}
+                    onDragOver={(event) => {
+                      if (!canDeleteTab || !draggedWorkspaceTabIdRef.current) return
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = "move"
+                    }}
+                    onDrop={(event) => {
+                      if (!canDeleteTab) return
+                      event.preventDefault()
+                      const draggedTabId = draggedWorkspaceTabIdRef.current || event.dataTransfer.getData("text/plain")
+                      reorderWorkspaceTabs(draggedTabId, tab.id)
+                      draggedWorkspaceTabIdRef.current = null
+                      setDraggedWorkspaceTabId(null)
+                    }}
+                    onDragEnd={() => {
+                      draggedWorkspaceTabIdRef.current = null
+                      setDraggedWorkspaceTabId(null)
+                    }}
                     className={cn(
                       "max-w-[8.5rem] shrink-0 truncate rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none sm:max-w-[11rem]",
                       isActive
                         ? "scale-[1.03] border-transparent bg-foreground text-background shadow-sm"
-                        : "border-border bg-background/70 text-foreground hover:bg-background/90"
+                        : "border-border bg-background/70 text-foreground hover:bg-background/90",
+                      draggedWorkspaceTabId === tab.id && "opacity-50"
                     )}
                   >
                     {tab.name}
@@ -6376,15 +6496,13 @@ export function SubjectWheel({
         onOpenChange={(open) => {
           setIsCreateCustomSubjectOpen(open)
           if (!open) {
-            setCustomSubjectNameDraft("")
-            setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
-            setCustomSubjectWeekdayDraft(0)
+            resetCustomSubjectDraft()
           }
         }}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Nueva materia</DialogTitle>
+            <DialogTitle>{editingCustomSubjectId ? "Editar materia" : "Nueva materia"}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -6394,7 +6512,7 @@ export function SubjectWheel({
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
-                  createCustomSubject()
+                  saveCustomSubject()
                 }
               }}
               placeholder="Nombre"
@@ -6437,8 +6555,8 @@ export function SubjectWheel({
           </div>
 
           <DialogFooter>
-            <Button type="button" onClick={createCustomSubject} disabled={!customSubjectNameDraft.trim()}>
-              Crear
+            <Button type="button" onClick={saveCustomSubject} disabled={!customSubjectNameDraft.trim()}>
+              {editingCustomSubjectId ? "Guardar" : "Crear"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -6811,9 +6929,22 @@ export function SubjectWheel({
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
-                  <DialogTitle className="min-w-0 text-left text-[1.15rem] font-normal leading-tight text-foreground sm:text-[clamp(1.35rem,4.2vw,2rem)]">
-                    {getSubjectDisplayName(currentSubject)}
-                  </DialogTitle>
+                  {currentSubject && isCustomSubject(currentSubject) ? (
+                    <DialogTitle asChild>
+                      <button
+                        type="button"
+                        onClick={() => openCustomSubjectEditDialog(currentSubject)}
+                        className="min-w-0 truncate text-left text-[1.15rem] font-normal leading-tight text-foreground underline-offset-4 hover:underline sm:text-[clamp(1.35rem,4.2vw,2rem)]"
+                        title="Editar materia"
+                      >
+                        {getSubjectDisplayName(currentSubject)}
+                      </button>
+                    </DialogTitle>
+                  ) : (
+                    <DialogTitle className="min-w-0 text-left text-[1.15rem] font-normal leading-tight text-foreground sm:text-[clamp(1.35rem,4.2vw,2rem)]">
+                      {getSubjectDisplayName(currentSubject)}
+                    </DialogTitle>
+                  )}
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
@@ -6850,6 +6981,43 @@ export function SubjectWheel({
                         { key: "figma" as const, label: "Figma" },
                       ]).map((shortcut) => {
                         const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                        const title = isSubjectShortcutsLoading
+                          ? `Cargando ${shortcut.label}`
+                          : url
+                            ? shortcut.label
+                            : `Agregar ${shortcut.label}`
+
+                        if (url && !isSavingShortcut && !isSubjectShortcutsLoading) {
+                          return (
+                            <Button
+                              key={shortcut.key}
+                              asChild
+                              variant="outline"
+                              className="h-9 border-border px-3 text-xs text-foreground sm:text-sm"
+                              aria-label={shortcut.label}
+                              title={title}
+                            >
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                                onPointerUp={handleShortcutPointerUp}
+                                onPointerLeave={handleShortcutPointerCancel}
+                                onPointerCancel={handleShortcutPointerCancel}
+                                onClick={(event) => {
+                                  if (shouldSuppressShortcutClickRef.current) {
+                                    shouldSuppressShortcutClickRef.current = false
+                                    event.preventDefault()
+                                  }
+                                }}
+                              >
+                                {shortcut.label}
+                              </a>
+                            </Button>
+                          )
+                        }
+
                         return (
                           <Button
                             key={shortcut.key}
@@ -6861,17 +7029,9 @@ export function SubjectWheel({
                             onPointerCancel={handleShortcutPointerCancel}
                             onClick={() => handleShortcutClick(shortcut.key)}
                             disabled={isSavingShortcut || isSubjectShortcutsLoading}
-                            className={`h-9 border-border px-3 text-xs sm:text-sm ${
-                              url ? "text-foreground" : "text-muted-foreground"
-                            }`}
+                            className="h-9 border-border px-3 text-xs text-muted-foreground sm:text-sm"
                             aria-label={shortcut.label}
-                            title={
-                              isSubjectShortcutsLoading
-                                ? `Cargando ${shortcut.label}`
-                                : url
-                                  ? shortcut.label
-                                  : `Agregar ${shortcut.label}`
-                            }
+                            title={title}
                           >
                             {shortcut.label}
                           </Button>
@@ -7277,14 +7437,14 @@ export function SubjectWheel({
                           checked={currentContinueMaterial.is_checkup_done}
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
-                          <button
-                            type="button"
-                            onClick={() => openMaterialEditDialog(currentContinueMaterial)}
+                          <a
+                            href={buildMaterialViewerHref(currentContinueMaterial.id)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="font-medium underline-offset-2 hover:underline"
-                            title="Editar objeto"
                           >
                             {currentContinueMaterial.file_name}
-                          </button>
+                          </a>
                         <Button
                           type="button"
                           variant="ghost"
@@ -8457,6 +8617,43 @@ export function SubjectWheel({
                       { key: "figma" as const, label: "Figma" },
                     ]).map((shortcut) => {
                       const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                      const title = isSubjectShortcutsLoading
+                        ? `Cargando ${shortcut.label}`
+                        : url
+                          ? shortcut.label
+                          : `Agregar ${shortcut.label}`
+
+                      if (url && !isSavingShortcut && !isSubjectShortcutsLoading) {
+                        return (
+                          <Button
+                            key={shortcut.key}
+                            asChild
+                            variant="outline"
+                            className="h-9 border-border px-3 text-xs text-foreground"
+                            aria-label={shortcut.label}
+                            title={title}
+                          >
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                              onPointerUp={handleShortcutPointerUp}
+                              onPointerLeave={handleShortcutPointerCancel}
+                              onPointerCancel={handleShortcutPointerCancel}
+                              onClick={(event) => {
+                                if (shouldSuppressShortcutClickRef.current) {
+                                  shouldSuppressShortcutClickRef.current = false
+                                  event.preventDefault()
+                                }
+                              }}
+                            >
+                              {shortcut.label}
+                            </a>
+                          </Button>
+                        )
+                      }
+
                       return (
                         <Button
                           key={shortcut.key}
@@ -8468,17 +8665,9 @@ export function SubjectWheel({
                           onPointerCancel={handleShortcutPointerCancel}
                           onClick={() => handleShortcutClick(shortcut.key)}
                           disabled={isSavingShortcut || isSubjectShortcutsLoading}
-                          className={`h-9 border-border px-3 text-xs ${
-                            url ? "text-foreground" : "text-muted-foreground"
-                          }`}
+                          className="h-9 border-border px-3 text-xs text-muted-foreground"
                           aria-label={shortcut.label}
-                          title={
-                            isSubjectShortcutsLoading
-                              ? `Cargando ${shortcut.label}`
-                              : url
-                                ? shortcut.label
-                                : `Agregar ${shortcut.label}`
-                          }
+                          title={title}
                         >
                           {shortcut.label}
                         </Button>
