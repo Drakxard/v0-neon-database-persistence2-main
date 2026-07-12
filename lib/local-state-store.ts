@@ -3,6 +3,7 @@ import path from "node:path"
 
 type LocalStateShape = {
   aiPrompt: string
+  workspaceStates: Record<string, WorkspaceState>
   dailySessions: Record<string, {
     id: number
     date: string
@@ -34,12 +35,35 @@ type LocalStateShape = {
   }>
 }
 
+export type WorkspaceTabState = {
+  id: string
+  name: string
+  color: string
+  createdAt: string
+  subjectIds: string[]
+}
+
+export type CustomSubjectState = {
+  id: string
+  name: string
+  color: string
+  tabId: string
+  createdAt: string
+}
+
+export type WorkspaceState = {
+  workspaceTabs: Record<string, WorkspaceTabState>
+  activeWorkspaceTabId: string
+  customSubjects: Record<string, CustomSubjectState>
+}
+
 const LOCAL_STATE_DIRECTORY = path.join(process.cwd(), ".local-data")
 const LOCAL_STATE_FILE = path.join(LOCAL_STATE_DIRECTORY, "app-state.json")
 
 function createEmptyState(): LocalStateShape {
   return {
     aiPrompt: "",
+    workspaceStates: {},
     dailySessions: {},
     subjectCompletions: {},
     subjectShortcuts: {},
@@ -64,6 +88,7 @@ export async function readLocalState() {
     return {
       ...createEmptyState(),
       ...parsed,
+      workspaceStates: parsed.workspaceStates ?? {},
       dailySessions: parsed.dailySessions ?? {},
       subjectCompletions: parsed.subjectCompletions ?? {},
       subjectShortcuts: parsed.subjectShortcuts ?? {},

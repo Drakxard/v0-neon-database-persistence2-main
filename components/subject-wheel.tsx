@@ -92,6 +92,8 @@ type WorkspaceTabsState = {
   customSubjects: Record<string, CustomSubject>
 }
 
+type WorkspaceTabTransitionDirection = "left" | "right" | "fade"
+
 const NIGHT_SUBJECT_COLORS: Record<string, string> = {
   algebra: "#366476",
   calculo2: "#3f5f94",
@@ -493,6 +495,41 @@ function saveWorkspaceTabsState(state: WorkspaceTabsState) {
   try {
     window.localStorage.setItem(WORKSPACE_TABS_STORAGE_KEY, JSON.stringify(state))
   } catch {}
+}
+
+function hasWorkspaceTabsStateContent(state: WorkspaceTabsState) {
+  return (
+    state.activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID ||
+    Object.keys(state.workspaceTabs).length > 0 ||
+    Object.keys(state.customSubjects).length > 0
+  )
+}
+
+async function fetchPersistentWorkspaceTabsState() {
+  const response = await fetch("/api/workspace-state", {
+    method: "GET",
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch workspace state")
+  }
+
+  return (await response.json()) as WorkspaceTabsState
+}
+
+async function persistWorkspaceTabsState(state: WorkspaceTabsState) {
+  const response = await fetch("/api/workspace-state", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(state),
+  })
+
+  if (!response.ok) {
+    throw new Error("Failed to save workspace state")
+  }
 }
 
 function getSubjectById(subjectId: string, subjects: Subject[]) {
@@ -1006,11 +1043,15 @@ export function SubjectWheel({
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
   const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
+  const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
+  const hasUserChangedWorkspaceStateRef = useRef(false)
   const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
   const activeWorkspaceTab = useMemo(
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
     [activeWorkspaceTabId, workspaceTabList]
   )
+  const [workspaceTabTransitionDirection, setWorkspaceTabTransitionDirection] =
+    useState<WorkspaceTabTransitionDirection>("fade")
   const visibleSubjects = useMemo<Subject[]>(() => {
     if (activeWorkspaceTab.id === MAIN_WORKSPACE_TAB_ID) return builtInVisibleSubjects
 
@@ -1039,16 +1080,71 @@ export function SubjectWheel({
   }, [activeWorkspaceTabId, workspaceTabList])
 
   useEffect(() => {
-    saveWorkspaceTabsState({
+    let isCancelled = false
+    const localSnapshot = {
       workspaceTabs,
       activeWorkspaceTabId,
       customSubjects,
-    })
-  }, [activeWorkspaceTabId, customSubjects, workspaceTabs])
+    }
+
+    const loadPersistentWorkspaceState = async () => {
+      try {
+        const persistentState = await fetchPersistentWorkspaceTabsState()
+        if (isCancelled) return
+
+        if (hasWorkspaceTabsStateContent(persistentState) && !hasUserChangedWorkspaceStateRef.current) {
+          setWorkspaceTabs(persistentState.workspaceTabs)
+          setActiveWorkspaceTabId(persistentState.activeWorkspaceTabId)
+          setCustomSubjects(persistentState.customSubjects)
+        } else if (hasWorkspaceTabsStateContent(localSnapshot)) {
+          await persistWorkspaceTabsState(localSnapshot)
+        }
+      } catch {
+        // Browser persistence remains the fallback when the server-side manifest is unavailable.
+      } finally {
+        if (!isCancelled) {
+          setHasResolvedPersistentWorkspaceState(true)
+        }
+      }
+    }
+
+    void loadPersistentWorkspaceState()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const nextState = {
+      workspaceTabs,
+      activeWorkspaceTabId,
+      customSubjects,
+    }
+
+    saveWorkspaceTabsState(nextState)
+
+    if (hasResolvedPersistentWorkspaceState) {
+      void persistWorkspaceTabsState(nextState).catch(() => {})
+    }
+  }, [activeWorkspaceTabId, customSubjects, hasResolvedPersistentWorkspaceState, workspaceTabs])
 
   const selectWorkspaceTab = useCallback((tabId: string) => {
+    if (activeWorkspaceTabId === tabId) return
+
+    const currentIndex = workspaceTabList.findIndex((tab) => tab.id === activeWorkspaceTabId)
+    const nextIndex = workspaceTabList.findIndex((tab) => tab.id === tabId)
+    const direction =
+      currentIndex >= 0 && nextIndex >= 0
+        ? nextIndex > currentIndex
+          ? "right"
+          : "left"
+        : "fade"
+
+    setWorkspaceTabTransitionDirection(direction)
+    hasUserChangedWorkspaceStateRef.current = true
     setActiveWorkspaceTabId(tabId)
-  }, [])
+  }, [activeWorkspaceTabId, workspaceTabList])
 
   const createWorkspaceTab = useCallback(() => {
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -1060,10 +1156,12 @@ export function SubjectWheel({
       subjectIds: [],
     }
 
+    hasUserChangedWorkspaceStateRef.current = true
     setWorkspaceTabs((previous) => ({
       ...previous,
       [id]: nextTab,
     }))
+    setWorkspaceTabTransitionDirection("fade")
     setActiveWorkspaceTabId(id)
   }, [workspaceTabs])
 
@@ -1080,6 +1178,7 @@ export function SubjectWheel({
       createdAt: new Date().toISOString(),
     }
 
+    hasUserChangedWorkspaceStateRef.current = true
     setCustomSubjects((previous) => ({
       ...previous,
       [id]: nextSubject,
@@ -5672,10 +5771,10 @@ export function SubjectWheel({
                     type="button"
                     onClick={() => selectWorkspaceTab(tab.id)}
                     className={cn(
-                      "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      "shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none",
                       isActive
-                        ? "border-transparent bg-foreground text-background"
-                        : "border-border bg-background/70 text-foreground"
+                        ? "scale-[1.03] border-transparent bg-foreground text-background shadow-sm"
+                        : "border-border bg-background/70 text-foreground hover:bg-background/90"
                     )}
                   >
                     {tab.name}
@@ -5755,8 +5854,16 @@ export function SubjectWheel({
 
       {/* Main Content */}
       <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
-        {homeSubjectCards.length > 0 ? (
-          <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
+        <div
+          key={activeWorkspaceTab.id}
+          className={cn(
+            "min-h-full animate-in fade-in-0 duration-200 ease-out motion-reduce:animate-none",
+            workspaceTabTransitionDirection === "right" && "slide-in-from-right-4",
+            workspaceTabTransitionDirection === "left" && "slide-in-from-left-4"
+          )}
+        >
+          {homeSubjectCards.length > 0 ? (
+            <div className="mx-auto flex min-h-full max-w-7xl items-center justify-center">
             <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
               {homeSubjectCards.map((card) => (
                 <button
@@ -5777,9 +5884,10 @@ export function SubjectWheel({
               ))}
             </div>
           </div>
-        ) : (
-          <div className="flex min-h-full items-center justify-center text-center" />
-        )}
+          ) : (
+            <div className="flex min-h-full items-center justify-center text-center" />
+          )}
+        </div>
         <div className="hidden">
         {activeSubjects.length > 0 ? (
           <svg viewBox="0 0 320 320" className="aspect-square w-[min(92vw,92dvh,56rem)] max-w-full">
