@@ -15,6 +15,7 @@ type SubjectVisibilityState<TSubject extends SubjectLike> = {
 }
 
 export function useDailySessionState<TSubject extends SubjectLike>(params: {
+  enabled: boolean
   currentDateKey: string
   homeSelectedDate: Date
   visibleSubjects: TSubject[]
@@ -35,6 +36,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
   onLoaded?: (session: DailySessionRecord | null) => void
 }) {
   const {
+    enabled,
     currentDateKey,
     homeSelectedDate,
     visibleSubjects,
@@ -52,10 +54,18 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
   const [isLoading, setIsLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const readyToSync = useRef(false)
+  const hasLoadedOnce = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     readyToSync.current = false
+
+    if (!enabled) {
+      setIsLoading(true)
+      return () => {
+        cancelled = true
+      }
+    }
 
     const loadFromDatabase = async () => {
       try {
@@ -88,6 +98,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
         onLoaded?.(null)
       } finally {
         if (cancelled) return
+        hasLoadedOnce.current = true
         setIsLoading(false)
         window.setTimeout(() => {
           readyToSync.current = true
@@ -95,13 +106,16 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
       }
     }
 
-    setIsLoading(true)
+    if (!hasLoadedOnce.current) {
+      setIsLoading(true)
+    }
     void loadFromDatabase()
 
     return () => {
       cancelled = true
     }
   }, [
+    enabled,
     currentDateKey,
     getDisplaySubjectsForDate,
     homeSelectedDate,
@@ -115,6 +129,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
   ])
 
   useEffect(() => {
+    if (!enabled) return
     if (!readyToSync.current) return
 
     let cancelled = false
@@ -153,7 +168,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
     return () => {
       cancelled = true
     }
-  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, showAllSubjectsForDay])
+  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, enabled, showAllSubjectsForDay])
 
   return {
     isLoading,

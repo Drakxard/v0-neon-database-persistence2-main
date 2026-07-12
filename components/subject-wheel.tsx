@@ -93,8 +93,6 @@ type WorkspaceTabsState = {
   customSubjects: Record<string, CustomSubject>
 }
 
-type WorkspaceTabTransitionDirection = "left" | "right" | "fade"
-
 type DeleteConfirmationTarget =
   | { type: "tab"; id: string; label: string }
   | { type: "subject"; id: string; label: string }
@@ -1121,8 +1119,6 @@ export function SubjectWheel({
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
     [activeWorkspaceTabId, workspaceTabList]
   )
-  const [workspaceTabTransitionDirection, setWorkspaceTabTransitionDirection] =
-    useState<WorkspaceTabTransitionDirection>("fade")
   const visibleSubjects = useMemo<Subject[]>(() => {
     if (activeWorkspaceTab.id === MAIN_WORKSPACE_TAB_ID) return builtInVisibleSubjects
 
@@ -1203,19 +1199,9 @@ export function SubjectWheel({
   const selectWorkspaceTab = useCallback((tabId: string) => {
     if (activeWorkspaceTabId === tabId) return
 
-    const currentIndex = workspaceTabList.findIndex((tab) => tab.id === activeWorkspaceTabId)
-    const nextIndex = workspaceTabList.findIndex((tab) => tab.id === tabId)
-    const direction =
-      currentIndex >= 0 && nextIndex >= 0
-        ? nextIndex > currentIndex
-          ? "right"
-          : "left"
-        : "fade"
-
-    setWorkspaceTabTransitionDirection(direction)
     hasUserChangedWorkspaceStateRef.current = true
     setActiveWorkspaceTabId(tabId)
-  }, [activeWorkspaceTabId, workspaceTabList])
+  }, [activeWorkspaceTabId])
 
   const createWorkspaceTab = useCallback(() => {
     const name = workspaceTabNameDraft.trim()
@@ -1235,7 +1221,6 @@ export function SubjectWheel({
       ...previous,
       [id]: nextTab,
     }))
-    setWorkspaceTabTransitionDirection("fade")
     setActiveWorkspaceTabId(id)
     setWorkspaceTabNameDraft("")
     setIsCreateWorkspaceTabOpen(false)
@@ -1346,7 +1331,6 @@ export function SubjectWheel({
       )
 
       if (activeWorkspaceTabId === deleteConfirmationTarget.id) {
-        setWorkspaceTabTransitionDirection("fade")
         setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
       }
     }
@@ -1686,6 +1670,7 @@ export function SubjectWheel({
     logPrefix: "current subject vector overview",
   })
   const { isLoading, saveStatus } = useDailySessionState({
+    enabled: hasResolvedPersistentWorkspaceState,
     currentDateKey,
     homeSelectedDate,
     visibleSubjects,
@@ -5902,7 +5887,9 @@ export function SubjectWheel({
     return questionEntry && answerEntry ? { questionEntry, answerEntry } : null
   }, [editingEntry, entries])
 
-  if (isLoading) {
+  const shouldShowInitialHomeLoading = !hasResolvedPersistentWorkspaceState || isLoading
+
+  if (shouldShowInitialHomeLoading) {
     return (
       <div className="flex min-h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground transition-colors duration-300">
         <header className="flex shrink-0 items-center border-b border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur sm:px-5 sm:py-4">
@@ -6030,17 +6017,10 @@ export function SubjectWheel({
 
       {/* Main Content */}
       <main className="absolute inset-0 overflow-y-auto px-4 pb-24 pt-24 sm:px-6 sm:pb-16 sm:pt-28">
-        <div
-          key={activeWorkspaceTab.id}
-          className={cn(
-            "min-h-full animate-in fade-in-0 duration-200 ease-out motion-reduce:animate-none",
-            workspaceTabTransitionDirection === "right" && "slide-in-from-right-4",
-            workspaceTabTransitionDirection === "left" && "slide-in-from-left-4"
-          )}
-        >
+        <div className="min-h-full">
           {homeSubjectCards.length > 0 ? (
             <div className="mx-auto flex min-h-[calc(100dvh-12rem)] w-full max-w-5xl items-center justify-center py-4 sm:min-h-[calc(100dvh-13rem)] lg:min-h-[calc(100dvh-9rem)]">
-            <div className="grid w-full max-w-[56rem] grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+            <div className="flex w-full max-w-[58rem] flex-wrap justify-center gap-6 lg:gap-8">
               {homeSubjectCards.map((card) => {
                 const canDeleteSubject = isCustomSubject(card.subject)
 
