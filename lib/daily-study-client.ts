@@ -1,14 +1,13 @@
 import { requireOkJson } from "@/lib/client/api"
 import type { DailySessionRecord } from "@/lib/study-types"
 
-export async function fetchDailySession(date: string, tabId = "main") {
-  const response = await fetch(`/api/sessions?date=${encodeURIComponent(date)}&tabId=${encodeURIComponent(tabId)}`)
+export async function fetchDailySession(date: string) {
+  const response = await fetch(`/api/sessions?date=${encodeURIComponent(date)}`)
   return requireOkJson<DailySessionRecord | null>(response, "No se pudo cargar la sesion diaria.")
 }
 
 export async function saveDailySession(input: {
   date: string
-  tabId?: string
   activeSubjectIds: string[]
   completedSubjects: Record<string, boolean>
   showAllSubjects: boolean

@@ -14,7 +14,6 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const date = parseDateKey(searchParams.get('date'))
-    const tabId = searchParams.get("tabId")?.trim() || "main"
 
     if (!date) {
       return Response.json({ error: 'Missing date parameter' }, { status: 400 })
@@ -22,7 +21,7 @@ export async function GET(request: Request) {
 
     if (isLocalStorageMode()) {
       const state = await readLocalState()
-      return Response.json(state.dailySessions[`${String(date)}::${tabId}`] ?? null)
+      return Response.json(state.dailySessions[String(date)] ?? null)
     }
 
     const result = await sql`
@@ -77,23 +76,14 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Empty request body' }, { status: 400 })
     }
 
-    const { date: rawDate, tabId: rawTabId, activeSubjectIds, completedSubjects, showAllSubjects } = JSON.parse(rawBody)
+    const { date: rawDate, activeSubjectIds, completedSubjects, showAllSubjects } = JSON.parse(rawBody)
     const date = parseDateKey(rawDate)
-    const tabId = typeof rawTabId === "string" && rawTabId.trim() ? rawTabId.trim() : "main"
 
     if (!date || !Array.isArray(activeSubjectIds)) {
       return Response.json({ error: 'Invalid request data' }, { status: 400 })
     }
 
-    const normalizedActiveSubjectIds = isLocalStorageMode()
-      ? Array.from(
-          new Set(
-            activeSubjectIds
-              .map((subjectId: unknown) => String(subjectId || "").trim())
-              .filter(Boolean)
-          )
-        )
-      : normalizeAllowedSubjectIds(activeSubjectIds)
+    const normalizedActiveSubjectIds = normalizeAllowedSubjectIds(activeSubjectIds)
     for (const subjectId of normalizedActiveSubjectIds) {
       const forbidden = ensureSubjectAccess(auth.session!, subjectId)
       if (forbidden) return forbidden
@@ -105,12 +95,11 @@ export async function POST(request: Request) {
 
     if (isLocalStorageMode()) {
       const result = await updateLocalState((state) => {
-        const key = `${String(date)}::${tabId}`
+        const key = String(date)
         const current = state.dailySessions[key]
         const next = {
           id: current?.id ?? Number(`${Date.now()}${Math.floor(Math.random() * 100).toString().padStart(2, "0")}`),
-          date: String(date),
-          tab_id: tabId,
+          date: key,
           active_subject_ids: normalizedActiveSubjectIds,
           completed_subjects: normalizedCompletedSubjects,
           show_all_subjects: Boolean(showAllSubjects),

@@ -511,35 +511,11 @@ async function listSynthesisWeekNumbersForSubject(subjectId: string) {
   return weekNumbers
 }
 
-async function listManifestSubjectIds(kind: typeof MATERIALS_DIR | typeof ENTRIES_DIR) {
-  const rootHandle = await ensureWorkspaceRootHandle()
-  const manifestRoot = await getDirectoryHandleBySegments(rootHandle, [MANIFESTS_DIR, kind], false).catch(() => null)
-  if (!manifestRoot) return [] as string[]
-
-  const subjectIds: string[] = []
-  for await (const [name, handle] of manifestRoot.entries()) {
-    if (handle.kind !== "directory") continue
-    subjectIds.push(name)
-  }
-
-  return subjectIds
-}
-
-async function listKnownLocalSubjectIds() {
-  const [materialSubjectIds, entrySubjectIds] = await Promise.all([
-    listManifestSubjectIds(MATERIALS_DIR),
-    listManifestSubjectIds(ENTRIES_DIR),
-  ])
-
-  return Array.from(new Set([...SUBJECTS.map((subject) => subject.id), ...materialSubjectIds, ...entrySubjectIds]))
-}
-
 async function findMaterialById(materialId: number): Promise<SubjectDayMaterial | null> {
-  const subjectIds = await listKnownLocalSubjectIds()
-  for (const subjectId of subjectIds) {
-    const weekNumbers = await listWeekNumbersForManifestKind(MATERIALS_DIR, subjectId)
+  for (const subject of SUBJECTS) {
+    const weekNumbers = await listWeekNumbersForManifestKind(MATERIALS_DIR, subject.id)
     for (const weekNumber of weekNumbers) {
-      const manifest = await readMaterialManifest(subjectId, weekNumber)
+      const manifest = await readMaterialManifest(subject.id, weekNumber)
       const material = manifest.materials.find((candidate) => candidate.id === materialId)
       if (material) return material
     }
@@ -548,11 +524,10 @@ async function findMaterialById(materialId: number): Promise<SubjectDayMaterial 
 }
 
 async function findEntryById(entryId: number): Promise<SubjectDayEntry | null> {
-  const subjectIds = await listKnownLocalSubjectIds()
-  for (const subjectId of subjectIds) {
-    const weekNumbers = await listWeekNumbersForManifestKind(ENTRIES_DIR, subjectId)
+  for (const subject of SUBJECTS) {
+    const weekNumbers = await listWeekNumbersForManifestKind(ENTRIES_DIR, subject.id)
     for (const weekNumber of weekNumbers) {
-      const manifest = await readEntryManifest(subjectId, weekNumber)
+      const manifest = await readEntryManifest(subject.id, weekNumber)
       const entry = manifest.entries.find((candidate) => candidate.id === entryId)
       if (entry) return withEntryDefaults(entry)
     }

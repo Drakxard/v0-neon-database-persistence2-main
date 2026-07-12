@@ -16,7 +16,6 @@ type SubjectVisibilityState<TSubject extends SubjectLike> = {
 
 export function useDailySessionState<TSubject extends SubjectLike>(params: {
   currentDateKey: string
-  tabId: string
   homeSelectedDate: Date
   visibleSubjects: TSubject[]
   activeSubjects: TSubject[]
@@ -37,7 +36,6 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
 }) {
   const {
     currentDateKey,
-    tabId,
     homeSelectedDate,
     visibleSubjects,
     activeSubjects,
@@ -61,7 +59,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
 
     const loadFromDatabase = async () => {
       try {
-        const session = await fetchDailySession(currentDateKey, tabId)
+        const session = await fetchDailySession(currentDateKey)
         if (cancelled) return
 
         if (session && Array.isArray(session.active_subject_ids)) {
@@ -105,7 +103,6 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
     }
   }, [
     currentDateKey,
-    tabId,
     getDisplaySubjectsForDate,
     homeSelectedDate,
     normalizeSubjectsForDay,
@@ -136,7 +133,6 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
 
         await saveDailySession({
           date: currentDateKey,
-          tabId,
           activeSubjectIds: activeIds,
           completedSubjects,
           showAllSubjects: showAllSubjectsForDay,
@@ -157,7 +153,7 @@ export function useDailySessionState<TSubject extends SubjectLike>(params: {
     return () => {
       cancelled = true
     }
-  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, showAllSubjectsForDay, tabId])
+  }, [activeSubjects, allCompletedSubjectIds, currentDateKey, showAllSubjectsForDay])
 
   return {
     isLoading,

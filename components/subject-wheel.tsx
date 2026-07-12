@@ -47,7 +47,6 @@ import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type {
-  CustomSubjectDefinition,
   GroqModelOption,
   PendingSubjectDayMaterial,
   PracticeCoverageStatus,
@@ -64,11 +63,9 @@ import type {
   SubjectSynthesisRecord,
   SubjectSynthesisSubjectPayload,
   VectorOverview,
-  WorkspaceTab,
 } from "@/lib/study-types"
 import { SUBJECTS, SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 import { formatDateKey, getCurrentWeekNumber, getWeekDates, getWeekNumberForDate, getWeekdayLabel, parseDateKey } from "@/lib/subject-utils"
-import { getMainWorkspaceTab, getSubjectsForTab, getWorkspaceTabsList, MAIN_WORKSPACE_TAB_ID } from "@/lib/workspace-tabs"
 
 interface Subject {
   id: string
@@ -86,7 +83,6 @@ const NIGHT_SUBJECT_COLORS: Record<string, string> = {
 }
 
 const LOCAL_STORAGE_MODE = isLocalStorageMode()
-const CUSTOM_SUBJECT_PALETTE = ["#0F766E", "#2563EB", "#DC2626", "#7C3AED", "#EA580C", "#0891B2", "#4F46E5", "#059669"] as const
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
 
@@ -431,8 +427,7 @@ function getScheduledSubjectIdsForDate(date: Date) {
 
 function getDisplaySubjectIdsForDate(date: Date, showAllSubjects: boolean, visibleSubjectIds: string[]) {
   const scheduledSubjectIds = getScheduledSubjectIdsForDate(date).filter((subjectId) => visibleSubjectIds.includes(subjectId))
-  if (showAllSubjects || scheduledSubjectIds.length === 0) return visibleSubjectIds
-  return scheduledSubjectIds
+  return showAllSubjects ? visibleSubjectIds : scheduledSubjectIds
 }
 
 function getDisplaySubjectsForDate(date: Date, showAllSubjects: boolean, subjects: Subject[]) {
@@ -921,40 +916,12 @@ export function SubjectWheel({
 }) {
   const router = useRouter()
   const [session, setSession] = useState<AuthSession>(authSession)
-  const builtInVisibleSubjects = useMemo<Subject[]>(
+  const visibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
     [session.allowedSubjectIds, session.isAdmin]
   )
-  const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>({})
-  const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubjectDefinition>>({})
-  const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(MAIN_WORKSPACE_TAB_ID)
-  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
-  const [isCreateSubjectDialogOpen, setIsCreateSubjectDialogOpen] = useState(false)
-  const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
-  const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
-  const workspaceTabList = useMemo(() => getWorkspaceTabsList(workspaceTabs), [workspaceTabs])
-  const activeWorkspaceTab = useMemo(
-    () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
-    [activeWorkspaceTabId, workspaceTabList]
-  )
-  const visibleSubjects = useMemo<Subject[]>(
-    () =>
-      getSubjectsForTab({
-        tabId: activeWorkspaceTabId,
-        baseSubjects: builtInVisibleSubjects,
-        customSubjects,
-        workspaceTabs,
-      }) as Subject[],
-    [activeWorkspaceTabId, builtInVisibleSubjects, customSubjects, workspaceTabs]
-  )
   const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
-
-  useEffect(() => {
-    if (activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
-    if (workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)) return
-    setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
-  }, [activeWorkspaceTabId, workspaceTabList])
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
@@ -965,50 +932,6 @@ export function SubjectWheel({
   useEffect(() => {
     setThemeMenuMounted(true)
   }, [])
-
-  const applyWorkspacePayload = useCallback(
-    (payload: {
-      workspaceTabs?: Record<string, WorkspaceTab>
-      activeWorkspaceTabId?: string
-      customSubjects?: Record<string, CustomSubjectDefinition>
-    }) => {
-      setWorkspaceTabs(payload.workspaceTabs ?? {})
-      setCustomSubjects(payload.customSubjects ?? {})
-      setActiveWorkspaceTabId(payload.activeWorkspaceTabId?.trim() || MAIN_WORKSPACE_TAB_ID)
-    },
-    []
-  )
-
-  const loadWorkspaceState = useCallback(async () => {
-    const response = await fetch("/api/workspace-tabs", { cache: "no-store" })
-    const payload = await requireOkJson<{
-      workspaceTabs?: Record<string, WorkspaceTab>
-      activeWorkspaceTabId?: string
-      customSubjects?: Record<string, CustomSubjectDefinition>
-    }>(response, "No se pudo cargar el workspace.")
-    applyWorkspacePayload(payload)
-  }, [applyWorkspacePayload])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const run = async () => {
-      try {
-        await loadWorkspaceState()
-      } catch (error) {
-        console.error("Failed to load workspace state:", error)
-      } finally {
-        if (!cancelled) {
-          setIsWorkspaceLoading(false)
-        }
-      }
-    }
-
-    void run()
-    return () => {
-      cancelled = true
-    }
-  }, [loadWorkspaceState])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -1123,7 +1046,24 @@ export function SubjectWheel({
   }, [authSession])
 
   useEffect(() => {
-    return undefined
+    let isCancelled = false
+
+    const loadRemoteCronograma = async () => {
+      try {
+        const remoteCronograma = await fetchCronograma()
+        if (!isCancelled) {
+          setCronogramaPdfName(remoteCronograma?.fileName ?? "")
+        }
+      } catch (error) {
+        console.error("Failed to load remote cronograma PDF:", error)
+      }
+    }
+
+    void loadRemoteCronograma()
+
+    return () => {
+      isCancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -1345,7 +1285,6 @@ export function SubjectWheel({
   })
   const { isLoading, saveStatus } = useDailySessionState({
     currentDateKey,
-    tabId: activeWorkspaceTabId,
     homeSelectedDate,
     visibleSubjects,
     activeSubjects,
@@ -1657,75 +1596,6 @@ export function SubjectWheel({
     setIsAiOpen(true)
   }, [])
 
-  const selectWorkspaceTab = useCallback(
-    async (tabId: string) => {
-      setActiveWorkspaceTabId(tabId)
-      try {
-        const response = await fetch("/api/workspace-tabs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "select-tab", tabId }),
-        })
-        const payload = await requireOkJson<{
-          workspaceTabs?: Record<string, WorkspaceTab>
-          activeWorkspaceTabId?: string
-          customSubjects?: Record<string, CustomSubjectDefinition>
-        }>(response, "No se pudo cambiar de pestaña.")
-        applyWorkspacePayload(payload)
-      } catch (error) {
-        console.error("Failed to select workspace tab:", error)
-      }
-    },
-    [applyWorkspacePayload]
-  )
-
-  const createWorkspaceTab = useCallback(async () => {
-    try {
-      const response = await fetch("/api/workspace-tabs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create-tab" }),
-      })
-      const payload = await requireOkJson<{
-        workspaceTabs?: Record<string, WorkspaceTab>
-        activeWorkspaceTabId?: string
-        customSubjects?: Record<string, CustomSubjectDefinition>
-      }>(response, "No se pudo crear la pestaña.")
-      applyWorkspacePayload(payload)
-    } catch (error) {
-      console.error("Failed to create workspace tab:", error)
-    }
-  }, [applyWorkspacePayload])
-
-  const createCustomSubject = useCallback(async () => {
-    const trimmedName = customSubjectNameDraft.trim()
-    if (!trimmedName || activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
-
-    try {
-      const response = await fetch("/api/workspace-tabs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create-subject",
-          tabId: activeWorkspaceTabId,
-          name: trimmedName,
-          color: customSubjectColorDraft,
-        }),
-      })
-      const payload = await requireOkJson<{
-        workspaceTabs?: Record<string, WorkspaceTab>
-        activeWorkspaceTabId?: string
-        customSubjects?: Record<string, CustomSubjectDefinition>
-      }>(response, "No se pudo crear la materia.")
-      applyWorkspacePayload(payload)
-      setCustomSubjectNameDraft("")
-      setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
-      setIsCreateSubjectDialogOpen(false)
-    } catch (error) {
-      console.error("Failed to create custom subject:", error)
-    }
-  }, [activeWorkspaceTabId, applyWorkspacePayload, customSubjectColorDraft, customSubjectNameDraft])
-
   // Global 'g' key listener — registered once, stable via ref
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1733,27 +1603,6 @@ export function SubjectWheel({
       const tag = target?.tagName
       const isEditable = Boolean(target?.isContentEditable)
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return
-
-      if (!isDialogOpen && !isAiOpen && !isCreateSubjectDialogOpen) {
-        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-          const currentIndex = workspaceTabList.findIndex((tab) => tab.id === activeWorkspaceTabId)
-          if (currentIndex >= 0) {
-            const nextIndex = e.key === "ArrowLeft" ? currentIndex - 1 : currentIndex + 1
-            const nextTab = workspaceTabList[nextIndex] ?? null
-            if (nextTab) {
-              e.preventDefault()
-              void selectWorkspaceTab(nextTab.id)
-              return
-            }
-          }
-        }
-
-        if ((e.key === "+" || e.code === "NumpadAdd") && activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID) {
-          e.preventDefault()
-          setIsCreateSubjectDialogOpen(true)
-          return
-        }
-      }
 
       if (e.ctrlKey && e.key === "Enter") {
         e.preventDefault()
@@ -1769,7 +1618,7 @@ export function SubjectWheel({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [activeWorkspaceTabId, isAiOpen, isCreateSubjectDialogOpen, isDialogOpen, openAiModal, selectWorkspaceTab, workspaceTabList])
+  }, [openAiModal])
 
   // Auto-scroll AI response box
   useEffect(() => {
@@ -4421,12 +4270,51 @@ export function SubjectWheel({
 
   useEffect(() => {
     if (hasResolvedInitialSynthesisRouteRef.current) return
+
+    if (initialSearchParams?.view !== "synthesis") {
+      hasResolvedInitialSynthesisRouteRef.current = true
+      return
+    }
+
+    const firstSubject = synthesisSubjects[0] ?? null
+    if (!firstSubject) return
+
+    const requestedWeekNumber = Number.parseInt(initialSearchParams.synthesisWeek ?? "", 10)
+    const nextWeekNumber =
+      Number.isInteger(requestedWeekNumber) && requestedWeekNumber > 0
+        ? requestedWeekNumber
+        : homeSelectedWeekNumber
+    const nextMode: SynthesisViewMode = initialSearchParams.synthesisMode === "detail" ? "detail" : "overview"
+    const requestedSubjectId = initialSearchParams.synthesisSubject ?? ""
+    const nextSubject = synthesisSubjects.find((subject) => subject.id === requestedSubjectId) ?? firstSubject
+
+    resetSynthesisPlayback()
+    setSynthesisWeekNumber(nextWeekNumber)
+    setSynthesisSubjectId(nextSubject.id)
+    setSynthesisSubjectStateMap({})
+    setSynthesisViewMode(nextMode)
+    setIsSynthesisWeekSelectorOpen(false)
+    setIsSynthesisOpen(true)
+    shouldSyncSynthesisRouteRef.current = true
     hasResolvedInitialSynthesisRouteRef.current = true
-  }, [])
+  }, [homeSelectedWeekNumber, initialSearchParams, resetSynthesisPlayback, synthesisSubjects])
 
   useEffect(() => {
-    return undefined
-  }, [])
+    if (!hasResolvedInitialSynthesisRouteRef.current || !shouldSyncSynthesisRouteRef.current) return
+
+    const nextHref =
+      isSynthesisOpen && synthesisWeekNumber > 0
+        ? buildSynthesisHref({
+            weekNumber: synthesisWeekNumber,
+            mode: synthesisViewMode,
+            subjectId: synthesisViewMode === "detail" ? synthesisSubjectId : null,
+          })
+        : "/"
+    const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`
+
+    if (currentHref === nextHref) return
+    window.history.replaceState(null, "", nextHref)
+  }, [isSynthesisOpen, synthesisSubjectId, synthesisViewMode, synthesisWeekNumber])
 
   const handleStartSynthesisPlayback = useCallback((mode: ContinueMode) => {
     const entriesByMaterialId = (synthesisSelectedState?.entries ?? []).reduce<Record<number, SubjectDayEntry[]>>((accumulator, entry) => {
@@ -5618,7 +5506,7 @@ export function SubjectWheel({
     return questionEntry && answerEntry ? { questionEntry, answerEntry } : null
   }, [editingEntry, entries])
 
-  if (isLoading || isWorkspaceLoading) {
+  if (isLoading) {
     return (
       <div className="flex min-h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground transition-colors duration-300">
         <header className="flex shrink-0 items-center border-b border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur sm:px-5 sm:py-4">
@@ -5643,26 +5531,47 @@ export function SubjectWheel({
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
         <div className="flex flex-col gap-1 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {workspaceTabList.map((tab) => {
-                const isActive = tab.id === activeWorkspaceTab.id
-
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => void selectWorkspaceTab(tab.id)}
-                    className={cn(
-                      "shrink-0 rounded-full border px-3 py-1.5 text-sm transition-colors",
-                      isActive
-                        ? "border-transparent bg-foreground text-background"
-                        : "border-border bg-background/70 text-foreground"
-                    )}
+            <div className="pointer-events-auto flex shrink-0 items-center">
+              <input
+                ref={cronogramaFileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="hidden"
+                onChange={handleCronogramaFileChange}
+              />
+              {cronogramaPdfName ? (
+                <Button
+                  asChild
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
+                  aria-label={`Abrir cronograma ${cronogramaPdfName}`}
+                  title={`Cronograma: ${cronogramaPdfName}`}
+                >
+                  <a
+                    href={buildCronogramaViewerHref(cronogramaPdfName)}
+                    onClick={(event) => {
+                      if (!isPlainLeftClick(event)) return
+                      event.preventDefault()
+                      void handleCronogramaButtonClick()
+                    }}
                   >
-                    {tab.name}
-                  </button>
-                )
-              })}
+                    {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => void handleCronogramaButtonClick()}
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
+                  aria-label="Seleccionar cronograma"
+                  title="Seleccionar cronograma"
+                  disabled={isCronogramaLoading}
+                >
+                  {isCronogramaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                </Button>
+              )}
             </div>
 
             <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -5702,14 +5611,26 @@ export function SubjectWheel({
                 </DropdownMenuContent>
               </DropdownMenu>
               <Button
+                asChild
                 variant="outline"
                 size="icon"
                 className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Nueva pestaña"
-                title="Nueva pestaña"
-                onClick={() => void createWorkspaceTab()}
+                aria-label="Sintesis"
+                title="Sintesis"
               >
-                <Plus className="h-4 w-4" />
+                <a
+                  href={buildSynthesisHref({
+                    weekNumber: homeSelectedWeekNumber,
+                    mode: "overview",
+                  })}
+                  onClick={(event) => {
+                    if (!isPlainLeftClick(event)) return
+                    event.preventDefault()
+                    openSynthesisModal()
+                  }}
+                >
+                  <BarChart3 className="h-4 w-4" />
+                </a>
               </Button>
             </div>
           </div>
@@ -5759,7 +5680,12 @@ export function SubjectWheel({
             </div>
           </div>
         ) : (
-          <div className="flex min-h-full items-center justify-center text-center" />
+          <div className="flex min-h-full items-center justify-center text-center">
+            <div>
+              <h2 className="mb-2 text-2xl font-bold text-foreground">Sin materias visibles</h2>
+              <p className="text-muted-foreground">No hay materias habilitadas para este usuario.</p>
+            </div>
+          </div>
         )}
         <div className="hidden">
         {activeSubjects.length > 0 ? (
@@ -5911,57 +5837,6 @@ export function SubjectWheel({
                 Cerrar
               </Button>
             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={isCreateSubjectDialogOpen}
-        onOpenChange={(open) => {
-          setIsCreateSubjectDialogOpen(open)
-          if (!open) {
-            setCustomSubjectNameDraft("")
-            setCustomSubjectColorDraft(CUSTOM_SUBJECT_PALETTE[0])
-          }
-        }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Nueva materia</DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <Input
-              value={customSubjectNameDraft}
-              onChange={(event) => setCustomSubjectNameDraft(event.target.value)}
-              placeholder="Nombre"
-              autoFocus
-            />
-
-            <div className="flex flex-wrap gap-2">
-              {CUSTOM_SUBJECT_PALETTE.map((color) => {
-                const isActive = customSubjectColorDraft === color
-                return (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setCustomSubjectColorDraft(color)}
-                    className={cn(
-                      "h-9 w-9 rounded-full border-2 transition-transform",
-                      isActive ? "scale-105 border-foreground" : "border-transparent"
-                    )}
-                    style={{ backgroundColor: color }}
-                    aria-label={`Color ${color}`}
-                  />
-                )
-              })}
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" onClick={() => void createCustomSubject()}>
-              Crear
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
