@@ -525,9 +525,6 @@ export function LocalFetchInterceptor() {
       if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
         return originalFetch(input, init)
       }
-      if (url.searchParams.get("localWorkspaceBypass") === "1") {
-        return originalFetch(input, init)
-      }
 
       try {
         const response = await handleLocalApiRequest(request)

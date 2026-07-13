@@ -1147,7 +1147,10 @@ export function SubjectWheel({
     () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
     [session.allowedSubjectIds, session.isAdmin]
   )
-  const initialWorkspaceTabsState = useMemo(() => loadWorkspaceTabsState(), [])
+  const initialWorkspaceTabsState = useMemo(
+    () => (LOCAL_STORAGE_MODE ? createEmptyWorkspaceTabsState() : loadWorkspaceTabsState()),
+    []
+  )
   const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(initialWorkspaceTabsState.workspaceTabs)
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(initialWorkspaceTabsState.activeWorkspaceTabId)
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(initialWorkspaceTabsState.customSubjects)
@@ -1221,57 +1224,34 @@ export function SubjectWheel({
     }
 
     const loadPersistentWorkspaceState = async () => {
-      const browserSnapshot = normalizeWorkspaceTabsState(workspaceTabsStateRef.current)
-      let didResolveFromLocalWorkspace = false
-
       try {
         if (canUseLocalWorkspace) {
           const localResult = await readLocalWorkspaceTabsState()
           if (isCancelled) return
 
-          if (localResult.exists) {
-            didResolveFromLocalWorkspace = true
-            hasLoadedLocalWorkspaceStateRef.current = true
-            if (!hasUserChangedWorkspaceStateRef.current) {
-              applyWorkspaceState(localResult.state)
-            }
-          } else {
-            let seedState: WorkspaceTabsState | null = hasWorkspaceTabsStateContent(browserSnapshot) ? browserSnapshot : null
-
-            if (!seedState) {
-              try {
-                const remoteState = await fetchPersistentWorkspaceTabsState()
-                seedState = hasWorkspaceTabsStateContent(remoteState) ? remoteState : null
-              } catch {
-                seedState = null
-              }
-            }
-
-            const nextState = seedState ?? createEmptyWorkspaceTabsState()
+          const nextState = localResult.exists ? localResult.state : createEmptyWorkspaceTabsState()
+          if (!localResult.exists) {
             await saveLocalWorkspaceTabsState(nextState)
             if (isCancelled) return
+          }
 
-            didResolveFromLocalWorkspace = true
-            hasLoadedLocalWorkspaceStateRef.current = true
-            if (!hasUserChangedWorkspaceStateRef.current) {
-              applyWorkspaceState(nextState)
-            }
+          hasLoadedLocalWorkspaceStateRef.current = true
+          if (!hasUserChangedWorkspaceStateRef.current) {
+            applyWorkspaceState(nextState)
           }
         }
       } catch (error) {
-        console.error("Failed to load local workspace tabs state; falling back to remote state:", error)
+        console.error("Failed to load local workspace tabs state:", error)
         hasLoadedLocalWorkspaceStateRef.current = false
       }
 
-      if (!didResolveFromLocalWorkspace) {
+      if (!LOCAL_STORAGE_MODE) {
         try {
           const persistentState = await fetchPersistentWorkspaceTabsState()
           if (isCancelled) return
 
           if (hasWorkspaceTabsStateContent(persistentState) && !hasUserChangedWorkspaceStateRef.current) {
             applyWorkspaceState(persistentState)
-          } else if (hasWorkspaceTabsStateContent(browserSnapshot)) {
-            await persistWorkspaceTabsState(browserSnapshot)
           }
         } catch {
           // Browser persistence remains the fallback when the server-side manifest is unavailable.
@@ -1309,15 +1289,16 @@ export function SubjectWheel({
 
       const persistState = async () => {
         if (canUseLocalWorkspace) {
-          try {
-            await saveLocalWorkspaceTabsState(nextState)
-            return
-          } catch (error) {
-            console.error("Failed to save local workspace tabs state; falling back to remote state:", error)
-          }
+          await saveLocalWorkspaceTabsState(nextState)
+          return
         }
 
-        await persistWorkspaceTabsState(nextState)
+        if (!LOCAL_STORAGE_MODE) {
+          await persistWorkspaceTabsState(nextState)
+          return
+        }
+
+        throw new Error("No hay una carpeta local lista para guardar el estado.")
       }
 
       void persistState()
