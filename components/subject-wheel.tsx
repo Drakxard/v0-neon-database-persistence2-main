@@ -5,6 +5,7 @@ import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, C
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
+import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -30,6 +31,8 @@ import {
   isWorkspaceFileId,
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
+  readLocalWorkspaceTabsState,
+  saveLocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { cn } from "@/lib/utils"
@@ -517,6 +520,46 @@ function normalizeCustomSubjects(customSubjects: Record<string, CustomSubject>) 
   }, {})
 }
 
+function normalizeWorkspaceTabsState(input: Partial<WorkspaceTabsState> | null | undefined): WorkspaceTabsState {
+  const workspaceTabs =
+    input?.workspaceTabs && typeof input.workspaceTabs === "object"
+      ? Object.entries(input.workspaceTabs).reduce<Record<string, WorkspaceTab>>((accumulator, [tabId, tab]) => {
+          if (
+            tab &&
+            typeof tab.id === "string" &&
+            typeof tab.name === "string" &&
+            typeof tab.color === "string" &&
+            typeof tab.createdAt === "string" &&
+            Array.isArray(tab.subjectIds) &&
+            tab.id !== MAIN_WORKSPACE_TAB_ID
+          ) {
+            accumulator[tabId] = {
+              id: tab.id,
+              name: tab.name,
+              color: tab.color,
+              createdAt: tab.createdAt,
+              orderIndex: typeof tab.orderIndex === "number" && Number.isFinite(tab.orderIndex) ? tab.orderIndex : undefined,
+              subjectIds: tab.subjectIds.filter((subjectId): subjectId is string => typeof subjectId === "string"),
+            }
+          }
+          return accumulator
+        }, {})
+      : {}
+
+  return {
+    workspaceTabs,
+    activeWorkspaceTabId:
+      typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
+        ? input.activeWorkspaceTabId.trim()
+        : MAIN_WORKSPACE_TAB_ID,
+    customSubjects: normalizeCustomSubjects(
+      input?.customSubjects && typeof input.customSubjects === "object"
+        ? (input.customSubjects as Record<string, CustomSubject>)
+        : {}
+    ),
+  }
+}
+
 function loadWorkspaceTabsState(): WorkspaceTabsState {
   if (typeof window === "undefined") return createEmptyWorkspaceTabsState()
 
@@ -525,18 +568,7 @@ function loadWorkspaceTabsState(): WorkspaceTabsState {
     if (!rawValue) return createEmptyWorkspaceTabsState()
 
     const parsed = JSON.parse(rawValue) as Partial<WorkspaceTabsState>
-    const workspaceTabs = parsed.workspaceTabs && typeof parsed.workspaceTabs === "object" ? parsed.workspaceTabs : {}
-    const customSubjects = parsed.customSubjects && typeof parsed.customSubjects === "object" ? parsed.customSubjects : {}
-    const activeWorkspaceTabId =
-      typeof parsed.activeWorkspaceTabId === "string" && parsed.activeWorkspaceTabId.trim()
-        ? parsed.activeWorkspaceTabId.trim()
-        : MAIN_WORKSPACE_TAB_ID
-
-    return {
-      workspaceTabs,
-      activeWorkspaceTabId,
-      customSubjects: normalizeCustomSubjects(customSubjects as Record<string, CustomSubject>),
-    }
+    return normalizeWorkspaceTabsState(parsed)
   } catch {
     return createEmptyWorkspaceTabsState()
   }
@@ -568,7 +600,7 @@ async function fetchPersistentWorkspaceTabsState() {
     throw new Error("Failed to fetch workspace state")
   }
 
-  return (await response.json()) as WorkspaceTabsState
+  return normalizeWorkspaceTabsState((await response.json()) as Partial<WorkspaceTabsState>)
 }
 
 async function persistWorkspaceTabsState(state: WorkspaceTabsState) {
@@ -1109,14 +1141,16 @@ export function SubjectWheel({
   initialSearchParams?: SubjectWheelSearchParams
 }) {
   const router = useRouter()
+  const localWorkspace = useLocalWorkspace()
   const [session, setSession] = useState<AuthSession>(authSession)
   const builtInVisibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
     [session.allowedSubjectIds, session.isAdmin]
   )
-  const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(() => loadWorkspaceTabsState().workspaceTabs)
-  const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(() => loadWorkspaceTabsState().activeWorkspaceTabId)
-  const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(() => loadWorkspaceTabsState().customSubjects)
+  const initialWorkspaceTabsState = useMemo(() => loadWorkspaceTabsState(), [])
+  const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(initialWorkspaceTabsState.workspaceTabs)
+  const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(initialWorkspaceTabsState.activeWorkspaceTabId)
+  const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(initialWorkspaceTabsState.customSubjects)
   const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
   const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
@@ -1126,11 +1160,19 @@ export function SubjectWheel({
   const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
   const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<DeleteConfirmationTarget | null>(null)
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
+  const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const hasUserChangedWorkspaceStateRef = useRef(false)
+  const hasLoadedLocalWorkspaceStateRef = useRef(!LOCAL_STORAGE_MODE)
+  const workspaceTabsStateRef = useRef<WorkspaceTabsState>(initialWorkspaceTabsState)
   const longPressDeleteTimerRef = useRef<number | null>(null)
   const shouldSuppressLongPressClickRef = useRef(false)
   const draggedWorkspaceTabIdRef = useRef<string | null>(null)
   const [draggedWorkspaceTabId, setDraggedWorkspaceTabId] = useState<string | null>(null)
+  workspaceTabsStateRef.current = {
+    workspaceTabs,
+    activeWorkspaceTabId,
+    customSubjects,
+  }
   const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
   const activeWorkspaceTab = useMemo(
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
@@ -1165,30 +1207,79 @@ export function SubjectWheel({
 
   useEffect(() => {
     let isCancelled = false
-    const localSnapshot = {
-      workspaceTabs,
-      activeWorkspaceTabId,
-      customSubjects,
+    const canUseLocalWorkspace =
+      LOCAL_STORAGE_MODE && Boolean(localWorkspace.rootHandle) && localWorkspace.permissionState === "granted"
+
+    hasLoadedLocalWorkspaceStateRef.current = !LOCAL_STORAGE_MODE || !canUseLocalWorkspace
+
+    const applyWorkspaceState = (state: WorkspaceTabsState) => {
+      const normalizedState = normalizeWorkspaceTabsState(state)
+      setWorkspaceTabs(normalizedState.workspaceTabs)
+      setActiveWorkspaceTabId(normalizedState.activeWorkspaceTabId)
+      setCustomSubjects(normalizedState.customSubjects)
+      saveWorkspaceTabsState(normalizedState)
     }
 
     const loadPersistentWorkspaceState = async () => {
-      try {
-        const persistentState = await fetchPersistentWorkspaceTabsState()
-        if (isCancelled) return
+      const browserSnapshot = normalizeWorkspaceTabsState(workspaceTabsStateRef.current)
+      let didResolveFromLocalWorkspace = false
 
-        if (hasWorkspaceTabsStateContent(persistentState) && !hasUserChangedWorkspaceStateRef.current) {
-          setWorkspaceTabs(persistentState.workspaceTabs)
-          setActiveWorkspaceTabId(persistentState.activeWorkspaceTabId)
-          setCustomSubjects(normalizeCustomSubjects(persistentState.customSubjects))
-        } else if (hasWorkspaceTabsStateContent(localSnapshot)) {
-          await persistWorkspaceTabsState(localSnapshot)
+      try {
+        if (canUseLocalWorkspace) {
+          const localResult = await readLocalWorkspaceTabsState()
+          if (isCancelled) return
+
+          if (localResult.exists) {
+            didResolveFromLocalWorkspace = true
+            hasLoadedLocalWorkspaceStateRef.current = true
+            if (!hasUserChangedWorkspaceStateRef.current) {
+              applyWorkspaceState(localResult.state)
+            }
+          } else {
+            let seedState: WorkspaceTabsState | null = hasWorkspaceTabsStateContent(browserSnapshot) ? browserSnapshot : null
+
+            if (!seedState) {
+              try {
+                const remoteState = await fetchPersistentWorkspaceTabsState()
+                seedState = hasWorkspaceTabsStateContent(remoteState) ? remoteState : null
+              } catch {
+                seedState = null
+              }
+            }
+
+            const nextState = seedState ?? createEmptyWorkspaceTabsState()
+            await saveLocalWorkspaceTabsState(nextState)
+            if (isCancelled) return
+
+            didResolveFromLocalWorkspace = true
+            hasLoadedLocalWorkspaceStateRef.current = true
+            if (!hasUserChangedWorkspaceStateRef.current) {
+              applyWorkspaceState(nextState)
+            }
+          }
         }
-      } catch {
-        // Browser persistence remains the fallback when the server-side manifest is unavailable.
-      } finally {
-        if (!isCancelled) {
-          setHasResolvedPersistentWorkspaceState(true)
+      } catch (error) {
+        console.error("Failed to load local workspace tabs state; falling back to remote state:", error)
+        hasLoadedLocalWorkspaceStateRef.current = false
+      }
+
+      if (!didResolveFromLocalWorkspace) {
+        try {
+          const persistentState = await fetchPersistentWorkspaceTabsState()
+          if (isCancelled) return
+
+          if (hasWorkspaceTabsStateContent(persistentState) && !hasUserChangedWorkspaceStateRef.current) {
+            applyWorkspaceState(persistentState)
+          } else if (hasWorkspaceTabsStateContent(browserSnapshot)) {
+            await persistWorkspaceTabsState(browserSnapshot)
+          }
+        } catch {
+          // Browser persistence remains the fallback when the server-side manifest is unavailable.
         }
+      }
+
+      if (!isCancelled) {
+        setHasResolvedPersistentWorkspaceState(true)
       }
     }
 
@@ -1197,7 +1288,7 @@ export function SubjectWheel({
     return () => {
       isCancelled = true
     }
-  }, [])
+  }, [localWorkspace.permissionState, localWorkspace.rootHandle])
 
   useEffect(() => {
     const nextState = {
@@ -1209,9 +1300,38 @@ export function SubjectWheel({
     saveWorkspaceTabsState(nextState)
 
     if (hasResolvedPersistentWorkspaceState) {
-      void persistWorkspaceTabsState(nextState).catch(() => {})
+      setWorkspaceSaveStatus("saving")
+      const canUseLocalWorkspace =
+        LOCAL_STORAGE_MODE &&
+        Boolean(localWorkspace.rootHandle) &&
+        localWorkspace.permissionState === "granted" &&
+        hasLoadedLocalWorkspaceStateRef.current
+
+      const persistState = async () => {
+        if (canUseLocalWorkspace) {
+          try {
+            await saveLocalWorkspaceTabsState(nextState)
+            return
+          } catch (error) {
+            console.error("Failed to save local workspace tabs state; falling back to remote state:", error)
+          }
+        }
+
+        await persistWorkspaceTabsState(nextState)
+      }
+
+      void persistState()
+        .then(() => setWorkspaceSaveStatus("saved"))
+        .catch(() => setWorkspaceSaveStatus("error"))
     }
-  }, [activeWorkspaceTabId, customSubjects, hasResolvedPersistentWorkspaceState, workspaceTabs])
+  }, [
+    activeWorkspaceTabId,
+    customSubjects,
+    hasResolvedPersistentWorkspaceState,
+    localWorkspace.permissionState,
+    localWorkspace.rootHandle,
+    workspaceTabs,
+  ])
 
   const selectWorkspaceTab = useCallback((tabId: string) => {
     if (activeWorkspaceTabId === tabId) return
@@ -1794,6 +1914,14 @@ export function SubjectWheel({
     normalizeSubjectsForDay,
     onLoaded: handleDailySessionLoaded,
   })
+  const combinedSaveStatus =
+    workspaceSaveStatus === "error" || saveStatus === "error"
+      ? "error"
+      : workspaceSaveStatus === "saving" || saveStatus === "saving"
+        ? "saving"
+        : workspaceSaveStatus === "saved" || saveStatus === "saved"
+          ? "saved"
+          : "idle"
 
   // Load the persisted session for the currently selected date.
   useEffect(() => {
@@ -2092,6 +2220,39 @@ export function SubjectWheel({
     setIsAiOpen(true)
   }, [])
 
+  const forceSaveWorkspaceTabsLocally = useCallback(async () => {
+    if (!LOCAL_STORAGE_MODE || !localWorkspace.rootHandle || localWorkspace.permissionState !== "granted") {
+      toast({
+        title: "No se pudo guardar en local",
+        description: "Selecciona o recupera el permiso de la carpeta local antes de usar Ctrl+Q.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const nextState = normalizeWorkspaceTabsState(workspaceTabsStateRef.current)
+    setWorkspaceSaveStatus("saving")
+
+    try {
+      await saveLocalWorkspaceTabsState(nextState)
+      hasLoadedLocalWorkspaceStateRef.current = true
+      saveWorkspaceTabsState(nextState)
+      setWorkspaceSaveStatus("saved")
+      toast({
+        title: "Pestanas guardadas",
+        description: "El estado de Inicio y pestanas se guardo en la carpeta local.",
+      })
+    } catch (error) {
+      console.error("Failed to force-save local workspace tabs state:", error)
+      setWorkspaceSaveStatus("error")
+      toast({
+        title: "Error al guardar",
+        description: error instanceof Error ? error.message : "No se pudo guardar en la carpeta local.",
+        variant: "destructive",
+      })
+    }
+  }, [localWorkspace.permissionState, localWorkspace.rootHandle])
+
   // Global 'g' key listener — registered once, stable via ref
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -2099,6 +2260,12 @@ export function SubjectWheel({
       const tag = target?.tagName
       const isEditable = Boolean(target?.isContentEditable)
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return
+
+      if (e.ctrlKey && e.key.toLowerCase() === "q") {
+        e.preventDefault()
+        void forceSaveWorkspaceTabsLocally()
+        return
+      }
 
       const isWorkspaceModalOpen = isCreateWorkspaceTabOpen || isCreateCustomSubjectOpen || Boolean(deleteConfirmationTarget)
 
@@ -2141,6 +2308,7 @@ export function SubjectWheel({
   }, [
     activeWorkspaceTab,
     deleteConfirmationTarget,
+    forceSaveWorkspaceTabsLocally,
     isAiOpen,
     isCreateCustomSubjectOpen,
     isCreateWorkspaceTabOpen,
@@ -6191,19 +6359,19 @@ export function SubjectWheel({
               })}
             </div>
             <div className="pointer-events-none flex min-h-4 items-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
-              {saveStatus === "saving" && (
+              {combinedSaveStatus === "saving" && (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                   <span>Guardando...</span>
                 </>
               )}
-              {saveStatus === "saved" && (
+              {combinedSaveStatus === "saved" && (
                 <>
                   <Check className="h-3.5 w-3.5 text-green-500" />
                   <span className="text-green-500">Guardado</span>
                 </>
               )}
-              {saveStatus === "error" && (
+              {combinedSaveStatus === "error" && (
                 <span className="text-red-500">Error al guardar</span>
               )}
             </div>

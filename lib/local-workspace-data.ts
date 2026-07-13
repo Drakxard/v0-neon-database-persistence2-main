@@ -69,6 +69,35 @@ type PersistedWorkspaceFile = {
   mimeType: string
 }
 
+export type LocalWorkspaceTabState = {
+  id: string
+  name: string
+  color: string
+  createdAt: string
+  orderIndex?: number
+  subjectIds: string[]
+}
+
+export type LocalCustomSubjectState = {
+  id: string
+  name: string
+  color: string
+  tabId: string
+  createdAt: string
+  targetWeekday: number
+}
+
+export type LocalWorkspaceTabsState = {
+  workspaceTabs: Record<string, LocalWorkspaceTabState>
+  activeWorkspaceTabId: string
+  customSubjects: Record<string, LocalCustomSubjectState>
+}
+
+export type LocalWorkspaceTabsReadResult = {
+  state: LocalWorkspaceTabsState
+  exists: boolean
+}
+
 const WORKSPACE_PROTOCOL = "workspace://"
 const MANIFESTS_DIR = "manifests"
 const MATERIALS_DIR = "materials"
@@ -78,6 +107,8 @@ const THEORY_DIR = "teoria"
 const PRACTICE_DIR = "practica"
 const AUDIO_DIR = "audio"
 const ROOT_SUBDIRECTORIES = [CRONOGRAMA_DIR, THEORY_DIR, PRACTICE_DIR, AUDIO_DIR, MANIFESTS_DIR] as const
+const WORKSPACE_STATE_MANIFEST = [MANIFESTS_DIR, "workspace-state.json"]
+const MAIN_WORKSPACE_TAB_ID = "main"
 
 function sanitizePathSegment(value: string) {
   return value
@@ -330,6 +361,123 @@ async function readAiPromptValue() {
 
 async function writeAiPromptValue(prompt: string) {
   await writeJsonFile([MANIFESTS_DIR, "ai-prompt.json"], { prompt })
+}
+
+function createEmptyWorkspaceTabsState(): LocalWorkspaceTabsState {
+  return {
+    workspaceTabs: {},
+    activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
+    customSubjects: {},
+  }
+}
+
+function normalizeWorkspaceTab(input: Partial<LocalWorkspaceTabState> | null | undefined) {
+  if (
+    !input ||
+    typeof input.id !== "string" ||
+    typeof input.name !== "string" ||
+    typeof input.color !== "string" ||
+    typeof input.createdAt !== "string" ||
+    !Array.isArray(input.subjectIds)
+  ) {
+    return null
+  }
+
+  const normalized: LocalWorkspaceTabState = {
+    id: input.id,
+    name: input.name,
+    color: input.color,
+    createdAt: input.createdAt,
+    subjectIds: input.subjectIds.filter((subjectId): subjectId is string => typeof subjectId === "string"),
+  }
+
+  if (typeof input.orderIndex === "number" && Number.isFinite(input.orderIndex)) {
+    normalized.orderIndex = input.orderIndex
+  }
+
+  return normalized
+}
+
+function normalizeWorkspaceTabs(input: Partial<LocalWorkspaceTabsState>["workspaceTabs"]) {
+  if (!input || typeof input !== "object") return {}
+
+  return Object.entries(input).reduce<Record<string, LocalWorkspaceTabState>>((accumulator, [tabId, tab]) => {
+    const normalizedTab = normalizeWorkspaceTab(tab)
+    if (normalizedTab && normalizedTab.id !== MAIN_WORKSPACE_TAB_ID) {
+      accumulator[tabId] = normalizedTab
+    }
+    return accumulator
+  }, {})
+}
+
+function normalizeLocalCustomSubject(input: Partial<LocalCustomSubjectState> | null | undefined) {
+  if (
+    !input ||
+    typeof input.id !== "string" ||
+    typeof input.name !== "string" ||
+    typeof input.color !== "string" ||
+    typeof input.tabId !== "string" ||
+    typeof input.createdAt !== "string"
+  ) {
+    return null
+  }
+
+  const parsedWeekday = Number(input.targetWeekday)
+  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+
+  return {
+    id: input.id,
+    name: input.name,
+    color: input.color,
+    tabId: input.tabId,
+    createdAt: input.createdAt,
+    targetWeekday,
+  }
+}
+
+function normalizeLocalCustomSubjects(input: Partial<LocalWorkspaceTabsState>["customSubjects"]) {
+  if (!input || typeof input !== "object") return {}
+
+  return Object.entries(input).reduce<Record<string, LocalCustomSubjectState>>((accumulator, [subjectId, subject]) => {
+    const normalizedSubject = normalizeLocalCustomSubject(subject)
+    if (normalizedSubject) {
+      accumulator[subjectId] = normalizedSubject
+    }
+    return accumulator
+  }, {})
+}
+
+function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState> | null | undefined): LocalWorkspaceTabsState {
+  return {
+    workspaceTabs: normalizeWorkspaceTabs(input?.workspaceTabs),
+    activeWorkspaceTabId:
+      typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
+        ? input.activeWorkspaceTabId.trim()
+        : MAIN_WORKSPACE_TAB_ID,
+    customSubjects: normalizeLocalCustomSubjects(input?.customSubjects),
+  }
+}
+
+export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
+  const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
+  if (!exists) {
+    return {
+      state: createEmptyWorkspaceTabsState(),
+      exists: false,
+    }
+  }
+
+  const state = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+  return {
+    state: normalizeLocalWorkspaceTabsState(state),
+    exists: true,
+  }
+}
+
+export async function saveLocalWorkspaceTabsState(state: LocalWorkspaceTabsState) {
+  const normalizedState = normalizeLocalWorkspaceTabsState(state)
+  await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
+  return normalizedState
 }
 
 function synthesisProgressPath(subjectId: string, weekNumber: number) {
