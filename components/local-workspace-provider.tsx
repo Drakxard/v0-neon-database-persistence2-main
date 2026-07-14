@@ -109,7 +109,7 @@ export function LocalWorkspaceProvider({
     enabled ? "prompt" : "granted"
   )
   const [error, setError] = useState("")
-  const isReady = !enabled || bootState === "ready" || bootState === "checking"
+  const isReady = !enabled || bootState === "ready"
 
   useEffect(() => {
     if (!enabled) {
