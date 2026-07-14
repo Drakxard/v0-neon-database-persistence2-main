@@ -4,18 +4,21 @@ import type { NextRequest } from "next/server"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS } from "@/lib/subjects"
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (isLocalStorageMode() && request.nextUrl.pathname.startsWith("/api/")) {
     if (request.nextUrl.pathname === "/api/auth/session" && request.method.toUpperCase() === "GET") {
-      return NextResponse.json({
-        email: "local@app.local",
-        isAdmin: true,
-        allowedSubjectIds: SUBJECT_IDS,
-      }, {
-        headers: {
-          "x-data-source": "static-local-session",
+      return NextResponse.json(
+        {
+          email: "local@app.local",
+          isAdmin: true,
+          allowedSubjectIds: SUBJECT_IDS,
         },
-      })
+        {
+          headers: {
+            "x-data-source": "static-local-session",
+          },
+        }
+      )
     }
 
     return NextResponse.json(

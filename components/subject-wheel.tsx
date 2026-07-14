@@ -1143,6 +1143,9 @@ export function SubjectWheel({
 }) {
   const router = useRouter()
   const localWorkspace = useLocalWorkspace()
+  const localWorkspaceReady =
+    !LOCAL_STORAGE_MODE ||
+    (localWorkspace.isReady && Boolean(localWorkspace.rootHandle) && localWorkspace.permissionState === "granted")
   const [session, setSession] = useState<AuthSession>(authSession)
   const builtInVisibleSubjects = useMemo<Subject[]>(
     () => SUBJECTS.filter((subject) => session.isAdmin || session.allowedSubjectIds.includes(subject.id)),
@@ -1211,10 +1214,9 @@ export function SubjectWheel({
 
   useEffect(() => {
     let isCancelled = false
-    const canUseLocalWorkspace =
-      LOCAL_STORAGE_MODE && Boolean(localWorkspace.rootHandle) && localWorkspace.permissionState === "granted"
+    const canUseLocalWorkspace = LOCAL_STORAGE_MODE && localWorkspaceReady
 
-    hasLoadedLocalWorkspaceStateRef.current = !LOCAL_STORAGE_MODE || !canUseLocalWorkspace
+    hasLoadedLocalWorkspaceStateRef.current = !LOCAL_STORAGE_MODE
 
     const applyWorkspaceState = (state: WorkspaceTabsState) => {
       const normalizedState = normalizeWorkspaceTabsState(state)
@@ -1225,6 +1227,14 @@ export function SubjectWheel({
     }
 
     const loadPersistentWorkspaceState = async () => {
+      if (LOCAL_STORAGE_MODE && !canUseLocalWorkspace) {
+        hasLoadedLocalWorkspaceStateRef.current = false
+        if (!isCancelled) {
+          setHasResolvedPersistentWorkspaceState(false)
+        }
+        return
+      }
+
       try {
         if (canUseLocalWorkspace) {
           const localResult = await readLocalWorkspaceTabsState()
@@ -1269,7 +1279,7 @@ export function SubjectWheel({
     return () => {
       isCancelled = true
     }
-  }, [localWorkspace.permissionState, localWorkspace.rootHandle])
+  }, [localWorkspaceReady])
 
   useEffect(() => {
     const nextState = {
@@ -1284,8 +1294,7 @@ export function SubjectWheel({
       setWorkspaceSaveStatus("saving")
       const canUseLocalWorkspace =
         LOCAL_STORAGE_MODE &&
-        Boolean(localWorkspace.rootHandle) &&
-        localWorkspace.permissionState === "granted" &&
+        localWorkspaceReady &&
         hasLoadedLocalWorkspaceStateRef.current
 
       const persistState = async () => {
@@ -1310,8 +1319,7 @@ export function SubjectWheel({
     activeWorkspaceTabId,
     customSubjects,
     hasResolvedPersistentWorkspaceState,
-    localWorkspace.permissionState,
-    localWorkspace.rootHandle,
+    localWorkspaceReady,
     workspaceTabs,
   ])
 
@@ -1881,7 +1889,7 @@ export function SubjectWheel({
     logPrefix: "current subject vector overview",
   })
   const { isLoading, saveStatus } = useDailySessionState({
-    enabled: hasResolvedPersistentWorkspaceState,
+    enabled: hasResolvedPersistentWorkspaceState && localWorkspaceReady,
     currentDateKey,
     homeSelectedDate,
     visibleSubjects,
@@ -1946,6 +1954,11 @@ export function SubjectWheel({
 
   const refreshLocalWeekOptions = useCallback(async () => {
     if (!LOCAL_STORAGE_MODE) return
+    if (!localWorkspaceReady) {
+      setLocalSynthesisWeekOptions([])
+      setLocalPracticeWeekOptions([])
+      return
+    }
 
     const [synthesisWeekNumbers, practiceWeekNumbers] = await Promise.all([
       listLocalWeekNumbersWithContent(synthesisSubjects.map((subject) => subject.id)),
@@ -1958,7 +1971,7 @@ export function SubjectWheel({
 
     setLocalSynthesisWeekOptions(synthesisWeekNumbers)
     setLocalPracticeWeekOptions(practiceWeekNumbers.map(String))
-  }, [practiceSubjectId, synthesisSubjects, visibleSubjects])
+  }, [localWorkspaceReady, practiceSubjectId, synthesisSubjects, visibleSubjects])
 
   const loadCurrentSubjectWeekState = useCallback(
     async (subjectId: string) => {
@@ -1967,24 +1980,30 @@ export function SubjectWheel({
         setCurrentSubjectHasAnyContent(true)
         return []
       }
+      if (!localWorkspaceReady) {
+        setCurrentSubjectContentWeeks([])
+        setCurrentSubjectHasAnyContent(false)
+        return []
+      }
 
       const weekNumbers = await listLocalSubjectWeekNumbersWithContent(subjectId)
       setCurrentSubjectContentWeeks(weekNumbers)
       setCurrentSubjectHasAnyContent(weekNumbers.length > 0)
       return weekNumbers
     },
-    []
+    [localWorkspaceReady]
   )
 
   useEffect(() => {
     if (!LOCAL_STORAGE_MODE) return
+    if (!localWorkspaceReady) return
 
     void refreshLocalWeekOptions().catch((error) => {
       console.error("Failed to load local week options:", error)
       setLocalSynthesisWeekOptions([])
       setLocalPracticeWeekOptions([])
     })
-  }, [refreshLocalWeekOptions])
+  }, [localWorkspaceReady, refreshLocalWeekOptions])
 
   useEffect(() => {
     if (!LOCAL_STORAGE_MODE) return
@@ -1994,12 +2013,12 @@ export function SubjectWheel({
   }, [localPracticeWeekOptions, practiceWeekNumber])
 
   useEffect(() => {
-    if (!LOCAL_STORAGE_MODE || !isDialogOpen || !currentSubject) return
+    if (!LOCAL_STORAGE_MODE || !localWorkspaceReady || !isDialogOpen || !currentSubject) return
 
     void loadCurrentSubjectWeekState(currentSubject.id).catch((error) => {
       console.error("Failed to refresh current subject week state:", error)
     })
-  }, [LOCAL_STORAGE_MODE, currentSubject, entries.length, isDialogOpen, loadCurrentSubjectWeekState, materials.length])
+  }, [LOCAL_STORAGE_MODE, currentSubject, entries.length, isDialogOpen, loadCurrentSubjectWeekState, localWorkspaceReady, materials.length])
 
   useEffect(() => {
     const previousWeekNumber = previousCalendarWeekRef.current
@@ -6254,7 +6273,8 @@ export function SubjectWheel({
     return questionEntry && answerEntry ? { questionEntry, answerEntry } : null
   }, [editingEntry, entries])
 
-  const shouldShowInitialHomeLoading = !hasResolvedPersistentWorkspaceState || isLoading
+  const shouldShowInitialHomeLoading =
+    !hasResolvedPersistentWorkspaceState || isLoading || (LOCAL_STORAGE_MODE && !localWorkspaceReady)
 
   if (shouldShowInitialHomeLoading) {
     return (
