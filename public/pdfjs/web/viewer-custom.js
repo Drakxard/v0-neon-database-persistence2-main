@@ -48,6 +48,7 @@
     enhancedPdfReadability: false,
     workspaceMode: "remote",
     workspaceRootHandle: null,
+    localWorkspaceObjectUrl: "",
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -251,6 +252,37 @@
     } finally {
       await writable.close();
     }
+  }
+
+  function cleanupLocalWorkspaceObjectUrl() {
+    if (state.localWorkspaceObjectUrl) {
+      URL.revokeObjectURL(state.localWorkspaceObjectUrl);
+      state.localWorkspaceObjectUrl = "";
+    }
+  }
+
+  async function createLocalWorkspaceObjectUrl() {
+    const fileHandle = await getWorkspaceFileHandle(state.query?.workspaceFileId);
+    const file = await fileHandle.getFile();
+    return URL.createObjectURL(file);
+  }
+
+  async function openLocalWorkspaceDocumentInViewer() {
+    if (!isLocalWorkspaceMode() || !state.query?.workspaceFileId || !state.app?.open) {
+      return false;
+    }
+
+    cleanupLocalWorkspaceObjectUrl();
+    const objectUrl = await createLocalWorkspaceObjectUrl();
+    state.localWorkspaceObjectUrl = objectUrl;
+
+    await state.app.open({
+      url: objectUrl,
+      originalUrl: objectUrl,
+      filename: state.query.fileName || "material.pdf",
+    });
+    refreshDocumentViewerMetadata();
+    return true;
   }
 
   function ensureUi() {
@@ -2166,6 +2198,7 @@
   function handlePageHide() {
     state.pendingExitSync = false;
     clearExitSyncTimer();
+    cleanupLocalWorkspaceObjectUrl();
   }
 
   function handleParentMessage(event) {
@@ -2404,6 +2437,18 @@
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("message", handleParentMessage);
+
+    if (isLocalWorkspaceMode() && state.query?.workspaceFileId) {
+      try {
+        await openLocalWorkspaceDocumentInViewer();
+      } catch (error) {
+        console.error("Custom PDF.js local workspace open failed:", error);
+        hideLoadingOverlay();
+        showToast(error instanceof Error ? error.message : "No se pudo abrir el PDF local.", "error", 5000);
+        postToParent({ type: "viewerDocumentError" });
+      }
+    }
+
     postToParent({ type: "viewerReady" });
 
     if (!state.syncStatePoller) {

@@ -28,6 +28,7 @@ import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
   cleanupLocalSubjectWeekIfEmpty,
   createObjectUrlForWorkspaceFile,
+  getLocalCronograma,
   isWorkspaceFileId,
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
@@ -53,6 +54,7 @@ import type {
   GroqModelOption,
   PendingSubjectDayMaterial,
   PracticeCoverageStatus,
+  CronogramaRecord,
   SocraticReviewGeneratedTurn,
   SocraticReviewQueueItem,
   SubjectDayEntry,
@@ -193,13 +195,20 @@ type SynthesisSubjectState = {
   error: string
 }
 
-function buildMaterialViewerHref(materialId: number) {
+function buildMaterialViewerHref(material: SubjectDayMaterial) {
+  const isLocalWorkspaceMaterial = LOCAL_STORAGE_MODE && isWorkspaceFileId(material.drive_file_id)
   const searchParams = new URLSearchParams({
-    file: `/api/subject-day-materials/${materialId}/file`,
-    materialId: String(materialId),
-    key: `subject-day-material-${materialId}`,
+    file: isLocalWorkspaceMaterial ? "" : `/api/subject-day-materials/${material.id}/file`,
+    fileName: material.file_name,
+    materialId: String(material.id),
+    key: `subject-day-material-${material.id}`,
     viewerMode: "standalone",
   })
+
+  if (isLocalWorkspaceMaterial) {
+    searchParams.set("localWorkspace", "1")
+    searchParams.set("workspaceFileId", material.drive_file_id)
+  }
 
   return `/pdfjs/web/viewer.html?${searchParams.toString()}#locale=es-AR`
 }
@@ -1695,6 +1704,7 @@ export function SubjectWheel({
   const cronogramaFileInputRef = useRef<HTMLInputElement | null>(null)
   const materialDropDepthRef = useRef<Record<ContinueMode, number>>({ theory: 0, practice: 0 })
   const [cronogramaPdfName, setCronogramaPdfName] = useState("")
+  const [cronogramaRecord, setCronogramaRecord] = useState<CronogramaRecord | null>(null)
   const [isCronogramaLoading, setIsCronogramaLoading] = useState(false)
 
   // Practice modal state
@@ -4344,7 +4354,7 @@ export function SubjectWheel({
     openShortcutDialog(shortcutKey, "create")
   }
 
-  const handleCronogramaButtonClick = useCallback(() => {
+  const handleCronogramaButtonClick = useCallback(async () => {
     if (isCronogramaLoading) return
 
     if (!cronogramaPdfName) {
@@ -4352,8 +4362,39 @@ export function SubjectWheel({
       return
     }
 
-    window.open(buildCronogramaViewerHref(cronogramaPdfName), "_blank", "noopener,noreferrer")
-  }, [cronogramaPdfName, isCronogramaLoading])
+    const popup = window.open("about:blank", "_blank")
+    if (popup) {
+      popup.opener = null
+    }
+    const openHref = (record: CronogramaRecord | null) => {
+      const href = buildCronogramaViewerHref(cronogramaPdfName, record?.driveFileId)
+      if (popup) {
+        popup.location.href = href
+      } else {
+        window.open(href, "_blank", "noopener,noreferrer")
+      }
+    }
+
+    if (cronogramaRecord?.driveFileId) {
+      openHref(cronogramaRecord)
+      return
+    }
+
+    if (LOCAL_STORAGE_MODE) {
+      try {
+        const localCronograma = await getLocalCronograma()
+        if (localCronograma) {
+          setCronogramaRecord(localCronograma)
+        }
+        openHref(localCronograma)
+      } catch {
+        openHref(null)
+      }
+      return
+    }
+
+    openHref(null)
+  }, [cronogramaPdfName, cronogramaRecord, isCronogramaLoading])
 
   const handleCronogramaFileChange = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -4373,11 +4414,22 @@ export function SubjectWheel({
       }
 
       setIsCronogramaLoading(true)
+      const popup = window.open("about:blank", "_blank")
+      if (popup) {
+        popup.opener = null
+      }
       try {
         const savedCronograma = await uploadCronogramaPdf(file)
         setCronogramaPdfName(savedCronograma.fileName)
-        window.open(buildCronogramaViewerHref(savedCronograma.fileName), "_blank", "noopener,noreferrer")
+        setCronogramaRecord(savedCronograma)
+        const href = buildCronogramaViewerHref(savedCronograma.fileName, savedCronograma.driveFileId)
+        if (popup) {
+          popup.location.href = href
+        } else {
+          window.open(href, "_blank", "noopener,noreferrer")
+        }
       } catch (error) {
+        popup?.close()
         console.error("Failed to save cronograma PDF:", error)
         toast({
           title: "No se pudo guardar Cronograma",
@@ -6058,7 +6110,7 @@ export function SubjectWheel({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <a
-                        href={buildMaterialViewerHref(material.id)}
+                        href={buildMaterialViewerHref(material)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="block min-w-0 truncate text-sm text-foreground hover:underline"
@@ -7681,7 +7733,7 @@ export function SubjectWheel({
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                           <a
-                            href={buildMaterialViewerHref(currentContinueMaterial.id)}
+                            href={buildMaterialViewerHref(currentContinueMaterial)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-medium underline-offset-2 hover:underline"
