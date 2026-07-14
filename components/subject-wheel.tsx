@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus, MoreVertical } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -104,10 +104,6 @@ type DeleteConfirmationTarget =
   | { type: "tab"; id: string; label: string }
   | { type: "subject"; id: string; label: string }
 
-type FileSystemDirectoryHandleWithEntries = FileSystemDirectoryHandle & {
-  entries: () => AsyncIterableIterator<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>
-}
-
 const NIGHT_SUBJECT_COLORS: Record<string, string> = {
   algebra: "#366476",
   calculo2: "#3f5f94",
@@ -121,8 +117,6 @@ const LOCAL_STORAGE_MODE = isLocalStorageMode()
 const MAIN_WORKSPACE_TAB_ID = "main"
 const WORKSPACE_TABS_STORAGE_KEY = "subject-wheel:workspace-tabs:v1"
 const CUSTOM_SUBJECT_PALETTE = ["#0098C8", "#2563eb", "#ea580c", "#dc2626", "#16a34a", "#a855f7", "#0f766e", "#4f46e5"] as const
-const TRANSITION_BACKGROUNDS_DIR = "fondos"
-const TRANSITION_BACKGROUND_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif"])
 const CUSTOM_SUBJECT_WEEKDAYS = [
   { label: "Lunes", value: 0 },
   { label: "Martes", value: 1 },
@@ -133,17 +127,6 @@ const CUSTOM_SUBJECT_WEEKDAYS = [
 const LONG_PRESS_DELETE_MS = 800
 
 const SYNTHESIS_SUBJECT_IDS = ["calculo3", "fisica", "logica", "probabilidad"] as const
-
-function getRandomTransitionImageIndex(imageCount: number, previousIndex: number | null) {
-  if (imageCount <= 0) return null
-  if (imageCount === 1) return 0
-
-  let nextIndex = Math.floor(Math.random() * imageCount)
-  if (nextIndex === previousIndex) {
-    nextIndex = (nextIndex + 1 + Math.floor(Math.random() * (imageCount - 1))) % imageCount
-  }
-  return nextIndex
-}
 
 interface Question {
   id: number
@@ -1207,8 +1190,6 @@ export function SubjectWheel({
   const [isMainWorkspaceTabVisible, setIsMainWorkspaceTabVisible] = useState(initialWorkspaceTabsState.isMainWorkspaceTabVisible)
   const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
   const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
-  const [editingWorkspaceTabId, setEditingWorkspaceTabId] = useState<string | null>(null)
-  const [newWorkspaceTabId, setNewWorkspaceTabId] = useState<string | null>(null)
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
   const [editingCustomSubjectId, setEditingCustomSubjectId] = useState<string | null>(null)
   const [customSubjectNameDraft, setCustomSubjectNameDraft] = useState("")
@@ -1224,7 +1205,6 @@ export function SubjectWheel({
   const longPressDeleteTimerRef = useRef<number | null>(null)
   const shouldSuppressLongPressClickRef = useRef(false)
   const draggedWorkspaceTabIdRef = useRef<string | null>(null)
-  const workspaceTabNameInputRef = useRef<HTMLInputElement | null>(null)
   const [draggedWorkspaceTabId, setDraggedWorkspaceTabId] = useState<string | null>(null)
   workspaceTabsStateRef.current = {
     workspaceTabs,
@@ -1259,84 +1239,12 @@ export function SubjectWheel({
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
-  const [transitionBackgroundImages, setTransitionBackgroundImages] = useState<string[]>([])
-  const [transitionBackgroundImageIndex, setTransitionBackgroundImageIndex] = useState<number | null>(null)
   const { theme, setTheme } = useTheme()
   const [themeMenuMounted, setThemeMenuMounted] = useState(false)
 
   useEffect(() => {
     setThemeMenuMounted(true)
   }, [])
-
-  useEffect(() => {
-    if (!editingWorkspaceTabId) return
-
-    window.requestAnimationFrame(() => {
-      workspaceTabNameInputRef.current?.focus()
-      workspaceTabNameInputRef.current?.select()
-    })
-  }, [editingWorkspaceTabId])
-
-  useEffect(() => {
-    if (!LOCAL_STORAGE_MODE || !localWorkspaceReady || !localWorkspace.rootHandle) {
-      setTransitionBackgroundImages((previousUrls) => {
-        previousUrls.forEach((url) => URL.revokeObjectURL(url))
-        return []
-      })
-      setTransitionBackgroundImageIndex(null)
-      return
-    }
-
-    let isCancelled = false
-    let nextUrls: string[] = []
-
-    const loadTransitionBackgrounds = async () => {
-      try {
-        const backgroundsHandle = await localWorkspace.rootHandle!.getDirectoryHandle(TRANSITION_BACKGROUNDS_DIR, { create: false })
-
-        for await (const [name, handle] of (backgroundsHandle as FileSystemDirectoryHandleWithEntries).entries()) {
-          if (handle.kind !== "file") continue
-
-          const extension = name.split(".").pop()?.toLowerCase() ?? ""
-          if (!TRANSITION_BACKGROUND_EXTENSIONS.has(extension)) continue
-
-          const file = await (handle as FileSystemFileHandle).getFile()
-          nextUrls.push(URL.createObjectURL(file))
-        }
-
-        if (isCancelled) {
-          nextUrls.forEach((url) => URL.revokeObjectURL(url))
-          return
-        }
-
-        setTransitionBackgroundImages((previousUrls) => {
-          previousUrls.forEach((url) => URL.revokeObjectURL(url))
-          return nextUrls
-        })
-        setTransitionBackgroundImageIndex((previousIndex) =>
-          nextUrls.length > 0 && previousIndex !== null && previousIndex < nextUrls.length ? previousIndex : null
-        )
-        nextUrls = []
-      } catch (error) {
-        if (isCancelled) return
-        setTransitionBackgroundImages((previousUrls) => {
-          previousUrls.forEach((url) => URL.revokeObjectURL(url))
-          return []
-        })
-        setTransitionBackgroundImageIndex(null)
-        if (!(error instanceof DOMException && error.name === "NotFoundError")) {
-          console.error("Failed to load transition backgrounds:", error)
-        }
-      }
-    }
-
-    void loadTransitionBackgrounds()
-
-    return () => {
-      isCancelled = true
-      nextUrls.forEach((url) => URL.revokeObjectURL(url))
-    }
-  }, [localWorkspace.rootHandle, localWorkspaceReady])
 
   useEffect(() => {
     const hasActiveTab = workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)
@@ -1466,11 +1374,14 @@ export function SubjectWheel({
     setActiveWorkspaceTabId(tabId)
   }, [activeWorkspaceTabId])
 
-  const beginCreateWorkspaceTab = useCallback(() => {
+  const createWorkspaceTab = useCallback(() => {
+    const name = workspaceTabNameDraft.trim()
+    if (!name) return
+
     const id = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const nextTab: WorkspaceTab = {
       id,
-      name: "Nueva carpeta",
+      name,
       color: "#111827",
       createdAt: new Date().toISOString(),
       orderIndex: workspaceTabList.filter((tab) => tab.id !== MAIN_WORKSPACE_TAB_ID).length,
@@ -1483,74 +1394,9 @@ export function SubjectWheel({
       [id]: nextTab,
     }))
     setActiveWorkspaceTabId(id)
-    setWorkspaceTabNameDraft(nextTab.name)
-    setEditingWorkspaceTabId(id)
-    setNewWorkspaceTabId(id)
-    setIsCreateWorkspaceTabOpen(false)
-  }, [workspaceTabList])
-
-  const beginRenameWorkspaceTab = useCallback((tab: WorkspaceTab) => {
-    if (tab.id === MAIN_WORKSPACE_TAB_ID) {
-      setWorkspaceNoticeMessage("La carpeta Inicio no se puede renombrar.")
-      return
-    }
-
-    setActiveWorkspaceTabId(tab.id)
-    setWorkspaceTabNameDraft(tab.name)
-    setEditingWorkspaceTabId(tab.id)
-    setNewWorkspaceTabId(null)
-  }, [])
-
-  const finishWorkspaceTabNameEdit = useCallback((tabId: string, options?: { cancel?: boolean }) => {
-    if (tabId === MAIN_WORKSPACE_TAB_ID) {
-      setEditingWorkspaceTabId(null)
-      setNewWorkspaceTabId(null)
-      setWorkspaceTabNameDraft("")
-      return
-    }
-
-    const name = workspaceTabNameDraft.trim()
-    const isNewTab = newWorkspaceTabId === tabId
-
-    if (options?.cancel || !name) {
-      if (isNewTab) {
-        hasUserChangedWorkspaceStateRef.current = true
-        setWorkspaceTabs((previous) => {
-          const next = { ...previous }
-          delete next[tabId]
-          return next
-        })
-        setActiveWorkspaceTabId((previousActiveId) => {
-          if (previousActiveId !== tabId) return previousActiveId
-          return workspaceTabList.find((tab) => tab.id !== tabId)?.id ?? MAIN_WORKSPACE_TAB_ID
-        })
-      }
-      setEditingWorkspaceTabId(null)
-      setNewWorkspaceTabId(null)
-      setWorkspaceTabNameDraft("")
-      return
-    }
-
-    hasUserChangedWorkspaceStateRef.current = true
-    setWorkspaceTabs((previous) => {
-      const currentTab = previous[tabId]
-      if (!currentTab || currentTab.name === name) return previous
-      return {
-        ...previous,
-        [tabId]: {
-          ...currentTab,
-          name,
-        },
-      }
-    })
-    setEditingWorkspaceTabId(null)
-    setNewWorkspaceTabId(null)
     setWorkspaceTabNameDraft("")
-  }, [newWorkspaceTabId, workspaceTabNameDraft, workspaceTabList])
-
-  const createWorkspaceTab = useCallback(() => {
-    beginCreateWorkspaceTab()
-  }, [beginCreateWorkspaceTab])
+    setIsCreateWorkspaceTabOpen(false)
+  }, [workspaceTabList, workspaceTabNameDraft])
 
   const resetCustomSubjectDraft = useCallback(() => {
     setEditingCustomSubjectId(null)
@@ -1685,8 +1531,6 @@ export function SubjectWheel({
   }, [])
 
   const startLongPressDelete = useCallback((target: DeleteConfirmationTarget) => {
-    if (target.type === "tab") return
-
     clearLongPressDeleteTimer()
     shouldSuppressLongPressClickRef.current = false
     longPressDeleteTimerRef.current = window.setTimeout(() => {
@@ -2520,9 +2364,13 @@ export function SubjectWheel({
           }
         }
 
-        if (e.key === "+" || e.code === "NumpadAdd") {
+        if (
+          (e.key === "+" || e.code === "NumpadAdd") &&
+          (LOCAL_STORAGE_MODE || activeWorkspaceTab.id !== MAIN_WORKSPACE_TAB_ID)
+        ) {
           e.preventDefault()
-          beginCreateWorkspaceTab()
+          resetCustomSubjectDraft()
+          setIsCreateCustomSubjectOpen(true)
           return
         }
       }
@@ -2543,7 +2391,6 @@ export function SubjectWheel({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
     activeWorkspaceTab,
-    beginCreateWorkspaceTab,
     deleteConfirmationTarget,
     forceSaveWorkspaceTabsLocally,
     isAiOpen,
@@ -2551,6 +2398,7 @@ export function SubjectWheel({
     isCreateWorkspaceTabOpen,
     isDialogOpen,
     openAiModal,
+    resetCustomSubjectDraft,
     selectWorkspaceTab,
     workspaceTabList,
   ])
@@ -3041,9 +2889,6 @@ export function SubjectWheel({
 
   const handleSubjectClick = async (subject: Subject) => {
     const weekNumbers = await loadCurrentSubjectWeekState(subject.id)
-    setTransitionBackgroundImageIndex((previousIndex) =>
-      getRandomTransitionImageIndex(transitionBackgroundImages.length, previousIndex)
-    )
     setCurrentSubject(subject)
     if (LOCAL_STORAGE_MODE && weekNumbers.length > 0) {
       const latestWeekStart = getWeekDates(weekNumbers[0])[0]
@@ -3064,9 +2909,6 @@ export function SubjectWheel({
     if (!subject) return
 
     await loadCurrentSubjectWeekState(subject.id)
-    setTransitionBackgroundImageIndex((previousIndex) =>
-      getRandomTransitionImageIndex(transitionBackgroundImages.length, previousIndex)
-    )
     setCurrentSubject(subject)
     setDialogDateKey(dateKey)
     resetSubjectUiState()
@@ -6539,8 +6381,6 @@ export function SubjectWheel({
 
   const shouldShowInitialHomeLoading =
     !hasResolvedPersistentWorkspaceState || isLoading || (LOCAL_STORAGE_MODE && !localWorkspaceReady)
-  const transitionBackgroundImage =
-    transitionBackgroundImageIndex !== null ? transitionBackgroundImages[transitionBackgroundImageIndex] ?? null : null
 
   if (shouldShowInitialHomeLoading) {
     return (
@@ -6572,11 +6412,11 @@ export function SubjectWheel({
                 const isActive = tab.id === activeWorkspaceTab.id
                 const canDeleteTab = workspaceTabList.length > 1
                 const canDragTab = tab.id !== MAIN_WORKSPACE_TAB_ID
-                const isEditingTabName = editingWorkspaceTabId === tab.id
 
                 return (
-                  <div
+                  <button
                     key={tab.id}
+                    type="button"
                     onClick={() => {
                       if (consumeLongPressClick()) return
                       selectWorkspaceTab(tab.id)
@@ -6618,78 +6458,15 @@ export function SubjectWheel({
                       setDraggedWorkspaceTabId(null)
                     }}
                     className={cn(
-                      "group flex max-w-[11rem] shrink-0 items-center gap-1 rounded-full border py-1 pl-3 pr-1 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none sm:max-w-[14rem]",
+                      "max-w-[8.5rem] shrink-0 truncate rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none sm:max-w-[11rem]",
                       isActive
                         ? "scale-[1.03] border-transparent bg-foreground text-background shadow-sm"
                         : "border-border bg-background/70 text-foreground hover:bg-background/90",
                       draggedWorkspaceTabId === tab.id && "opacity-50"
                     )}
                   >
-                    {isEditingTabName ? (
-                      <input
-                        ref={workspaceTabNameInputRef}
-                        value={workspaceTabNameDraft}
-                        onClick={(event) => event.stopPropagation()}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onChange={(event) => setWorkspaceTabNameDraft(event.target.value)}
-                        onBlur={() => finishWorkspaceTabNameEdit(tab.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault()
-                            finishWorkspaceTabNameEdit(tab.id)
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault()
-                            finishWorkspaceTabNameEdit(tab.id, { cancel: true })
-                          }
-                        }}
-                        className="h-5 min-w-0 flex-1 bg-transparent text-xs font-medium outline-none"
-                      />
-                    ) : (
-                      <span className="min-w-0 flex-1 truncate text-left" title={tab.name}>
-                        {tab.name}
-                      </span>
-                    )}
-
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={(event) => event.stopPropagation()}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          className={cn(
-                            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition",
-                            isActive ? "text-background/80 hover:bg-background/15" : "text-foreground/70 hover:bg-foreground/10"
-                          )}
-                          aria-label={`Opciones de ${tab.name}`}
-                          title="Opciones"
-                        >
-                          <MoreVertical className="h-3.5 w-3.5" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" sideOffset={6} className="min-w-36 rounded-xl border-border">
-                        <DropdownMenuItem
-                          disabled={tab.id === MAIN_WORKSPACE_TAB_ID}
-                          onClick={() => beginRenameWorkspaceTab(tab)}
-                        >
-                          Renombrar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={!canDeleteTab}
-                          onClick={() => {
-                            if (!canDeleteTab) {
-                              setWorkspaceNoticeMessage("Se necesita al menos una pestaÃ±a para crear materias y objetos.")
-                              return
-                            }
-                            setDeleteConfirmationTarget({ type: "tab", id: tab.id, label: tab.name })
-                          }}
-                          className="text-red-600 focus:text-red-600"
-                        >
-                          Eliminar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+                    {tab.name}
+                  </button>
                 )
               })}
             </div>
@@ -6752,9 +6529,9 @@ export function SubjectWheel({
                 variant="outline"
                 size="icon"
                 className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Nueva carpeta"
-                title="Nueva carpeta"
-                onClick={beginCreateWorkspaceTab}
+                aria-label="Nueva pestaña"
+                title="Nueva pestaña"
+                onClick={() => setIsCreateWorkspaceTabOpen(true)}
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -7429,11 +7206,7 @@ export function SubjectWheel({
       </Dialog>
 
       <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialogOrReturn() : undefined)}>
-        <DialogContent
-          className="h-[100dvh] w-screen max-w-none border-0 bg-card bg-cover bg-center p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border sm:border-border"
-          style={transitionBackgroundImage ? { backgroundImage: `url("${transitionBackgroundImage}")` } : undefined}
-          showCloseButton={false}
-        >
+        <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-card p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border sm:border-border" showCloseButton={false}>
           <div className="relative flex h-full flex-col overflow-hidden px-3 py-3 sm:p-8">
             <Button
               variant="outline"
