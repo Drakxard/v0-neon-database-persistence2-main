@@ -28,6 +28,7 @@ export async function PUT(request: Request) {
       workspaceTabs: body?.workspaceTabs,
       activeWorkspaceTabId: body?.activeWorkspaceTabId,
       customSubjects: body?.customSubjects,
+      isMainWorkspaceTabVisible: body?.isMainWorkspaceTabVisible,
     })
 
     return NextResponse.json(state)

@@ -95,6 +95,7 @@ type WorkspaceTabsState = {
   workspaceTabs: Record<string, WorkspaceTab>
   activeWorkspaceTabId: string
   customSubjects: Record<string, CustomSubject>
+  isMainWorkspaceTabVisible: boolean
 }
 
 type DeleteConfirmationTarget =
@@ -477,18 +478,23 @@ function createEmptyWorkspaceTabsState(): WorkspaceTabsState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    isMainWorkspaceTabVisible: true,
   }
 }
 
-function getWorkspaceTabList(workspaceTabs: Record<string, WorkspaceTab>) {
+function sortWorkspaceTabs(workspaceTabs: Record<string, WorkspaceTab>) {
+  return Object.values(workspaceTabs).sort((left, right) => {
+    const leftOrder = typeof left.orderIndex === "number" ? left.orderIndex : Number.POSITIVE_INFINITY
+    const rightOrder = typeof right.orderIndex === "number" ? right.orderIndex : Number.POSITIVE_INFINITY
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder
+    return left.createdAt.localeCompare(right.createdAt)
+  })
+}
+
+function getWorkspaceTabList(workspaceTabs: Record<string, WorkspaceTab>, isMainWorkspaceTabVisible: boolean) {
   return [
-    getMainWorkspaceTab(),
-    ...Object.values(workspaceTabs).sort((left, right) => {
-      const leftOrder = typeof left.orderIndex === "number" ? left.orderIndex : Number.POSITIVE_INFINITY
-      const rightOrder = typeof right.orderIndex === "number" ? right.orderIndex : Number.POSITIVE_INFINITY
-      if (leftOrder !== rightOrder) return leftOrder - rightOrder
-      return left.createdAt.localeCompare(right.createdAt)
-    }),
+    ...(isMainWorkspaceTabVisible ? [getMainWorkspaceTab()] : []),
+    ...sortWorkspaceTabs(workspaceTabs),
   ]
 }
 
@@ -545,18 +551,28 @@ function normalizeWorkspaceTabsState(input: Partial<WorkspaceTabsState> | null |
           return accumulator
         }, {})
       : {}
+  const isMainWorkspaceTabVisible = input?.isMainWorkspaceTabVisible !== false
+  const activeCandidate =
+    typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
+      ? input.activeWorkspaceTabId.trim()
+      : MAIN_WORKSPACE_TAB_ID
+  const firstWorkspaceTabId = sortWorkspaceTabs(workspaceTabs)[0]?.id ?? null
+  const hasActiveCandidate =
+    activeCandidate === MAIN_WORKSPACE_TAB_ID ? isMainWorkspaceTabVisible : Boolean(workspaceTabs[activeCandidate])
 
   return {
     workspaceTabs,
-    activeWorkspaceTabId:
-      typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
-        ? input.activeWorkspaceTabId.trim()
-        : MAIN_WORKSPACE_TAB_ID,
+    activeWorkspaceTabId: hasActiveCandidate
+      ? activeCandidate
+      : isMainWorkspaceTabVisible
+        ? MAIN_WORKSPACE_TAB_ID
+        : firstWorkspaceTabId ?? MAIN_WORKSPACE_TAB_ID,
     customSubjects: normalizeCustomSubjects(
       input?.customSubjects && typeof input.customSubjects === "object"
         ? (input.customSubjects as Record<string, CustomSubject>)
         : {}
     ),
+    isMainWorkspaceTabVisible,
   }
 }
 
@@ -587,7 +603,8 @@ function hasWorkspaceTabsStateContent(state: WorkspaceTabsState) {
   return (
     state.activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID ||
     Object.keys(state.workspaceTabs).length > 0 ||
-    Object.keys(state.customSubjects).length > 0
+    Object.keys(state.customSubjects).length > 0 ||
+    !state.isMainWorkspaceTabVisible
   )
 }
 
@@ -1158,6 +1175,7 @@ export function SubjectWheel({
   const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(initialWorkspaceTabsState.workspaceTabs)
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(initialWorkspaceTabsState.activeWorkspaceTabId)
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(initialWorkspaceTabsState.customSubjects)
+  const [isMainWorkspaceTabVisible, setIsMainWorkspaceTabVisible] = useState(initialWorkspaceTabsState.isMainWorkspaceTabVisible)
   const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
   const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
   const [isCreateCustomSubjectOpen, setIsCreateCustomSubjectOpen] = useState(false)
@@ -1166,6 +1184,7 @@ export function SubjectWheel({
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
   const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
   const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<DeleteConfirmationTarget | null>(null)
+  const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const hasUserChangedWorkspaceStateRef = useRef(false)
@@ -1179,8 +1198,12 @@ export function SubjectWheel({
     workspaceTabs,
     activeWorkspaceTabId,
     customSubjects,
+    isMainWorkspaceTabVisible,
   }
-  const workspaceTabList = useMemo(() => getWorkspaceTabList(workspaceTabs), [workspaceTabs])
+  const workspaceTabList = useMemo(
+    () => getWorkspaceTabList(workspaceTabs, isMainWorkspaceTabVisible),
+    [isMainWorkspaceTabVisible, workspaceTabs]
+  )
   const activeWorkspaceTab = useMemo(
     () => workspaceTabList.find((tab) => tab.id === activeWorkspaceTabId) ?? getMainWorkspaceTab(),
     [activeWorkspaceTabId, workspaceTabList]
@@ -1214,7 +1237,7 @@ export function SubjectWheel({
   useEffect(() => {
     const hasActiveTab = workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)
     if (!hasActiveTab) {
-      setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
+      setActiveWorkspaceTabId(workspaceTabList[0]?.id ?? MAIN_WORKSPACE_TAB_ID)
     }
   }, [activeWorkspaceTabId, workspaceTabList])
 
@@ -1229,6 +1252,7 @@ export function SubjectWheel({
       setWorkspaceTabs(normalizedState.workspaceTabs)
       setActiveWorkspaceTabId(normalizedState.activeWorkspaceTabId)
       setCustomSubjects(normalizedState.customSubjects)
+      setIsMainWorkspaceTabVisible(normalizedState.isMainWorkspaceTabVisible)
       saveWorkspaceTabsState(normalizedState)
     }
 
@@ -1292,6 +1316,7 @@ export function SubjectWheel({
       workspaceTabs,
       activeWorkspaceTabId,
       customSubjects,
+      isMainWorkspaceTabVisible,
     }
 
     saveWorkspaceTabsState(nextState)
@@ -1325,6 +1350,7 @@ export function SubjectWheel({
     activeWorkspaceTabId,
     customSubjects,
     hasResolvedPersistentWorkspaceState,
+    isMainWorkspaceTabVisible,
     localWorkspaceReady,
     workspaceTabs,
   ])
@@ -1378,6 +1404,10 @@ export function SubjectWheel({
   const saveCustomSubject = useCallback(() => {
     const name = customSubjectNameDraft.trim()
     if (!name || (!LOCAL_STORAGE_MODE && activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID)) return
+    if (workspaceTabList.length === 0) {
+      setWorkspaceNoticeMessage("Se necesita al menos una pestaña para crear materias y objetos.")
+      return
+    }
 
     if (editingCustomSubjectId) {
       const existingSubject = customSubjects[editingCustomSubjectId]
@@ -1442,6 +1472,7 @@ export function SubjectWheel({
     customSubjects,
     editingCustomSubjectId,
     resetCustomSubjectDraft,
+    workspaceTabList.length,
   ])
 
   const reorderWorkspaceTabs = useCallback((draggedTabId: string, targetTabId: string) => {
@@ -1497,6 +1528,16 @@ export function SubjectWheel({
     }, LONG_PRESS_DELETE_MS)
   }, [clearLongPressDeleteTimer])
 
+  const startLongPressNotice = useCallback((message: string) => {
+    clearLongPressDeleteTimer()
+    shouldSuppressLongPressClickRef.current = false
+    longPressDeleteTimerRef.current = window.setTimeout(() => {
+      longPressDeleteTimerRef.current = null
+      shouldSuppressLongPressClickRef.current = true
+      setWorkspaceNoticeMessage(message)
+    }, LONG_PRESS_DELETE_MS)
+  }, [clearLongPressDeleteTimer])
+
   const consumeLongPressClick = useCallback(() => {
     if (!shouldSuppressLongPressClickRef.current) return false
     shouldSuppressLongPressClickRef.current = false
@@ -1513,6 +1554,12 @@ export function SubjectWheel({
 
   const confirmDeleteTarget = useCallback(() => {
     if (!deleteConfirmationTarget) return
+
+    if (deleteConfirmationTarget.type === "tab" && workspaceTabList.length <= 1) {
+      setDeleteConfirmationTarget(null)
+      setWorkspaceNoticeMessage("Se necesita al menos una pestaña para crear materias y objetos.")
+      return
+    }
 
     hasUserChangedWorkspaceStateRef.current = true
 
@@ -1535,25 +1582,37 @@ export function SubjectWheel({
         return nextTabs
       })
     } else {
-      const tabToDelete = workspaceTabs[deleteConfirmationTarget.id]
-      const deletedSubjectIds = new Set(tabToDelete?.subjectIds ?? [])
+      const isMainTabTarget = deleteConfirmationTarget.id === MAIN_WORKSPACE_TAB_ID
+      const tabToDelete = isMainTabTarget ? getMainWorkspaceTab() : workspaceTabs[deleteConfirmationTarget.id]
+      const deletedSubjectIds = new Set(
+        isMainTabTarget
+          ? Object.values(customSubjects)
+              .filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID)
+              .map((subject) => subject.id)
+          : tabToDelete?.subjectIds ?? []
+      )
 
-      setWorkspaceTabs((previous) => {
-        const next = { ...previous }
-        delete next[deleteConfirmationTarget.id]
-        return next
-      })
+      if (isMainTabTarget) {
+        setIsMainWorkspaceTabVisible(false)
+      } else {
+        setWorkspaceTabs((previous) => {
+          const next = { ...previous }
+          delete next[deleteConfirmationTarget.id]
+          return next
+        })
+      }
       setCustomSubjects((previous) =>
         Object.fromEntries(Object.entries(previous).filter(([subjectId]) => !deletedSubjectIds.has(subjectId)))
       )
 
       if (activeWorkspaceTabId === deleteConfirmationTarget.id) {
-        setActiveWorkspaceTabId(MAIN_WORKSPACE_TAB_ID)
+        const nextTab = workspaceTabList.find((tab) => tab.id !== deleteConfirmationTarget.id)
+        setActiveWorkspaceTabId(nextTab?.id ?? MAIN_WORKSPACE_TAB_ID)
       }
     }
 
     setDeleteConfirmationTarget(null)
-  }, [activeWorkspaceTabId, deleteConfirmationTarget, workspaceTabs])
+  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, workspaceTabList, workspaceTabs])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -6315,7 +6374,8 @@ export function SubjectWheel({
             <div className="pointer-events-auto flex max-h-[calc(100dvh-8rem)] min-w-0 flex-col items-start gap-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {workspaceTabList.map((tab) => {
                 const isActive = tab.id === activeWorkspaceTab.id
-                const canDeleteTab = tab.id !== MAIN_WORKSPACE_TAB_ID
+                const canDeleteTab = workspaceTabList.length > 1
+                const canDragTab = tab.id !== MAIN_WORKSPACE_TAB_ID
 
                 return (
                   <button
@@ -6326,15 +6386,18 @@ export function SubjectWheel({
                       selectWorkspaceTab(tab.id)
                     }}
                     onPointerDown={() => {
-                      if (!canDeleteTab) return
+                      if (!canDeleteTab) {
+                        startLongPressNotice("Se necesita al menos una pestaña para crear materias y objetos.")
+                        return
+                      }
                       startLongPressDelete({ type: "tab", id: tab.id, label: tab.name })
                     }}
                     onPointerUp={cancelLongPressDelete}
                     onPointerLeave={cancelLongPressDelete}
                     onPointerCancel={cancelLongPressDelete}
-                    draggable={canDeleteTab}
+                    draggable={canDragTab}
                     onDragStart={(event) => {
-                      if (!canDeleteTab) return
+                      if (!canDragTab) return
                       clearLongPressDeleteTimer()
                       draggedWorkspaceTabIdRef.current = tab.id
                       setDraggedWorkspaceTabId(tab.id)
@@ -6342,12 +6405,12 @@ export function SubjectWheel({
                       event.dataTransfer.setData("text/plain", tab.id)
                     }}
                     onDragOver={(event) => {
-                      if (!canDeleteTab || !draggedWorkspaceTabIdRef.current) return
+                      if (!canDragTab || !draggedWorkspaceTabIdRef.current) return
                       event.preventDefault()
                       event.dataTransfer.dropEffect = "move"
                     }}
                     onDrop={(event) => {
-                      if (!canDeleteTab) return
+                      if (!canDragTab) return
                       event.preventDefault()
                       const draggedTabId = draggedWorkspaceTabIdRef.current || event.dataTransfer.getData("text/plain")
                       reorderWorkspaceTabs(draggedTabId, tab.id)
@@ -6766,6 +6829,21 @@ export function SubjectWheel({
             </DialogClose>
             <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
               Borrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(workspaceNoticeMessage)} onOpenChange={(open) => (!open ? setWorkspaceNoticeMessage("") : undefined)}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>No se puede borrar</DialogTitle>
+            <DialogDescription>{workspaceNoticeMessage}</DialogDescription>
+          </DialogHeader>
+
+          <DialogFooter>
+            <Button type="button" onClick={() => setWorkspaceNoticeMessage("")}>
+              Entendido
             </Button>
           </DialogFooter>
         </DialogContent>

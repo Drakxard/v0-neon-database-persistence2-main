@@ -91,6 +91,7 @@ export type LocalWorkspaceTabsState = {
   workspaceTabs: Record<string, LocalWorkspaceTabState>
   activeWorkspaceTabId: string
   customSubjects: Record<string, LocalCustomSubjectState>
+  isMainWorkspaceTabVisible: boolean
 }
 
 export type LocalWorkspaceTabsReadResult = {
@@ -367,6 +368,7 @@ function createEmptyWorkspaceTabsState(): LocalWorkspaceTabsState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    isMainWorkspaceTabVisible: true,
   }
 }
 
@@ -447,13 +449,31 @@ function normalizeLocalCustomSubjects(input: Partial<LocalWorkspaceTabsState>["c
 }
 
 function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState> | null | undefined): LocalWorkspaceTabsState {
+  const workspaceTabs = normalizeWorkspaceTabs(input?.workspaceTabs)
+  const isMainWorkspaceTabVisible = input?.isMainWorkspaceTabVisible !== false
+  const activeCandidate =
+    typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
+      ? input.activeWorkspaceTabId.trim()
+      : MAIN_WORKSPACE_TAB_ID
+  const firstWorkspaceTabId =
+    Object.values(workspaceTabs).sort((left, right) => {
+      const leftOrder = typeof left.orderIndex === "number" ? left.orderIndex : Number.POSITIVE_INFINITY
+      const rightOrder = typeof right.orderIndex === "number" ? right.orderIndex : Number.POSITIVE_INFINITY
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder
+      return left.createdAt.localeCompare(right.createdAt)
+    })[0]?.id ?? null
+  const hasActiveCandidate =
+    activeCandidate === MAIN_WORKSPACE_TAB_ID ? isMainWorkspaceTabVisible : Boolean(workspaceTabs[activeCandidate])
+
   return {
-    workspaceTabs: normalizeWorkspaceTabs(input?.workspaceTabs),
-    activeWorkspaceTabId:
-      typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
-        ? input.activeWorkspaceTabId.trim()
-        : MAIN_WORKSPACE_TAB_ID,
+    workspaceTabs,
+    activeWorkspaceTabId: hasActiveCandidate
+      ? activeCandidate
+      : isMainWorkspaceTabVisible
+        ? MAIN_WORKSPACE_TAB_ID
+        : firstWorkspaceTabId ?? MAIN_WORKSPACE_TAB_ID,
     customSubjects: normalizeLocalCustomSubjects(input?.customSubjects),
+    isMainWorkspaceTabVisible,
   }
 }
 

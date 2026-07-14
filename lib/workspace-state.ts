@@ -11,6 +11,7 @@ function createEmptyWorkspaceState(): WorkspaceState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    isMainWorkspaceTabVisible: true,
   }
 }
 
@@ -60,6 +61,8 @@ function normalizeCustomSubjects(input: Partial<WorkspaceState>["customSubjects"
 }
 
 function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefined): WorkspaceState {
+  const isMainWorkspaceTabVisible = input?.isMainWorkspaceTabVisible !== false
+
   return {
     workspaceTabs: input?.workspaceTabs && typeof input.workspaceTabs === "object" ? input.workspaceTabs : {},
     activeWorkspaceTabId:
@@ -67,6 +70,7 @@ function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefin
         ? input.activeWorkspaceTabId.trim()
         : MAIN_WORKSPACE_TAB_ID,
     customSubjects: normalizeCustomSubjects(input?.customSubjects),
+    isMainWorkspaceTabVisible,
   }
 }
 
@@ -74,7 +78,8 @@ function hasWorkspaceStateContent(state: WorkspaceState) {
   return (
     state.activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID ||
     Object.keys(state.workspaceTabs).length > 0 ||
-    Object.keys(state.customSubjects).length > 0
+    Object.keys(state.customSubjects).length > 0 ||
+    !state.isMainWorkspaceTabVisible
   )
 }
 

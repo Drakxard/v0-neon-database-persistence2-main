@@ -56,6 +56,7 @@ export type WorkspaceState = {
   workspaceTabs: Record<string, WorkspaceTabState>
   activeWorkspaceTabId: string
   customSubjects: Record<string, CustomSubjectState>
+  isMainWorkspaceTabVisible: boolean
 }
 
 const LOCAL_STATE_DIRECTORY = path.join(process.cwd(), ".local-data")
