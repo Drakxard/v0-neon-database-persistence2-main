@@ -2214,7 +2214,6 @@
     if (event.data.type === "viewerWorkspaceMode" && event.data.mode === "local") {
       state.workspaceMode = "local";
       refreshSyncButtons();
-      showLoadingOverlay("Cargando PDF local...");
       return;
     }
 
@@ -2412,7 +2411,6 @@
     state.app = app;
     state.query = parseQuery();
     ensureUi();
-    showLoadingOverlay(isLocalWorkspaceMode() ? "Cargando PDF local..." : "Cargando PDF...");
     bindSyncButtons();
     refreshLayers();
     updateDraftOverlay();
