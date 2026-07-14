@@ -1,6 +1,7 @@
 import { downloadR2Object, uploadR2Object } from "@/lib/r2"
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { readLocalState, updateLocalState, type WorkspaceState } from "@/lib/local-state-store"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 
 const WORKSPACE_STATE_PREFIX = "manifests/workspace/"
 const MAIN_WORKSPACE_TAB_ID = "main"
@@ -124,6 +125,10 @@ function canUseRemoteWorkspaceState() {
 export async function readWorkspaceStateForUser(email: string) {
   const normalizedEmail = email.trim().toLowerCase() || "local@app.local"
 
+  if (isLocalStorageMode()) {
+    return createEmptyWorkspaceState()
+  }
+
   if (canUseRemoteWorkspaceState()) {
     try {
       const remoteState = await readRemoteWorkspaceState(normalizedEmail)
@@ -144,6 +149,10 @@ export async function readWorkspaceStateForUser(email: string) {
 export async function writeWorkspaceStateForUser(email: string, state: WorkspaceState) {
   const normalizedEmail = email.trim().toLowerCase() || "local@app.local"
   const normalizedState = normalizeWorkspaceState(state)
+
+  if (isLocalStorageMode()) {
+    return normalizeWorkspaceState(normalizedState)
+  }
 
   if (canUseRemoteWorkspaceState()) {
     try {

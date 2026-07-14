@@ -576,6 +576,7 @@ function loadWorkspaceTabsState(): WorkspaceTabsState {
 
 function saveWorkspaceTabsState(state: WorkspaceTabsState) {
   if (typeof window === "undefined") return
+  if (LOCAL_STORAGE_MODE) return
 
   try {
     window.localStorage.setItem(WORKSPACE_TABS_STORAGE_KEY, JSON.stringify(state))
