@@ -13,7 +13,7 @@ import type {
   SubjectShortcutKey,
   SubjectShortcuts,
 } from "@/lib/study-types"
-import { loadWorkspaceHandle, queryWorkspacePermission, requestWorkspacePermission } from "@/lib/local-workspace-client"
+import { loadWorkspaceHandle, queryWorkspacePermission } from "@/lib/local-workspace-client"
 import { SUBJECTS } from "@/lib/subjects"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
@@ -210,10 +210,7 @@ async function ensureWorkspaceRootHandle() {
     throw new Error("No hay una carpeta local seleccionada.")
   }
 
-  let permission = await queryWorkspacePermission(handle, "readwrite")
-  if (permission !== "granted") {
-    permission = await requestWorkspacePermission(handle, "readwrite")
-  }
+  const permission = await queryWorkspacePermission(handle, "readwrite")
   if (permission !== "granted") {
     throw new Error("No hay permiso de lectura/escritura para la carpeta local.")
   }
@@ -474,7 +471,7 @@ export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsR
   }
 }
 
-export async function saveLocalWorkspaceTabsState(state: LocalWorkspaceTabsState) {
+export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceTabsState>) {
   const normalizedState = normalizeLocalWorkspaceTabsState(state)
   await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
   return normalizedState

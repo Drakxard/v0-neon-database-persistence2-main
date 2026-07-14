@@ -25,18 +25,22 @@ import {
   getWorkspaceFile,
   listLocalSubjectDayEntries,
   listLocalSubjectDayMaterials,
+  readLocalWorkspaceTabsState,
   saveLocalAiPrompt,
   saveLocalDailySession,
   saveLocalEntryAudioPosition,
   saveLocalEntryLink,
   saveLocalSubjectCompletion,
   saveLocalSubjectShortcut,
+  saveLocalWorkspaceTabsState,
   syncLocalCronogramaPdf,
   syncLocalMaterialPdf,
   updateLocalEntry,
   updateLocalMaterial,
   uploadWorkspaceBlobFromFormData,
+  type LocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
+import { SUBJECT_IDS } from "@/lib/subjects"
 
 function jsonResponse(payload: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(payload), {
@@ -68,6 +72,25 @@ async function handleLocalApiRequest(request: Request) {
   const url = new URL(request.url)
   const pathSegments = parsePathname(url.pathname)
   const method = request.method.toUpperCase()
+
+  if (matchesPath(pathSegments, ["api", "auth", "session"]) && method === "GET") {
+    return jsonResponse({
+      email: "local@app.local",
+      isAdmin: true,
+      allowedSubjectIds: SUBJECT_IDS,
+    })
+  }
+
+  if (matchesPath(pathSegments, ["api", "workspace-state"])) {
+    if (method === "GET") {
+      const result = await readLocalWorkspaceTabsState()
+      return jsonResponse(result.state)
+    }
+    if (method === "PUT") {
+      const body = await parseRequestJson<Partial<LocalWorkspaceTabsState>>(request)
+      return jsonResponse(await saveLocalWorkspaceTabsState(body))
+    }
+  }
 
   if (matchesPath(pathSegments, ["api", "ai-prompt"])) {
     if (method === "GET") {
@@ -534,7 +557,7 @@ export function LocalFetchInterceptor() {
         return errorResponse(message, 500)
       }
 
-      return originalFetch(input, init)
+      return errorResponse(`Endpoint ${url.pathname} deshabilitado en modo local.`, 501)
     }
 
     return () => {
