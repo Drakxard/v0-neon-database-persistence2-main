@@ -30,14 +30,8 @@ function getBucketName() {
   return requireEnv("R2_BUCKET_NAME")
 }
 
-function assertR2Enabled(operation: string) {
+function assertR2Enabled(_operation: string) {
   if (isLocalStorageMode()) {
-    console.info("[data-source]", {
-      source: "r2",
-      status: "blocked",
-      operation,
-      reason: "local-storage-mode",
-    })
     throw new Error("R2 deshabilitado en modo local.")
   }
 }

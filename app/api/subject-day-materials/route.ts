@@ -43,11 +43,6 @@ function parseSessionDate(sessionDate: string) {
 export async function GET(request: Request) {
   try {
     if (isLocalStorageMode()) {
-      console.info("[data-source]", {
-        endpoint: "/api/subject-day-materials",
-        source: "blocked-server-api",
-        reason: "local-storage-mode",
-      })
       return blockedLocalApi("/api/subject-day-materials")
     }
 

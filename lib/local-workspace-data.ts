@@ -144,12 +144,7 @@ function nowIso() {
   return new Date().toISOString()
 }
 
-function logWorkspaceDataSource(event: Record<string, unknown>) {
-  console.info("[data-source]", {
-    source: "workspace-folder",
-    ...event,
-  })
-}
+function logWorkspaceDataSource(_event: Record<string, unknown>) {}
 
 function getDisplayTitle(entry: Pick<SubjectDayEntry, "custom_title" | "order_index">) {
   const customTitle = entry.custom_title?.trim()

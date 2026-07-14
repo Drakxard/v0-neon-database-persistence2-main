@@ -468,7 +468,7 @@ function getMainWorkspaceTab(): WorkspaceTab {
     name: "Inicio",
     color: "#111827",
     createdAt: new Date(0).toISOString(),
-    subjectIds: SUBJECTS.map((subject) => subject.id),
+    subjectIds: LOCAL_STORAGE_MODE ? [] : SUBJECTS.map((subject) => subject.id),
   }
 }
 
@@ -1186,7 +1186,13 @@ export function SubjectWheel({
     [activeWorkspaceTabId, workspaceTabList]
   )
   const visibleSubjects = useMemo<Subject[]>(() => {
-    if (activeWorkspaceTab.id === MAIN_WORKSPACE_TAB_ID) return builtInVisibleSubjects
+    if (activeWorkspaceTab.id === MAIN_WORKSPACE_TAB_ID) {
+      if (!LOCAL_STORAGE_MODE) return builtInVisibleSubjects
+
+      return Object.values(customSubjects)
+        .filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    }
 
     return activeWorkspaceTab.subjectIds
       .map((subjectId) => customSubjects[subjectId])
@@ -1371,7 +1377,7 @@ export function SubjectWheel({
 
   const saveCustomSubject = useCallback(() => {
     const name = customSubjectNameDraft.trim()
-    if (!name || activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return
+    if (!name || (!LOCAL_STORAGE_MODE && activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID)) return
 
     if (editingCustomSubjectId) {
       const existingSubject = customSubjects[editingCustomSubjectId]
@@ -1412,6 +1418,8 @@ export function SubjectWheel({
       [id]: nextSubject,
     }))
     setWorkspaceTabs((previous) => {
+      if (activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return previous
+
       const currentTab = previous[activeWorkspaceTabId]
       if (!currentTab) return previous
 
@@ -2284,7 +2292,10 @@ export function SubjectWheel({
           }
         }
 
-        if ((e.key === "+" || e.code === "NumpadAdd") && activeWorkspaceTab.id !== MAIN_WORKSPACE_TAB_ID) {
+        if (
+          (e.key === "+" || e.code === "NumpadAdd") &&
+          (LOCAL_STORAGE_MODE || activeWorkspaceTab.id !== MAIN_WORKSPACE_TAB_ID)
+        ) {
           e.preventDefault()
           resetCustomSubjectDraft()
           setIsCreateCustomSubjectOpen(true)

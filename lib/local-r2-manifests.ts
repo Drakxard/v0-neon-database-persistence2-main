@@ -94,14 +94,8 @@ const MATERIAL_MANIFEST_PREFIX = "manifests/materials/"
 const ENTRY_MANIFEST_PREFIX = "manifests/entries/"
 const CRONOGRAMA_MANIFEST_KEY = "manifests/cronograma/current.json"
 
-function assertLegacyR2LocalManifestsDisabled(operation: string) {
+function assertLegacyR2LocalManifestsDisabled(_operation: string) {
   if (isLocalStorageMode()) {
-    console.info("[data-source]", {
-      source: "r2",
-      status: "blocked",
-      operation: `local-r2-manifests.${operation}`,
-      reason: "local-storage-mode",
-    })
     throw new Error("Manifiestos R2 deshabilitados en modo local. Usa la carpeta workspace del navegador.")
   }
 }
