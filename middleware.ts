@@ -11,12 +11,21 @@ export function middleware(request: NextRequest) {
         email: "local@app.local",
         isAdmin: true,
         allowedSubjectIds: SUBJECT_IDS,
+      }, {
+        headers: {
+          "x-data-source": "static-local-session",
+        },
       })
     }
 
     return NextResponse.json(
       { error: `Endpoint ${request.nextUrl.pathname} deshabilitado en modo local.` },
-      { status: 501 }
+      {
+        status: 501,
+        headers: {
+          "x-data-source": "blocked-server-api",
+        },
+      }
     )
   }
 

@@ -144,6 +144,13 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+function logWorkspaceDataSource(event: Record<string, unknown>) {
+  console.info("[data-source]", {
+    source: "workspace-folder",
+    ...event,
+  })
+}
+
 function getDisplayTitle(entry: Pick<SubjectDayEntry, "custom_title" | "order_index">) {
   const customTitle = entry.custom_title?.trim()
   return customTitle && customTitle.length > 0 ? customTitle : `Duda ${entry.order_index + 1}`
@@ -458,6 +465,12 @@ function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState
 export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
   const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
   if (!exists) {
+    logWorkspaceDataSource({
+      operation: "readLocalWorkspaceTabsState",
+      path: WORKSPACE_STATE_MANIFEST.join("/"),
+      exists: false,
+      count: 0,
+    })
     return {
       state: createEmptyWorkspaceTabsState(),
       exists: false,
@@ -465,8 +478,16 @@ export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsR
   }
 
   const state = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+  const normalizedState = normalizeLocalWorkspaceTabsState(state)
+  logWorkspaceDataSource({
+    operation: "readLocalWorkspaceTabsState",
+    path: WORKSPACE_STATE_MANIFEST.join("/"),
+    exists: true,
+    workspaceTabs: Object.keys(normalizedState.workspaceTabs).length,
+    customSubjects: Object.keys(normalizedState.customSubjects).length,
+  })
   return {
-    state: normalizeLocalWorkspaceTabsState(state),
+    state: normalizedState,
     exists: true,
   }
 }
@@ -474,6 +495,12 @@ export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsR
 export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceTabsState>) {
   const normalizedState = normalizeLocalWorkspaceTabsState(state)
   await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
+  logWorkspaceDataSource({
+    operation: "saveLocalWorkspaceTabsState",
+    path: WORKSPACE_STATE_MANIFEST.join("/"),
+    workspaceTabs: Object.keys(normalizedState.workspaceTabs).length,
+    customSubjects: Object.keys(normalizedState.customSubjects).length,
+  })
   return normalizedState
 }
 
@@ -909,6 +936,11 @@ export async function saveLocalSubjectShortcut(input: {
 
 export async function getLocalCronograma() {
   const manifest = await readCronogramaManifest()
+  logWorkspaceDataSource({
+    operation: "getLocalCronograma",
+    path: [MANIFESTS_DIR, "cronograma.json"].join("/"),
+    count: manifest ? 1 : 0,
+  })
   if (!manifest) return null
   return {
     fileName: manifest.fileName,
@@ -1066,11 +1098,21 @@ export async function listLocalSubjectDayMaterials(scope: {
   materialType?: SubjectDayMaterialType | null
 }) {
   const manifest = await readMaterialManifest(scope.subjectId, scope.weekNumber)
-  return manifest.materials.filter((material) => {
+  const materials = manifest.materials.filter((material) => {
     if (scope.sessionDate && material.session_date !== scope.sessionDate) return false
     if (scope.materialType && material.material_type !== scope.materialType) return false
     return true
   })
+  logWorkspaceDataSource({
+    operation: "listLocalSubjectDayMaterials",
+    path: materialManifestPath(scope.subjectId, scope.weekNumber).join("/"),
+    subjectId: scope.subjectId,
+    weekNumber: scope.weekNumber,
+    sessionDate: scope.sessionDate ?? null,
+    materialType: scope.materialType ?? null,
+    count: materials.length,
+  })
+  return materials
 }
 
 export async function updateLocalMaterial(
@@ -1289,7 +1331,16 @@ export async function listLocalSubjectDayEntries(scope: {
     )
   }
 
-  return sortEntries(entries).map(withEntryDefaults)
+  const sortedEntries = sortEntries(entries).map(withEntryDefaults)
+  logWorkspaceDataSource({
+    operation: "listLocalSubjectDayEntries",
+    subjectId: scope.subjectId,
+    weekNumber: scope.weekNumber ?? null,
+    sessionDate: scope.sessionDate ?? null,
+    materialId: scope.materialId ?? null,
+    count: sortedEntries.length,
+  })
+  return sortedEntries
 }
 
 export async function updateLocalEntry(

@@ -1,4 +1,5 @@
 import { getSubjectById, SUBJECTS } from "@/lib/subjects"
+import { isLocalStorageMode } from "@/lib/storage-mode"
 import {
   deleteR2Object,
   downloadR2Object,
@@ -93,6 +94,18 @@ const MATERIAL_MANIFEST_PREFIX = "manifests/materials/"
 const ENTRY_MANIFEST_PREFIX = "manifests/entries/"
 const CRONOGRAMA_MANIFEST_KEY = "manifests/cronograma/current.json"
 
+function assertLegacyR2LocalManifestsDisabled(operation: string) {
+  if (isLocalStorageMode()) {
+    console.info("[data-source]", {
+      source: "r2",
+      status: "blocked",
+      operation: `local-r2-manifests.${operation}`,
+      reason: "local-storage-mode",
+    })
+    throw new Error("Manifiestos R2 deshabilitados en modo local. Usa la carpeta workspace del navegador.")
+  }
+}
+
 function sanitizePathSegment(value: string) {
   return value
     .normalize("NFKD")
@@ -121,6 +134,7 @@ function nextLocalId() {
 }
 
 async function readJsonManifest<T>(objectKey: string) {
+  assertLegacyR2LocalManifestsDisabled("readJsonManifest")
   try {
     const payload = await downloadR2Object(objectKey)
     return JSON.parse(payload.buffer.toString("utf8")) as T
@@ -133,6 +147,7 @@ async function readJsonManifest<T>(objectKey: string) {
 }
 
 async function writeJsonManifest(objectKey: string, payload: unknown) {
+  assertLegacyR2LocalManifestsDisabled("writeJsonManifest")
   await uploadR2Object({
     objectKey,
     mimeType: "application/json",

@@ -8,6 +8,18 @@ import { getSubjectDayMaterialMetadataOrAutocleanup } from "@/lib/subject-day-ma
 
 export const runtime = "nodejs"
 
+function blockedLocalApi(path: string) {
+  return NextResponse.json(
+    { error: `Endpoint ${path} deshabilitado en modo local. Usa la carpeta workspace desde el navegador.` },
+    {
+      status: 501,
+      headers: {
+        "x-data-source": "blocked-server-api",
+      },
+    }
+  )
+}
+
 function isMissingSubjectDayMaterialsTable(error: unknown) {
   return Boolean(
     error &&
@@ -30,6 +42,15 @@ function parseSessionDate(sessionDate: string) {
 
 export async function GET(request: Request) {
   try {
+    if (isLocalStorageMode()) {
+      console.info("[data-source]", {
+        endpoint: "/api/subject-day-materials",
+        source: "blocked-server-api",
+        reason: "local-storage-mode",
+      })
+      return blockedLocalApi("/api/subject-day-materials")
+    }
+
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
 

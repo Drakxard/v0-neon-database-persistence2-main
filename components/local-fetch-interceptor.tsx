@@ -1,6 +1,6 @@
 "use client"
 
-import { useLayoutEffect } from "react"
+import { useLayoutEffect, useState } from "react"
 
 import {
   buildLocalContinuePayload,
@@ -47,6 +47,7 @@ function jsonResponse(payload: unknown, init?: ResponseInit) {
     status: init?.status ?? 200,
     headers: {
       "Content-Type": "application/json",
+      "x-data-source": "workspace-folder",
       ...(init?.headers ?? {}),
     },
   })
@@ -105,7 +106,7 @@ async function handleLocalApiRequest(request: Request) {
   if (matchesPath(pathSegments, ["api", "ai-chat"]) && method === "POST") {
     return new Response("La IA remota esta deshabilitada en modo local.", {
       status: 200,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      headers: { "Content-Type": "text/plain; charset=utf-8", "x-data-source": "static-local-disabled" },
     })
   }
 
@@ -535,8 +536,43 @@ async function handleLocalApiRequest(request: Request) {
 }
 
 export function LocalFetchInterceptor() {
+  const [lastDataSourceEvent, setLastDataSourceEvent] = useState<{
+    endpoint: string
+    method: string
+    source: string
+    status: number
+    count: number | null
+  } | null>(null)
+
   useLayoutEffect(() => {
     const originalFetch = window.fetch.bind(window)
+
+    const recordDataSource = (request: Request, response: Response) => {
+      const url = new URL(request.url)
+      const source = response.headers.get("x-data-source") || "workspace-folder"
+
+      void response
+        .clone()
+        .json()
+        .catch(() => null)
+        .then((payload) => {
+          const count = Array.isArray(payload)
+            ? payload.length
+            : payload && typeof payload === "object" && "items" in payload && Array.isArray(payload.items)
+              ? payload.items.length
+              : null
+          const event = {
+            endpoint: url.pathname,
+            method: request.method.toUpperCase(),
+            source,
+            status: response.status,
+            count,
+          }
+
+          console.info("[data-source]", event)
+          setLastDataSourceEvent(event)
+        })
+    }
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const request =
@@ -551,13 +587,20 @@ export function LocalFetchInterceptor() {
 
       try {
         const response = await handleLocalApiRequest(request)
-        if (response) return response
+        if (response) {
+          recordDataSource(request, response)
+          return response
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Local mode request failed."
-        return errorResponse(message, 500)
+        const response = errorResponse(message, 500)
+        recordDataSource(request, response)
+        return response
       }
 
-      return errorResponse(`Endpoint ${url.pathname} deshabilitado en modo local.`, 501)
+      const response = errorResponse(`Endpoint ${url.pathname} deshabilitado en modo local.`, 501)
+      recordDataSource(request, response)
+      return response
     }
 
     return () => {
@@ -565,5 +608,11 @@ export function LocalFetchInterceptor() {
     }
   }, [])
 
-  return null
+  return lastDataSourceEvent ? (
+    <div className="pointer-events-none fixed bottom-2 left-2 z-[120] max-w-[calc(100vw-1rem)] rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[10px] text-slate-700 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-950/90 dark:text-slate-200">
+      <span className="font-semibold">data:</span> {lastDataSourceEvent.source} {lastDataSourceEvent.method}{" "}
+      {lastDataSourceEvent.endpoint} {lastDataSourceEvent.status}
+      {lastDataSourceEvent.count != null ? ` (${lastDataSourceEvent.count})` : ""}
+    </div>
+  ) : null
 }
