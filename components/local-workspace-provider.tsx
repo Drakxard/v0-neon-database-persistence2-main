@@ -261,7 +261,7 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady ? children : null}
-      {enabled && bootState !== "ready" ? (
+      {enabled && bootState !== "ready" && bootState !== "checking" ? (
         <WorkspaceModal
           bootState={bootState}
           error={error}
