@@ -21,8 +21,8 @@ import { useSubjectEntries } from "@/hooks/use-subject-entries"
 import { toast } from "@/hooks/use-toast"
 import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
-import { fetchCronograma, uploadCronogramaPdf } from "@/lib/client/cronograma"
-import { buildCronogramaViewerHref, openCronogramaViewer } from "@/lib/client/cronograma-viewer"
+import { uploadCronogramaPdf } from "@/lib/client/cronograma"
+import { buildCronogramaViewerHref } from "@/lib/client/cronograma-viewer"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
@@ -195,10 +195,13 @@ type SynthesisSubjectState = {
 
 function buildMaterialViewerHref(materialId: number) {
   const searchParams = new URLSearchParams({
+    file: `/api/subject-day-materials/${materialId}/file`,
     materialId: String(materialId),
+    key: `subject-day-material-${materialId}`,
+    viewerMode: "standalone",
   })
 
-  return `/practice/viewer?${searchParams.toString()}`
+  return `/pdfjs/web/viewer.html?${searchParams.toString()}#locale=es-AR`
 }
 
 const VIEWER_RETURN_STORAGE_PREFIX = "subject-wheel:return:"
@@ -4341,7 +4344,7 @@ export function SubjectWheel({
     openShortcutDialog(shortcutKey, "create")
   }
 
-  const handleCronogramaButtonClick = useCallback(async () => {
+  const handleCronogramaButtonClick = useCallback(() => {
     if (isCronogramaLoading) return
 
     if (!cronogramaPdfName) {
@@ -4349,26 +4352,7 @@ export function SubjectWheel({
       return
     }
 
-    setIsCronogramaLoading(true)
-    try {
-      const remoteCronograma = await fetchCronograma()
-      if (!remoteCronograma) {
-        setCronogramaPdfName("")
-        cronogramaFileInputRef.current?.click()
-        return
-      }
-
-      await openCronogramaViewer(remoteCronograma.fileName)
-    } catch (error) {
-      console.error("Failed to open cronograma PDF:", error)
-      toast({
-        title: "No se pudo abrir Cronograma",
-        description: error instanceof Error ? error.message : "Ocurrio un problema al abrir el PDF guardado.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsCronogramaLoading(false)
-    }
+    window.open(buildCronogramaViewerHref(cronogramaPdfName), "_blank", "noopener,noreferrer")
   }, [cronogramaPdfName, isCronogramaLoading])
 
   const handleCronogramaFileChange = useCallback(
@@ -4392,7 +4376,7 @@ export function SubjectWheel({
       try {
         const savedCronograma = await uploadCronogramaPdf(file)
         setCronogramaPdfName(savedCronograma.fileName)
-        await openCronogramaViewer(savedCronograma.fileName)
+        window.open(buildCronogramaViewerHref(savedCronograma.fileName), "_blank", "noopener,noreferrer")
       } catch (error) {
         console.error("Failed to save cronograma PDF:", error)
         toast({
