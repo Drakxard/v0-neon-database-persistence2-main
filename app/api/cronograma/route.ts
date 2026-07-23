@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { requireAuthSession } from "@/lib/authz"
@@ -27,7 +28,7 @@ export async function GET() {
     }
 
     const email = normalizeCronogramaEmail(auth.session!.email)
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT email, file_name, drive_file_id, drive_mime_type, created_at, updated_at
       FROM user_cronograma_pdfs
       WHERE email = ${email}
@@ -43,7 +44,7 @@ export async function GET() {
       await getR2ObjectMetadata(row.drive_file_id)
     } catch (error) {
       if (isRemoteFileNotFoundError(error)) {
-        await sql`
+        await requireSql(sql)`
           DELETE FROM user_cronograma_pdfs
           WHERE email = ${email}
         `

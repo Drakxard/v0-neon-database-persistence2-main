@@ -1,6 +1,7 @@
 import crypto from "node:crypto"
 
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -104,7 +105,7 @@ function buildEmptyPreview(params: {
 }
 
 async function cleanupExpiredReplacementSessions(materialId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     DELETE FROM subject_day_material_replacement_sessions
     WHERE material_id = ${materialId} AND expires_at < NOW()
     RETURNING candidate_drive_file_id
@@ -122,7 +123,7 @@ async function cleanupExpiredReplacementSessions(materialId: number) {
 }
 
 async function getMaterialRow(materialId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT
       materials.id,
       materials.subject_id,
@@ -306,7 +307,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     })
 
     const replacementToken = crypto.randomUUID()
-    await sql`
+    await requireSql(sql)`
       INSERT INTO subject_day_material_replacement_sessions (
         token,
         material_id,

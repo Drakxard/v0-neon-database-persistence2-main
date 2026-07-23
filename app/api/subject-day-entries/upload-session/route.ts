@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { buildR2ObjectKey } from "@/lib/r2"
@@ -40,7 +41,7 @@ async function getNextOrderIndex(params: {
   const { subjectId, weekNumber, sessionDate, materialId } = params
 
   try {
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -56,7 +57,7 @@ async function getNextOrderIndex(params: {
   } catch (error) {
     if (!(error && typeof error === "object" && "code" in error && error.code === "42703")) throw error
 
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}

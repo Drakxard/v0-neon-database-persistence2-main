@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 
 import { getSubjectById, SUBJECTS } from "@/lib/subjects"
 import { getWeekDates, getWeekdayIndexFromDateKey, WEEKDAY_NAMES, formatDateKey } from "@/lib/subject-utils"
@@ -217,7 +218,7 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 }
 
 async function findMaterialByDriveFileId(driveFileId: string) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     FROM subject_day_materials
     WHERE drive_file_id = ${driveFileId}
@@ -293,7 +294,7 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
     return { inserted: 0, scanned: objectKeys.length, skipped: objectKeys.length, diagnostics }
   }
 
-  const existingRows = await sql`
+  const existingRows = await requireSql(sql)`
     SELECT drive_file_id
     FROM subject_day_materials
     WHERE drive_file_id = ANY(${candidates.map((candidate) => candidate.driveFileId)})
@@ -305,7 +306,7 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
   for (const candidate of candidates) {
     if (existingDriveFileIds.has(candidate.driveFileId)) continue
 
-    const [orderRow] = await sql`
+    const [orderRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_materials
       WHERE subject_id = ${candidate.subjectId}
@@ -316,7 +317,7 @@ export async function reconcileSubjectDayMaterialsFromR2(scope: ReconcileScope) 
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
     try {
-      await sql`
+      await requireSql(sql)`
         INSERT INTO subject_day_materials (
           subject_id,
           week_number,
@@ -378,14 +379,14 @@ export async function listSubjectDayMaterials(scope: ReconcileScope) {
 
   if (Number.isInteger(scope.weekNumber) && !scope.sessionDate) {
     if (scope.materialType) {
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND material_type = ${scope.materialType}
         ORDER BY session_date ASC, order_index ASC, id ASC
       ` as SubjectDayMaterialRow[]
     } else {
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!}
@@ -394,14 +395,14 @@ export async function listSubjectDayMaterials(scope: ReconcileScope) {
     }
   } else {
     if (scope.materialType) {
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!} AND material_type = ${scope.materialType}
         ORDER BY material_type ASC, order_index ASC, id ASC
       ` as SubjectDayMaterialRow[]
     } else {
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!}

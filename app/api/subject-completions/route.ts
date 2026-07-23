@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless'
+import { requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { readLocalState, updateLocalState } from "@/lib/local-state-store"
 import { isLocalStorageMode } from "@/lib/storage-mode"
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
       return Response.json(state.subjectCompletions[`${date}:${subjectId}`] ?? null)
     }
 
-    const result = await sql`
+    const result = await requireSql(sql)`
       SELECT id, date, subject_id, panorama, created_at, updated_at
       FROM subject_completions
       WHERE date = ${date} AND subject_id = ${subjectId}
@@ -78,7 +79,7 @@ export async function POST(request: Request) {
     }
 
     // Check if completion exists
-    const existing = await sql`
+    const existing = await requireSql(sql)`
       SELECT id FROM subject_completions
       WHERE date = ${date} AND subject_id = ${subjectId}
       LIMIT 1
@@ -87,7 +88,7 @@ export async function POST(request: Request) {
     let result
     if (existing.length > 0) {
       // Update
-      result = await sql`
+      result = await requireSql(sql)`
         UPDATE subject_completions
         SET panorama = ${panorama || ''},
             updated_at = NOW()
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
       `
     } else {
       // Insert
-      result = await sql`
+      result = await requireSql(sql)`
         INSERT INTO subject_completions (date, subject_id, panorama)
         VALUES (${date}, ${subjectId}, ${panorama || ''})
         RETURNING id, date, subject_id, panorama, created_at, updated_at
@@ -133,7 +134,7 @@ export async function DELETE(request: Request) {
       return Response.json({ success: true })
     }
 
-    await sql`
+    await requireSql(sql)`
       DELETE FROM subject_completions
       WHERE date = ${date} AND subject_id = ${subjectId}
     `

@@ -9,6 +9,7 @@ import { getSubjectById } from "@/lib/subjects"
 import type {
   GroqModelOption,
   SocraticReviewGeneratedTurn,
+  SocraticReviewQueueItem,
   SocraticReviewQueuePayload,
   SocraticReviewSettings,
 } from "@/lib/study-types"
@@ -53,7 +54,7 @@ export async function fetchSocraticReviewQueue(params: {
           answerTranscript: answer.transcript_text,
         }
       })
-      .filter(Boolean)
+      .filter((item): item is SocraticReviewQueueItem => item !== null)
 
     return {
       subjectId: params.subjectId,

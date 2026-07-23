@@ -7,6 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.test.mts",
+    "quality": "npm run typecheck && npm test && npm run build",
     "audio:legacy:check": "node scripts/migrate-legacy-audio-to-r2.js",
     "audio:legacy:migrate": "node scripts/migrate-legacy-audio-to-r2.js --migrate"
   },

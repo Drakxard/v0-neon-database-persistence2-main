@@ -5,6 +5,7 @@ import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
 import { getSubjectDayMaterialMetadataOrAutocleanup } from "@/lib/subject-day-materials-storage"
+import { listTagsForMaterials } from "@/lib/material-tags"
 
 export const runtime = "nodejs"
 
@@ -204,7 +205,19 @@ export async function GET(request: Request) {
       })
     }
 
-    return NextResponse.json(visibleRows)
+    let tagsByMaterialId: Record<string, Awaited<ReturnType<typeof listTagsForMaterials>>[string]> = {}
+    try {
+      tagsByMaterialId = await listTagsForMaterials(visibleRows.map((row) => row.id))
+    } catch (error) {
+      console.warn("GET /api/subject-day-materials could not attach tags:", error)
+    }
+
+    return NextResponse.json(
+      visibleRows.map((row) => ({
+        ...row,
+        tags: tagsByMaterialId[String(row.id)] ?? [],
+      }))
+    )
   } catch (error) {
     console.error("GET /api/subject-day-materials error:", error)
     if (isMissingSubjectDayMaterialsTable(error)) {

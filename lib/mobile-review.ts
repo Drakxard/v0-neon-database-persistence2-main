@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 
 import type { PracticeMaterialCoverageStatus, SubjectSixDayVector } from "@/lib/audio-coverage"
 import { getSubjectSixDayVector, listSubjectSixDayVectors } from "@/lib/audio-coverage"
@@ -268,7 +269,7 @@ export async function getOrCreateMobileReviewState(deviceId: string) {
     throw new Error("Missing deviceId")
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     INSERT INTO mobile_review_state (device_id)
     VALUES (${normalizedDeviceId})
     ON CONFLICT (device_id)
@@ -282,7 +283,7 @@ export async function getOrCreateMobileReviewState(deviceId: string) {
 export async function getActiveMobileReviewSlot(now = new Date()) {
   const weekdayIndex = getWeekdayIndexFromDateKey(getBuenosAiresDateKey(now))
   const timeKey = getBuenosAiresTimeKey(now)
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, weekday_index, start_time, end_time, enabled, priority
     FROM mobile_review_slots
     WHERE enabled = TRUE
@@ -297,7 +298,7 @@ export async function getActiveMobileReviewSlot(now = new Date()) {
 }
 
 export async function listMobileReviewSlots() {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, weekday_index, start_time, end_time, enabled, priority
     FROM mobile_review_slots
     ORDER BY weekday_index ASC, start_time ASC, priority DESC, id ASC
@@ -309,7 +310,7 @@ export async function listMobileReviewSlots() {
 export async function createMobileReviewSlot(input: Partial<MobileReviewSlotInput>) {
   const normalized = validateMobileReviewSlotInput(input)
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     INSERT INTO mobile_review_slots (
       subject_id,
       weekday_index,
@@ -334,7 +335,7 @@ export async function createMobileReviewSlot(input: Partial<MobileReviewSlotInpu
 export async function updateMobileReviewSlot(slotId: number, input: Partial<MobileReviewSlotInput>) {
   const normalized = validateMobileReviewSlotInput(input)
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     UPDATE mobile_review_slots
     SET
       subject_id = ${normalized.subjectId},
@@ -352,7 +353,7 @@ export async function updateMobileReviewSlot(slotId: number, input: Partial<Mobi
 }
 
 export async function deleteMobileReviewSlot(slotId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     DELETE FROM mobile_review_slots
     WHERE id = ${slotId}
     RETURNING id
@@ -367,7 +368,7 @@ async function selectPairCandidates(params: {
 }) {
   const { subjectId, weekNumber } = params
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT
       question.pair_id,
       question.subject_id,
@@ -492,7 +493,7 @@ async function updateMobileReviewStatePair(params: {
 }) {
   const { state, subjectId, weekNumber, pair } = params
 
-  const updatedRows = await sql`
+  const updatedRows = await requireSql(sql)`
     UPDATE mobile_review_state
     SET
       current_pair_id = ${pair?.pairId ?? null},
@@ -708,7 +709,7 @@ export function withSignedTaskAudioUrls(task: MobileReviewTask, authQuery: strin
 }
 
 export async function loadMobileReviewAudio(entryId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT drive_file_id, drive_file_name, drive_mime_type
     FROM subject_day_entries
     WHERE id = ${entryId}
@@ -744,7 +745,7 @@ export async function canAccessMobileReviewEntry(deviceId: string, entryId: numb
 }
 
 export async function logMobileReviewEvent(input: MobileReviewEventInput) {
-  await sql`
+  await requireSql(sql)`
     INSERT INTO mobile_review_events (
       device_id,
       subject_id,

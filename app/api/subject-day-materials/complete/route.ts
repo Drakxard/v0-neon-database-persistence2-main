@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { getDriveFileMetadata } from "@/lib/google-drive"
@@ -73,7 +74,7 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 }
 
 async function findMaterialByDriveFileId(driveFileId: string) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     FROM subject_day_materials
     WHERE drive_file_id = ${driveFileId}
@@ -168,7 +169,7 @@ export async function POST(request: Request) {
       return NextResponse.json(normalizeRows([existingRow])[0])
     }
 
-    const [orderRow] = await sql`
+    const [orderRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_materials
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
@@ -176,7 +177,7 @@ export async function POST(request: Request) {
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
     try {
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         INSERT INTO subject_day_materials (
           subject_id,
           week_number,

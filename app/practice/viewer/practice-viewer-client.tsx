@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
+import { MaterialTagPicker } from "@/components/material-tag-picker"
 import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
 import { createObjectUrlForWorkspaceFile, getLocalMaterialById } from "@/lib/local-workspace-data"
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
@@ -991,6 +992,13 @@ export function PracticeViewerClient({
 
   return (
     <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 text-white">
+      {resolvedMaterial ? (
+        <MaterialTagPicker
+          materialId={resolvedMaterial.id}
+          subjectId={resolvedMaterial.subjectId}
+          weekNumber={resolvedMaterial.weekNumber}
+        />
+      ) : null}
       <iframe
         ref={iframeRef}
         title={`Visor PDF: ${resolvedMaterial?.fileName || "fragmentador"}`}

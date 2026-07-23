@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { del } from "@vercel/blob"
 import { NextResponse } from "next/server"
 import { ensureQuestionSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -33,7 +34,7 @@ export async function GET(request: Request) {
     const id = toInt(searchParams.get("id"))
 
     if (id !== null) {
-      const [question] = await sql`SELECT * FROM preguntas_respuestas WHERE id = ${id}`
+      const [question] = await requireSql(sql)`SELECT * FROM preguntas_respuestas WHERE id = ${id}`
       if (!question) return NextResponse.json(null)
       const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(question.id_materia))
       if (forbidden) return forbidden
@@ -46,7 +47,7 @@ export async function GET(request: Request) {
     }
 
     if (idMateria !== null && semana !== null) {
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         SELECT * FROM preguntas_respuestas 
         WHERE id_materia = ${idMateria} AND semana = ${semana}
         ORDER BY created_at DESC
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
     }
 
     if (idMateria !== null) {
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         SELECT * FROM preguntas_respuestas 
         WHERE id_materia = ${idMateria}
         ORDER BY created_at DESC
@@ -64,7 +65,7 @@ export async function GET(request: Request) {
     }
 
     // Return all questions
-    const rows = await sql`SELECT * FROM preguntas_respuestas ORDER BY created_at DESC`
+    const rows = await requireSql(sql)`SELECT * FROM preguntas_respuestas ORDER BY created_at DESC`
     const visibleRows = rows.filter((row) => !ensureQuestionSubjectAccess(auth.session!, Number(row.id_materia)))
     return NextResponse.json(visibleRows)
   } catch (error) {
@@ -113,7 +114,7 @@ export async function POST(request: Request) {
 
     if (normalizedItems.length === 1) {
       const item = normalizedItems[0]
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link)
         VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana}, ${item.example_image_url ?? null}, ${item.example_link})
         RETURNING *
@@ -123,7 +124,7 @@ export async function POST(request: Request) {
 
     const inserted = []
     for (const item of normalizedItems) {
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         INSERT INTO preguntas_respuestas (pregunta, respuesta, estado, id_materia, semana, example_image_url, example_link)
         VALUES (${item.pregunta}, ${item.respuesta}, 'bien', ${id_materia}, ${semana}, ${item.example_image_url ?? null}, ${item.example_link})
         RETURNING *
@@ -150,7 +151,7 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 })
     }
 
-    const [existingQuestion] = await sql`SELECT id_materia FROM preguntas_respuestas WHERE id = ${id}`
+    const [existingQuestion] = await requireSql(sql)`SELECT id_materia FROM preguntas_respuestas WHERE id = ${id}`
     if (!existingQuestion) {
       return NextResponse.json(null)
     }
@@ -159,7 +160,7 @@ export async function PUT(request: Request) {
     if (forbidden) return forbidden
 
     // Build dynamic update
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       UPDATE preguntas_respuestas 
       SET 
         pregunta = COALESCE(${pregunta}, pregunta),
@@ -198,14 +199,14 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 })
     }
 
-    const existing = await sql`SELECT example_image_url, id_materia FROM preguntas_respuestas WHERE id = ${parsedId}`
+    const existing = await requireSql(sql)`SELECT example_image_url, id_materia FROM preguntas_respuestas WHERE id = ${parsedId}`
     if (!existing[0]) {
       return NextResponse.json({ error: "Question not found" }, { status: 404 })
     }
     const forbidden = ensureQuestionSubjectAccess(auth.session!, Number(existing[0]?.id_materia))
     if (forbidden) return forbidden
     await deleteStoredExampleImage(existing[0]?.example_image_url)
-    await sql`DELETE FROM preguntas_respuestas WHERE id = ${parsedId}`
+    await requireSql(sql)`DELETE FROM preguntas_respuestas WHERE id = ${parsedId}`
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error("Failed to delete question:", error)

@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless'
+import { requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { readLocalState, updateLocalState } from "@/lib/local-state-store"
 import { normalizeAllowedSubjectIds } from "@/lib/subjects"
@@ -24,7 +25,7 @@ export async function GET(request: Request) {
       return Response.json(state.dailySessions[String(date)] ?? null)
     }
 
-    const result = await sql`
+    const result = await requireSql(sql)`
       SELECT id, date, active_subject_ids, completed_subjects, show_all_subjects
       FROM daily_sessions
       WHERE date = ${date}
@@ -90,8 +91,10 @@ export async function POST(request: Request) {
     }
 
     const normalizedCompletedSubjects = Object.fromEntries(
-      Object.entries(completedSubjects || {}).filter(([subjectId]) => !ensureSubjectAccess(auth.session!, subjectId))
-    )
+      Object.entries(completedSubjects || {})
+        .filter(([subjectId, value]) => typeof value === "boolean" && !ensureSubjectAccess(auth.session!, subjectId))
+        .map(([subjectId, value]) => [subjectId, Boolean(value)])
+    ) as Record<string, boolean>
 
     if (isLocalStorageMode()) {
       const result = await updateLocalState((state) => {
@@ -111,7 +114,7 @@ export async function POST(request: Request) {
     }
 
     // Check if session exists
-    const existing = await sql`
+    const existing = await requireSql(sql)`
       SELECT id FROM daily_sessions
       WHERE date = ${date}
       LIMIT 1
@@ -120,7 +123,7 @@ export async function POST(request: Request) {
     let result
     if (existing.length > 0) {
       // Update
-      result = await sql`
+      result = await requireSql(sql)`
         UPDATE daily_sessions
         SET active_subject_ids = ${JSON.stringify(normalizedActiveSubjectIds)},
             completed_subjects = ${JSON.stringify(normalizedCompletedSubjects)},
@@ -131,7 +134,7 @@ export async function POST(request: Request) {
       `
     } else {
       // Insert
-      result = await sql`
+      result = await requireSql(sql)`
         INSERT INTO daily_sessions (date, active_subject_ids, completed_subjects, show_all_subjects)
         VALUES (${date}, ${JSON.stringify(normalizedActiveSubjectIds)}, ${JSON.stringify(normalizedCompletedSubjects)}, ${Boolean(showAllSubjects)})
         RETURNING id, date, active_subject_ids, completed_subjects, show_all_subjects

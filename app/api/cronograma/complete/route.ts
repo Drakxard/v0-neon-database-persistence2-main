@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { requireAuthSession } from "@/lib/authz"
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
       })
     }
 
-    const previousRows = await sql`
+    const previousRows = await requireSql(sql)`
       SELECT email, file_name, drive_file_id, drive_mime_type, created_at, updated_at
       FROM user_cronograma_pdfs
       WHERE email = ${email}
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
     ` as UserCronogramaRow[]
     const previousRow = previousRows[0] ?? null
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       INSERT INTO user_cronograma_pdfs (
         email,
         file_name,

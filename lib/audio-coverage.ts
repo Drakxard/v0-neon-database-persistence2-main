@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 
 import { getSubjectById } from "@/lib/subjects"
 import { getSynthesisTheoryWeekday } from "@/lib/synthesis-schedule"
@@ -165,7 +166,7 @@ function buildSubjectVector(params: {
   entries: SubjectDayEntryCoverageRow[]
   interactions: MobileInteractionCoverageRow[]
   now: Date
-}) {
+}): SubjectSixDayVector | null {
   const { subjectId, weekNumber, materials, entries, interactions, now } = params
   const subject = getSubjectById(subjectId)
   const todayKey = getBuenosAiresDateKey(now)
@@ -311,7 +312,7 @@ async function listMaterialsForCoverage(params: {
     return []
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, week_number, material_type, session_date, file_name, is_checkup_done, created_at
     FROM subject_day_materials
     WHERE material_type IN ('practice', 'theory')
@@ -332,7 +333,7 @@ async function listEntriesForCoverage(params: {
     return []
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, subject_id, week_number, session_date, subject_day_material_id, pair_id, updated_at
     FROM subject_day_entries
     WHERE session_date <= ${analysisDate}
@@ -353,7 +354,7 @@ async function listMobileInteractionsForCoverage(params: {
   }
 
   try {
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT subject_id, week_number, created_at, rating
       FROM mobile_review_events
       WHERE created_at <= ${analysisDate}::DATE + INTERVAL '1 day'
@@ -401,7 +402,7 @@ export async function listSubjectSixDayVectors(params: {
         now,
       })
     )
-    .filter((vector): vector is SubjectSixDayVector => Boolean(vector))
+    .filter((vector): vector is SubjectSixDayVector => vector !== null)
     .filter((vector) => includeInactive || vector.isActive)
     .sort((left, right) => {
       if (left.severity !== right.severity) {

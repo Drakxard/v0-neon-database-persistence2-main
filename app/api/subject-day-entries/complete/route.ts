@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { transcribeAudioWithGemini } from "@/lib/gemini"
@@ -96,7 +97,7 @@ async function getNextOrderIndex(params: {
   const { subjectId, weekNumber, sessionDate, materialId } = params
 
   try {
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -112,7 +113,7 @@ async function getNextOrderIndex(params: {
   } catch (error) {
     if (!isMissingColumn(error)) throw error
 
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -222,7 +223,10 @@ export async function POST(request: Request) {
         const downloadedFile = isR2ObjectKey(driveFile.id)
           ? await downloadR2Object(driveFile.id)
           : await downloadDriveFile(driveFile.id)
-        const transcription = await transcribeAudioWithGemini(downloadedFile.buffer, downloadedFile.mimeType || driveFile.mimeType)
+        const transcription = await transcribeAudioWithGemini({
+          audioBuffer: downloadedFile.buffer,
+          mimeType: downloadedFile.mimeType || driveFile.mimeType,
+        })
         if (transcription?.trim()) {
           transcriptText = transcription.trim()
         }
@@ -271,7 +275,7 @@ export async function POST(request: Request) {
         pair_role: "question" | "answer" | null
       }>
       try {
-        pairRows = await sql`
+        pairRows = await requireSql(sql)`
           SELECT id, subject_id, week_number, session_date, subject_day_material_id, drive_file_id, pair_role
           FROM subject_day_entries
           WHERE pair_id = ${pairId}
@@ -335,7 +339,7 @@ export async function POST(request: Request) {
     let rows: EntryRow[]
     try {
       if (pairId && pairRole) {
-        const pairRows = await sql`
+        const pairRows = await requireSql(sql)`
           SELECT id, drive_file_id, pair_role
           FROM subject_day_entries
           WHERE pair_id = ${pairId}
@@ -344,7 +348,7 @@ export async function POST(request: Request) {
 
         const existingRoleRow = pairRows.find((row) => row.pair_role === pairRole) ?? null
         if (existingRoleRow) {
-          rows = await sql`
+          rows = await requireSql(sql)`
             UPDATE subject_day_entries
             SET
               transcript_text = ${transcriptText},
@@ -369,7 +373,7 @@ export async function POST(request: Request) {
             }
           }
         } else {
-          rows = await sql`
+          rows = await requireSql(sql)`
             INSERT INTO subject_day_entries (
               subject_id,
               subject_day_material_id,
@@ -404,7 +408,7 @@ export async function POST(request: Request) {
           ` as EntryRow[]
         }
       } else {
-        rows = await sql`
+        rows = await requireSql(sql)`
           INSERT INTO subject_day_entries (
             subject_id,
             subject_day_material_id,
@@ -452,7 +456,7 @@ export async function POST(request: Request) {
 
       if (!isMissingColumn(error)) throw error
 
-      rows = await sql`
+      rows = await requireSql(sql)`
         INSERT INTO subject_day_entries (
           subject_id,
           week_number,

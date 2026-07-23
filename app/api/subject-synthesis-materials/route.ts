@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -101,7 +102,7 @@ function normalizeLegacySummary(
 
 async function selectEntries(subjectId: string, weekNumber: number) {
   try {
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
@@ -123,7 +124,7 @@ async function selectEntries(subjectId: string, weekNumber: number) {
       throw error
     }
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
@@ -168,7 +169,7 @@ async function selectVisibleMaterials(subjectId: string, weekNumber: number) {
 
 async function selectMaterialProgress(subjectId: string, weekNumber: number) {
   try {
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT sms.subject_day_material_id, sms.exercise_scope_text, sms.exercise_solved_count, sms.exercise_total_count, sms.updated_at
       FROM subject_material_synthesis AS sms
       INNER JOIN subject_day_materials AS materials
@@ -201,7 +202,7 @@ async function selectMaterialProgress(subjectId: string, weekNumber: number) {
 
 async function selectLegacySummary(subjectId: string, weekNumber: number) {
   try {
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT exercise_solved_count, exercise_total_count, exercise_skipped_text, updated_at
       FROM subject_synthesis_weeks
       WHERE subject_id = ${subjectId}
@@ -335,7 +336,7 @@ export async function PUT(request: Request) {
       exerciseTotalCount: number
     }) => item.subjectDayMaterialId)))
     if (uniqueMaterialIds.length > 0) {
-      const rows = await sql`
+      const rows = await requireSql(sql)`
         SELECT id
         FROM subject_day_materials
         WHERE subject_id = ${subjectId}
@@ -353,14 +354,14 @@ export async function PUT(request: Request) {
       const isBlank = trimmedScopeText.length === 0 && item.exerciseSolvedCount === 0 && item.exerciseTotalCount === 0
 
       if (isBlank) {
-        await sql`
+        await requireSql(sql)`
           DELETE FROM subject_material_synthesis
           WHERE subject_day_material_id = ${item.subjectDayMaterialId}
         `
         continue
       }
 
-      await sql`
+      await requireSql(sql)`
         INSERT INTO subject_material_synthesis (
           subject_day_material_id,
           exercise_scope_text,

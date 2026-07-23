@@ -4,6 +4,7 @@ import { useLayoutEffect } from "react"
 
 import {
   buildLocalContinuePayload,
+  assignLocalTagToMaterial,
   completeLocalAudioEntryUpload,
   completeLocalCronogramaUpload,
   completeLocalMaterialUpload,
@@ -11,6 +12,8 @@ import {
   createLocalEntryUploadSession,
   createLocalMaterialUploadSession,
   createLocalTextEntry,
+  createLocalMaterialTag,
+  deleteLocalMaterialTag,
   deleteLocalEntry,
   deleteLocalMaterial,
   deleteLocalSubjectCompletion,
@@ -25,6 +28,9 @@ import {
   getWorkspaceFile,
   listLocalSubjectDayEntries,
   listLocalSubjectDayMaterials,
+  listLocalMaterialTagWorkspace,
+  listLocalTagsForMaterial,
+  mergeLocalMaterialTags,
   readLocalWorkspaceTabsState,
   saveLocalAiPrompt,
   saveLocalDailySession,
@@ -37,6 +43,8 @@ import {
   syncLocalMaterialPdf,
   updateLocalEntry,
   updateLocalMaterial,
+  updateLocalMaterialTag,
+  unassignLocalTagFromMaterial,
   uploadWorkspaceBlobFromFormData,
   type LocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
@@ -112,6 +120,75 @@ async function handleLocalApiRequest(request: Request) {
 
   if (matchesPath(pathSegments, ["api", "groq", "models"]) && method === "GET") {
     return jsonResponse({ models: [] })
+  }
+
+  if (matchesPath(pathSegments, ["api", "tags"])) {
+    if (method === "GET") {
+      const subjectId = String(url.searchParams.get("subjectId") || "").trim()
+      const weekNumber = Number.parseInt(String(url.searchParams.get("weekNumber") || ""), 10)
+      const sessionDate = String(url.searchParams.get("sessionDate") || "").trim()
+      if (!subjectId) return errorResponse("Missing subjectId")
+      return jsonResponse(
+        await listLocalMaterialTagWorkspace({
+          subjectId,
+          weekNumber: Number.isInteger(weekNumber) ? weekNumber : undefined,
+          sessionDate: sessionDate || undefined,
+        })
+      )
+    }
+    if (method === "POST") {
+      const body = await parseRequestJson<{ name?: string; color?: string; parentId?: number | null }>(request)
+      try {
+        return jsonResponse(
+          await createLocalMaterialTag({
+            name: String(body?.name || ""),
+            color: typeof body?.color === "string" ? body.color : undefined,
+            parentId: body?.parentId == null ? null : Number(body.parentId),
+          })
+        )
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : "No se pudo crear el tag.")
+      }
+    }
+  }
+
+  if (pathSegments[0] === "api" && pathSegments[1] === "tags" && pathSegments.length >= 3) {
+    const tagId = Number.parseInt(pathSegments[2] || "", 10)
+    if (!Number.isInteger(tagId)) return errorResponse("Invalid tag id")
+    if (pathSegments.length === 3 && method === "PATCH") {
+      const body = await parseRequestJson<{ name?: string; color?: string; parentId?: number | null }>(request)
+      try {
+        const tag = await updateLocalMaterialTag(tagId, {
+          name: typeof body?.name === "string" ? body.name : undefined,
+          color: typeof body?.color === "string" ? body.color : undefined,
+          parentId: "parentId" in body ? (body.parentId == null ? null : Number(body.parentId)) : undefined,
+        })
+        return tag ? jsonResponse(tag) : errorResponse("Tag not found", 404)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo actualizar el tag."
+        return errorResponse(message, message.includes("existe") || message.includes("ciclo") ? 409 : 400)
+      }
+    }
+    if (pathSegments.length === 3 && method === "DELETE") {
+      const result = await deleteLocalMaterialTag(tagId, url.searchParams.get("force") === "1")
+      if (result.missing) return errorResponse("Tag not found", 404)
+      if (!result.deleted) {
+        return jsonResponse(
+          { error: "El tag tiene materiales asignados.", usageCount: result.usageCount },
+          { status: 409 }
+        )
+      }
+      return jsonResponse(result)
+    }
+    if (pathSegments[3] === "merge" && method === "POST") {
+      const body = await parseRequestJson<{ targetTagId?: number }>(request)
+      try {
+        const tag = await mergeLocalMaterialTags(tagId, Number(body?.targetTagId))
+        return tag ? jsonResponse(tag) : errorResponse("Tag not found", 404)
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : "No se pudieron fusionar los tags.", 409)
+      }
+    }
   }
 
   if (matchesPath(pathSegments, ["api", "sessions"])) {
@@ -356,6 +433,24 @@ async function handleLocalApiRequest(request: Request) {
           "Content-Disposition": `inline; filename="${material.file_name}"`,
         },
       })
+    }
+
+    if (pathSegments[3] === "tags") {
+      if (pathSegments.length === 4 && method === "GET") {
+        const material = await getLocalMaterialById(materialId)
+        return material ? jsonResponse(await listLocalTagsForMaterial(materialId)) : errorResponse("Material not found", 404)
+      }
+      if (pathSegments.length === 5) {
+        const tagId = Number.parseInt(pathSegments[4] || "", 10)
+        if (!Number.isInteger(tagId)) return errorResponse("Invalid tag id")
+        if (method === "PUT") {
+          const tags = await assignLocalTagToMaterial(materialId, tagId)
+          return tags ? jsonResponse(tags) : errorResponse("Tag or material not found", 404)
+        }
+        if (method === "DELETE") {
+          return jsonResponse(await unassignLocalTagFromMaterial(materialId, tagId))
+        }
+      }
     }
 
     if (pathSegments[3] === "audio-positions") {

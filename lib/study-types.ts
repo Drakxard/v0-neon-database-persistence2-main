@@ -31,6 +31,22 @@ export type SubjectDayEntry = {
 
 export type SubjectDayMaterialType = "theory" | "practice"
 
+export type StudyTag = {
+  id: number
+  name: string
+  normalizedName: string
+  color: string
+  parentId: number | null
+  usageCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type MaterialTagWorkspace = {
+  tags: StudyTag[]
+  assignments: Record<string, number[]>
+}
+
 export type SubjectDayMaterial = {
   id: number
   subject_id: string
@@ -44,6 +60,7 @@ export type SubjectDayMaterial = {
   drive_mime_type: string
   drive_web_view_link: string
   is_checkup_done: boolean
+  tags?: StudyTag[]
   created_at: string
   updated_at: string
 }

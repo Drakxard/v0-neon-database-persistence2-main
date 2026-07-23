@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
@@ -154,7 +155,7 @@ export async function GET(request: Request) {
       })
     }
 
-    const materialRows = await sql`
+    const materialRows = await requireSql(sql)`
       SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       FROM subject_day_materials
       WHERE subject_id = ${subjectId}
@@ -167,7 +168,7 @@ export async function GET(request: Request) {
 
     let previousFeaturedEntry: EntryRow | null = null
     try {
-      const previousEntryRows = await sql`
+      const previousEntryRows = await requireSql(sql)`
         SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId}

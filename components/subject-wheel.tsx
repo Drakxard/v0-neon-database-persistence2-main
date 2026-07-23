@@ -5,6 +5,7 @@ import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, C
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
+import { MaterialTagBar } from "@/components/material-tag-bar"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -16,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { useDailySessionState } from "@/hooks/use-daily-session-state"
 import { useMaterialUploads } from "@/hooks/use-material-uploads"
+import { useMaterialTags } from "@/hooks/use-material-tags"
 import { useMobileReviewOverview } from "@/hooks/use-mobile-review-overview"
 import { useSubjectEntries } from "@/hooks/use-subject-entries"
 import { toast } from "@/hooks/use-toast"
@@ -37,6 +39,7 @@ import {
 } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { cn } from "@/lib/utils"
+import { materialMatchesTagFilter } from "@/lib/tag-utils"
 import {
   fetchGroqModels,
   fetchSocraticReviewQueue,
@@ -196,21 +199,7 @@ type SynthesisSubjectState = {
 }
 
 function buildMaterialViewerHref(material: SubjectDayMaterial) {
-  const isLocalWorkspaceMaterial = LOCAL_STORAGE_MODE && isWorkspaceFileId(material.drive_file_id)
-  const searchParams = new URLSearchParams({
-    file: isLocalWorkspaceMaterial ? "" : `/api/subject-day-materials/${material.id}/file`,
-    fileName: material.file_name,
-    materialId: String(material.id),
-    key: `subject-day-material-${material.id}`,
-    viewerMode: "standalone",
-  })
-
-  if (isLocalWorkspaceMaterial) {
-    searchParams.set("localWorkspace", "1")
-    searchParams.set("workspaceFileId", material.drive_file_id)
-  }
-
-  return `/pdfjs/web/viewer.html?${searchParams.toString()}#locale=es-AR`
+  return `/practice/viewer?${new URLSearchParams({ materialId: String(material.id) }).toString()}`
 }
 
 const VIEWER_RETURN_STORAGE_PREFIX = "subject-wheel:return:"
@@ -1961,6 +1950,10 @@ export function SubjectWheel({
     saveSubjectShortcut: persistSubjectShortcut,
   } = useSubjectEntries()
   const { isUploadingMaterialType, uploadMaterials } = useMaterialUploads()
+  const materialTags = useMaterialTags({
+    subjectId: isDialogOpen ? currentSubject?.id : undefined,
+    weekNumber: isDialogOpen ? dialogSelectedWeekNumber : undefined,
+  })
   const currentSubjectOverviewLoad = useMobileReviewOverview({
     enabled: Boolean(isDialogOpen && currentSubject),
     weekNumber: dialogSelectedWeekNumber,
@@ -6066,6 +6059,14 @@ export function SubjectWheel({
   const renderMaterialManagerSection = (mode: ContinueMode) => {
     const isTheorySection = mode === "theory"
     const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
+    const filteredMaterialsForMode = materialsForMode.filter((material) => {
+      if ("is_pending_upload" in material) return true
+      return materialMatchesTagFilter(
+        materialTags.workspace.assignments[String(material.id)] ?? [],
+        materialTags.selectedTagIds,
+        materialTags.filterMode
+      )
+    })
     const title = isTheorySection ? "Teoria" : "Practica"
     const isDropActive = dragOverMaterialType === mode
     const emptyLabel = isWeeklyExercisesScope
@@ -6090,9 +6091,21 @@ export function SubjectWheel({
         </div>
 
         <div className="space-y-2">
-          {materialsForMode.length > 0 ? (
-            materialsForMode.map((material) => (
-              <div key={material.id} className="rounded-xl border border-border bg-card px-3 py-3">
+          {filteredMaterialsForMode.length > 0 ? (
+            filteredMaterialsForMode.map((material) => (
+              <div
+                key={material.id}
+                draggable={!("is_pending_upload" in material)}
+                onDragStart={(event) => {
+                  if ("is_pending_upload" in material) {
+                    event.preventDefault()
+                    return
+                  }
+                  event.dataTransfer.setData("application/x-study-material-id", String(material.id))
+                  event.dataTransfer.effectAllowed = "link"
+                }}
+                className="rounded-xl border border-border bg-card px-3 py-3"
+              >
                 {"is_pending_upload" in material ? (
                   <div className="space-y-2">
                     <span className="block min-w-0 truncate text-sm text-muted-foreground">{material.file_name}</span>
@@ -6117,6 +6130,22 @@ export function SubjectWheel({
                       >
                         {material.file_name}
                       </a>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {materialTags.workspace.tags
+                          .filter((tag) => (materialTags.workspace.assignments[String(material.id)] ?? []).includes(tag.id))
+                          .map((tag) => (
+                            <button
+                              key={tag.id}
+                              type="button"
+                              onClick={() => void materialTags.unassignTag(material.id, tag.id)}
+                              className="rounded-full border px-2 py-0.5 text-[0.68rem] text-muted-foreground hover:text-foreground"
+                              style={{ borderColor: tag.color }}
+                              title={`Quitar #${tag.name}`}
+                            >
+                              #{tag.name} ×
+                            </button>
+                          ))}
+                      </div>
                     </div>
                     <Button
                       type="button"
@@ -6135,7 +6164,9 @@ export function SubjectWheel({
             ))
           ) : (
             <p className="rounded-xl border border-dashed border-border bg-card px-3 py-4 text-sm text-muted-foreground">
-              {emptyLabel}
+              {materialsForMode.length > 0 && materialTags.selectedTagIds.length > 0
+                ? "No hay materiales que coincidan con los tags seleccionados."
+                : emptyLabel}
             </p>
           )}
         </div>
@@ -7372,6 +7403,12 @@ export function SubjectWheel({
             <div className="flex-1 overflow-y-auto py-4 sm:py-6 sm:pl-14 sm:pr-14">
               {entriesError ? (
                 <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
+              ) : null}
+
+              {currentSubject ? (
+                <div className="mb-4">
+                  <MaterialTagBar controller={materialTags} />
+                </div>
               ) : null}
 
               {isSubjectDayRefreshing ? (

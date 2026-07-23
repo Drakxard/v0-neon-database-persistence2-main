@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { findLocalMaterialById, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
 import { isLocalStorageMode } from "@/lib/storage-mode"
@@ -104,7 +105,7 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json(positions)
     }
 
-    const scopeRows = await sql`
+    const scopeRows = await requireSql(sql)`
       SELECT subject_id
       FROM subject_day_materials
       WHERE id = ${materialId}
@@ -119,7 +120,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
     let rows: PositionRow[]
     try {
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT
           positions.entry_id,
           positions.subject_day_material_id,
@@ -141,7 +142,7 @@ export async function GET(_request: Request, context: RouteContext) {
     } catch (error) {
       if (!isMissingPairColumns(error)) throw error
 
-      rows = await sql`
+      rows = await requireSql(sql)`
         SELECT
           positions.entry_id,
           positions.subject_day_material_id,
@@ -247,7 +248,7 @@ export async function POST(request: Request, context: RouteContext) {
       })
     }
 
-    const scopeRows = await sql`
+    const scopeRows = await requireSql(sql)`
       SELECT subject_id
       FROM subject_day_materials
       WHERE id = ${materialId}
@@ -274,7 +275,7 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Invalid entry position coordinates" }, { status: 400 })
     }
 
-    const entryRows = await sql`
+    const entryRows = await requireSql(sql)`
       SELECT id
       FROM subject_day_entries
       WHERE id = ${entryId}
@@ -286,7 +287,7 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Entry does not belong to this material" }, { status: 400 })
     }
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       INSERT INTO subject_day_entry_pdf_positions (
         entry_id,
         subject_day_material_id,
@@ -313,7 +314,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     let joinedRows: PositionRow[]
     try {
-      joinedRows = await sql`
+      joinedRows = await requireSql(sql)`
         SELECT
           positions.entry_id,
           positions.subject_day_material_id,
@@ -335,7 +336,7 @@ export async function POST(request: Request, context: RouteContext) {
     } catch (error) {
       if (!isMissingPairColumns(error)) throw error
 
-      joinedRows = await sql`
+      joinedRows = await requireSql(sql)`
         SELECT
           positions.entry_id,
           positions.subject_day_material_id,

@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -50,7 +51,7 @@ function normalizeShortcutResponse(subjectId: string, rows: ShortcutRow[]) {
 }
 
 async function selectSubjectShortcuts(subjectId: string) {
-  return await sql`
+  return await requireSql(sql)`
     SELECT subject_id, shortcut_key, url
     FROM subject_shortcuts
     WHERE subject_id = ${subjectId}
@@ -147,7 +148,7 @@ export async function PUT(request: Request) {
       return NextResponse.json(nextShortcut)
     }
 
-    await sql`
+    await requireSql(sql)`
       INSERT INTO subject_shortcuts (subject_id, shortcut_key, url)
       VALUES (${subjectId}, ${shortcutKey}, ${normalizedUrl})
       ON CONFLICT (subject_id, shortcut_key)

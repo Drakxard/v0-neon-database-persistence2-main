@@ -1,6 +1,7 @@
 "use server"
 
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { del, put } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 
@@ -33,7 +34,7 @@ export async function saveQuestionExampleAction(formData: FormData): Promise<Sav
     return { ok: false, error: "Pregunta invalida." }
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, example_image_url, example_link
     FROM preguntas_respuestas
     WHERE id = ${questionId}
@@ -75,7 +76,7 @@ export async function saveQuestionExampleAction(formData: FormData): Promise<Sav
     nextImageUrl = blob.url
   }
 
-  const updatedRows = await sql`
+  const updatedRows = await requireSql(sql)`
     UPDATE preguntas_respuestas
     SET
       example_image_url = ${nextImageUrl},
@@ -83,7 +84,7 @@ export async function saveQuestionExampleAction(formData: FormData): Promise<Sav
       updated_at = NOW()
     WHERE id = ${questionId}
     RETURNING id, example_image_url, example_link
-  `
+  ` as Array<{ id: number; example_image_url: string | null; example_link: string }>
 
   revalidatePath("/")
 

@@ -9,10 +9,18 @@ import type {
   SubjectDayEntryLink,
   SubjectDayMaterial,
   SubjectDayMaterialType,
+  MaterialTagWorkspace,
+  StudyTag,
   SubjectMaterialSynthesisRecord,
   SubjectShortcutKey,
   SubjectShortcuts,
 } from "@/lib/study-types"
+import {
+  normalizeTagColor,
+  normalizeTagDisplayName,
+  normalizeTagName,
+  wouldCreateTagCycle,
+} from "@/lib/tag-utils"
 import { loadWorkspaceHandle, queryWorkspacePermission } from "@/lib/local-workspace-client"
 import { SUBJECTS } from "@/lib/subjects"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
@@ -29,6 +37,12 @@ type EntryManifest = {
   subjectId: string
   weekNumber: number
   entries: SubjectDayEntry[]
+}
+
+type TagManifest = {
+  version: 1
+  tags: StudyTag[]
+  assignments: Record<string, number[]>
 }
 
 type SubjectCompletionRecord = {
@@ -109,6 +123,7 @@ const PRACTICE_DIR = "practica"
 const AUDIO_DIR = "audio"
 const ROOT_SUBDIRECTORIES = [CRONOGRAMA_DIR, THEORY_DIR, PRACTICE_DIR, AUDIO_DIR, MANIFESTS_DIR] as const
 const WORKSPACE_STATE_MANIFEST = [MANIFESTS_DIR, "workspace-state.json"]
+const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
 
 function sanitizePathSegment(value: string) {
@@ -630,6 +645,227 @@ async function writeMaterialManifest(subjectId: string, weekNumber: number, mate
   } satisfies MaterialManifest)
 }
 
+async function readTagManifest(): Promise<TagManifest> {
+  const payload = await readJsonFile<TagManifest | null>(TAGS_MANIFEST, null)
+  if (!payload) return { version: 1, tags: [], assignments: {} }
+
+  const assignments: Record<string, number[]> = {}
+  for (const [materialId, tagIds] of Object.entries(payload.assignments ?? {})) {
+    assignments[materialId] = Array.from(
+      new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter(Number.isInteger))
+    )
+  }
+  return {
+    version: 1,
+    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    assignments,
+  }
+}
+
+async function writeTagManifest(manifest: TagManifest) {
+  await writeJsonFile(TAGS_MANIFEST, manifest)
+}
+
+function withLocalTagUsageCounts(manifest: TagManifest) {
+  const counts = new Map<number, number>()
+  for (const tagIds of Object.values(manifest.assignments)) {
+    for (const tagId of new Set(tagIds)) {
+      counts.set(tagId, (counts.get(tagId) ?? 0) + 1)
+    }
+  }
+  return manifest.tags
+    .map((tag) => ({ ...tag, usageCount: counts.get(tag.id) ?? 0 }))
+    .sort((left, right) => left.name.localeCompare(right.name, "es"))
+}
+
+export async function listLocalMaterialTagWorkspace(scope: {
+  subjectId: string
+  weekNumber?: number
+  sessionDate?: string
+}): Promise<MaterialTagWorkspace> {
+  const manifest = await readTagManifest()
+  const visibleMaterialIds = new Set<number>()
+  if (Number.isInteger(scope.weekNumber)) {
+    const materials = await listLocalSubjectDayMaterials({
+      subjectId: scope.subjectId,
+      weekNumber: Number(scope.weekNumber),
+      sessionDate: scope.sessionDate,
+    })
+    materials.forEach((material) => visibleMaterialIds.add(material.id))
+  } else {
+    const weekNumbers = await listLocalSubjectWeekNumbersWithContent(scope.subjectId)
+    for (const weekNumber of weekNumbers) {
+      const materials = await listLocalSubjectDayMaterials({
+        subjectId: scope.subjectId,
+        weekNumber,
+        sessionDate: scope.sessionDate,
+      })
+      materials.forEach((material) => visibleMaterialIds.add(material.id))
+    }
+  }
+
+  const assignments: Record<string, number[]> = {}
+  for (const materialId of visibleMaterialIds) {
+    assignments[String(materialId)] = [...(manifest.assignments[String(materialId)] ?? [])]
+  }
+  return { tags: withLocalTagUsageCounts(manifest), assignments }
+}
+
+export async function listLocalTagsForMaterial(materialId: number) {
+  const manifest = await readTagManifest()
+  const assigned = new Set(manifest.assignments[String(materialId)] ?? [])
+  return withLocalTagUsageCounts(manifest).filter((tag) => assigned.has(tag.id))
+}
+
+export async function createLocalMaterialTag(input: {
+  name: string
+  color?: string
+  parentId?: number | null
+}) {
+  const manifest = await readTagManifest()
+  const name = normalizeTagDisplayName(input.name)
+  const normalizedName = normalizeTagName(input.name)
+  if (!name || !normalizedName) throw new Error("El tag necesita un nombre.")
+  const existing = manifest.tags.find((tag) => tag.normalizedName === normalizedName)
+  if (existing) {
+    return {
+      tag: withLocalTagUsageCounts(manifest).find((tag) => tag.id === existing.id)!,
+      created: false,
+    }
+  }
+  const parentId = Number.isInteger(input.parentId) ? Number(input.parentId) : null
+  if (parentId != null && !manifest.tags.some((tag) => tag.id === parentId)) {
+    throw new Error("El tag padre no existe.")
+  }
+  const timestamp = nowIso()
+  const tag: StudyTag = {
+    id: nextLocalId(),
+    name,
+    normalizedName,
+    color: normalizeTagColor(input.color || ""),
+    parentId,
+    usageCount: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  await writeTagManifest({ ...manifest, tags: [...manifest.tags, tag] })
+  return { tag, created: true }
+}
+
+export async function updateLocalMaterialTag(
+  tagId: number,
+  input: { name?: string; color?: string; parentId?: number | null }
+) {
+  const manifest = await readTagManifest()
+  const current = manifest.tags.find((tag) => tag.id === tagId)
+  if (!current) return null
+  const name = input.name === undefined ? current.name : normalizeTagDisplayName(input.name)
+  const normalizedName = input.name === undefined ? current.normalizedName : normalizeTagName(input.name)
+  if (!name || !normalizedName) throw new Error("El tag necesita un nombre.")
+  if (manifest.tags.some((tag) => tag.id !== tagId && tag.normalizedName === normalizedName)) {
+    throw new Error("Ya existe un tag con ese nombre.")
+  }
+  const parentId = input.parentId === undefined
+    ? current.parentId
+    : Number.isInteger(input.parentId)
+      ? Number(input.parentId)
+      : null
+  const parentMap = new Map(manifest.tags.map((tag) => [tag.id, tag.parentId]))
+  if (wouldCreateTagCycle(tagId, parentId, parentMap)) {
+    throw new Error("La jerarquia produciria un ciclo.")
+  }
+  if (parentId != null && !parentMap.has(parentId)) throw new Error("El tag padre no existe.")
+  const updated: StudyTag = {
+    ...current,
+    name,
+    normalizedName,
+    color: input.color === undefined ? current.color : normalizeTagColor(input.color),
+    parentId,
+    updatedAt: nowIso(),
+  }
+  const nextManifest = {
+    ...manifest,
+    tags: manifest.tags.map((tag) => (tag.id === tagId ? updated : tag)),
+  }
+  await writeTagManifest(nextManifest)
+  return withLocalTagUsageCounts(nextManifest).find((tag) => tag.id === tagId)!
+}
+
+export async function mergeLocalMaterialTags(sourceTagId: number, targetTagId: number) {
+  if (sourceTagId === targetTagId) throw new Error("La fusion solicitada no es valida.")
+  const manifest = await readTagManifest()
+  if (!manifest.tags.some((tag) => tag.id === sourceTagId) || !manifest.tags.some((tag) => tag.id === targetTagId)) {
+    return null
+  }
+  const parentMap = new Map(manifest.tags.map((tag) => [tag.id, tag.parentId]))
+  if (wouldCreateTagCycle(sourceTagId, targetTagId, parentMap)) {
+    throw new Error("La fusion produciria un ciclo.")
+  }
+  const assignments = Object.fromEntries(
+    Object.entries(manifest.assignments).map(([materialId, tagIds]) => [
+      materialId,
+      Array.from(new Set(tagIds.map((tagId) => (tagId === sourceTagId ? targetTagId : tagId)))),
+    ])
+  )
+  const nextManifest: TagManifest = {
+    version: 1,
+    tags: manifest.tags
+      .filter((tag) => tag.id !== sourceTagId)
+      .map((tag) => (tag.parentId === sourceTagId ? { ...tag, parentId: targetTagId, updatedAt: nowIso() } : tag)),
+    assignments,
+  }
+  await writeTagManifest(nextManifest)
+  return withLocalTagUsageCounts(nextManifest).find((tag) => tag.id === targetTagId)!
+}
+
+export async function deleteLocalMaterialTag(tagId: number, force: boolean) {
+  const manifest = await readTagManifest()
+  const tag = withLocalTagUsageCounts(manifest).find((candidate) => candidate.id === tagId)
+  if (!tag) return { deleted: false, missing: true, usageCount: 0 }
+  if (tag.usageCount > 0 && !force) return { deleted: false, missing: false, usageCount: tag.usageCount }
+  const assignments = Object.fromEntries(
+    Object.entries(manifest.assignments).map(([materialId, tagIds]) => [
+      materialId,
+      tagIds.filter((candidate) => candidate !== tagId),
+    ])
+  )
+  await writeTagManifest({
+    version: 1,
+    tags: manifest.tags
+      .filter((candidate) => candidate.id !== tagId)
+      .map((candidate) => candidate.parentId === tagId ? { ...candidate, parentId: null } : candidate),
+    assignments,
+  })
+  return { deleted: true, missing: false, usageCount: tag.usageCount }
+}
+
+export async function assignLocalTagToMaterial(materialId: number, tagId: number) {
+  const material = await findMaterialById(materialId)
+  if (!material) return null
+  const manifest = await readTagManifest()
+  if (!manifest.tags.some((tag) => tag.id === tagId)) return null
+  const key = String(materialId)
+  const assignments = {
+    ...manifest.assignments,
+    [key]: Array.from(new Set([...(manifest.assignments[key] ?? []), tagId])),
+  }
+  await writeTagManifest({ ...manifest, assignments })
+  return listLocalTagsForMaterial(materialId)
+}
+
+export async function unassignLocalTagFromMaterial(materialId: number, tagId: number) {
+  const manifest = await readTagManifest()
+  const key = String(materialId)
+  await writeTagManifest({
+    ...manifest,
+    assignments: {
+      ...manifest.assignments,
+      [key]: (manifest.assignments[key] ?? []).filter((candidate) => candidate !== tagId),
+    },
+  })
+  return listLocalTagsForMaterial(materialId)
+}
+
 async function readEntryManifest(subjectId: string, weekNumber: number): Promise<EntryManifest> {
   const payload = await readJsonFile<EntryManifest | null>(entryManifestPath(subjectId, weekNumber), null)
   return payload ?? {
@@ -1113,10 +1349,18 @@ export async function listLocalSubjectDayMaterials(scope: {
   materialType?: SubjectDayMaterialType | null
 }) {
   const manifest = await readMaterialManifest(scope.subjectId, scope.weekNumber)
+  const tagManifest = await readTagManifest()
+  const tagsWithCounts = withLocalTagUsageCounts(tagManifest)
   const materials = manifest.materials.filter((material) => {
     if (scope.sessionDate && material.session_date !== scope.sessionDate) return false
     if (scope.materialType && material.material_type !== scope.materialType) return false
     return true
+  }).map((material) => {
+    const assigned = new Set(tagManifest.assignments[String(material.id)] ?? [])
+    return {
+      ...material,
+      tags: tagsWithCounts.filter((tag) => assigned.has(tag.id)),
+    }
   })
   logWorkspaceDataSource({
     operation: "listLocalSubjectDayMaterials",
@@ -1182,6 +1426,13 @@ export async function deleteLocalMaterial(materialId: number) {
 
   if (material.drive_file_id && isWorkspaceFileId(material.drive_file_id)) {
     await deleteWorkspaceBlob(material.drive_file_id)
+  }
+
+  const tagManifest = await readTagManifest()
+  if (String(materialId) in tagManifest.assignments) {
+    const assignments = { ...tagManifest.assignments }
+    delete assignments[String(materialId)]
+    await writeTagManifest({ ...tagManifest, assignments })
   }
 
   return material
@@ -1401,13 +1652,13 @@ export async function updateLocalEntry(
     }
   }
 
-  const updateEntries = (entries: SubjectDayEntry[]) => {
+  const updateEntries = (entries: SubjectDayEntry[]): SubjectDayEntry[] => {
     let nextEntries = entries.map((candidate) => {
       if (candidate.id === nextEntry.id) return nextEntry
       if (body.pairRole && nextEntry.pair_id && candidate.pair_id === nextEntry.pair_id) {
         return {
           ...candidate,
-          pair_role: body.pairRole === "question" ? "answer" : "question",
+          pair_role: body.pairRole === "question" ? ("answer" as const) : ("question" as const),
           updated_at: nextEntry.updated_at,
         }
       }

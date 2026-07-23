@@ -1,4 +1,5 @@
 import { neon, Pool, type PoolClient } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { deleteDriveFile } from "@/lib/google-drive"
@@ -186,6 +187,7 @@ async function swapCompleteAudioPairRoleInTransaction(params: {
   pairId: string
   pairRole: "question" | "answer"
 }) {
+  if (!pool) throw new Error("DATABASE_URL is not configured.")
   const client = await pool.connect()
   let began = false
 
@@ -322,7 +324,7 @@ async function withLinks(row: EntryRow | null) {
 
   let links: { id: number; label: string; url: string }[]
   try {
-    links = await sql`
+    links = await requireSql(sql)`
       SELECT id, label, url
       FROM subject_day_entry_links
       WHERE entry_id = ${row.id}
@@ -454,7 +456,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json(buildEntryResponse(nextEntry))
     }
 
-    const scopeRows = await sql`
+    const scopeRows = await requireSql(sql)`
       SELECT subject_id
       FROM subject_day_entries
       WHERE id = ${entryId}
@@ -484,7 +486,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     let rows: EntryRow[]
     try {
       if (pairRole !== undefined) {
-        const pairScopeRows = await sql`
+        const pairScopeRows = await requireSql(sql)`
           SELECT id, pair_id, pair_role
           FROM subject_day_entries
           WHERE id = ${entryId}
@@ -499,7 +501,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           return getInvalidAudioPairStateResponse()
         }
 
-        const pairRows = await sql`
+        const pairRows = await requireSql(sql)`
           SELECT id, pair_id, pair_role
           FROM subject_day_entries
           WHERE pair_id = ${pairScope.pair_id}
@@ -530,7 +532,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         }
 
         if (targetPairRow.pair_role === pairRole) {
-          rows = await sql`
+          rows = await requireSql(sql)`
             SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
             FROM subject_day_entries
             WHERE id = ${entryId}
@@ -544,7 +546,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
             })
             rows = [swappedEntry]
           } else {
-            rows = await sql`
+            rows = await requireSql(sql)`
               UPDATE subject_day_entries
               SET pair_role = ${pairRole}, updated_at = NOW()
               WHERE id = ${entryId}
@@ -555,7 +557,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           rows = rows.filter((row) => row.id === entryId)
         }
       } else if (targetMaterialId !== undefined) {
-        const targetMaterialRows = await sql`
+        const targetMaterialRows = await requireSql(sql)`
           SELECT id, subject_id, week_number, session_date, weekday_index
           FROM subject_day_materials
           WHERE id = ${targetMaterialId}
@@ -580,7 +582,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           )
         }
 
-        rows = await sql`
+        rows = await requireSql(sql)`
           UPDATE subject_day_entries
           SET
             subject_day_material_id = ${targetMaterial.id},
@@ -593,7 +595,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           RETURNING id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
         ` as EntryRow[]
       } else {
-        rows = await sql`
+        rows = await requireSql(sql)`
         WITH entry_scope AS (
           SELECT subject_id, week_number, session_date, subject_day_material_id
           FROM subject_day_entries
@@ -675,7 +677,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         throw error
       }
 
-      rows = await sql`
+      rows = await requireSql(sql)`
         UPDATE subject_day_entries
         SET
           transcript_text = CASE WHEN ${"transcriptText" in body} THEN ${transcriptText || ""} ELSE transcript_text END,
@@ -770,14 +772,14 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
 
     let entries: Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>
     try {
-      entries = await sql`
+      entries = await requireSql(sql)`
         SELECT id, drive_file_id, subject_id, pair_id
         FROM subject_day_entries
         WHERE id = ${entryId}
       ` as Array<{ id: number; drive_file_id: string; subject_id: string; pair_id: string | null }>
     } catch (error) {
       if (!isMissingPairColumn(error)) throw error
-      entries = await sql`
+      entries = await requireSql(sql)`
         SELECT id, drive_file_id, subject_id, NULL::TEXT AS pair_id
         FROM subject_day_entries
         WHERE id = ${entryId}
@@ -795,7 +797,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     let pairRows = [{ id: entry.id, drive_file_id: entry.drive_file_id }]
     if (entry.pair_id) {
       try {
-        pairRows = await sql`
+        pairRows = await requireSql(sql)`
           SELECT id, drive_file_id
           FROM subject_day_entries
           WHERE pair_id = ${entry.pair_id}
@@ -816,12 +818,12 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     const rows = entry.pair_id
-      ? await sql`
+      ? await requireSql(sql)`
           DELETE FROM subject_day_entries
           WHERE pair_id = ${entry.pair_id}
           RETURNING id
         ` as Array<{ id: number }>
-      : await sql`
+      : await requireSql(sql)`
           DELETE FROM subject_day_entries
           WHERE id = ${entryId}
           RETURNING id

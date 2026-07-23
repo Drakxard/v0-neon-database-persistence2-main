@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -78,7 +79,7 @@ async function upsertHighlightSnapshot(params: {
   sourcePdfFingerprint: string
   highlightsJson: string
 }) {
-  await sql`
+  await requireSql(sql)`
     INSERT INTO subject_day_material_highlight_snapshots (
       material_id,
       source_pdf_fingerprint,
@@ -108,7 +109,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return badRequest("Invalid material id")
     }
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       FROM subject_day_materials
       WHERE id = ${materialId}
@@ -188,7 +189,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           }
         : await extractHighlightSnapshotFromPdfBytes(pdfBuffer, requestedSourceFingerprint)
 
-    const updatedRows = await sql`
+    const updatedRows = await requireSql(sql)`
       UPDATE subject_day_materials
       SET
         file_name = ${nextFileName},

@@ -194,7 +194,7 @@ async function getPdfJsModule() {
       installPdfJsNodePolyfills()
       // The browser viewer continues using vendored assets in public/pdfjs.
       // Server-side migration needs the Node-compatible legacy build.
-      return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as PdfJsModule
+      return (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule
     })()
   }
 

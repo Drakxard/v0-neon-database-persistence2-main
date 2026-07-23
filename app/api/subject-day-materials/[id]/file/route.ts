@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { findLocalMaterialById } from "@/lib/local-r2-manifests"
@@ -49,7 +50,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       })
     }
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT drive_file_id, file_name, drive_mime_type, subject_id
       FROM subject_day_materials
       WHERE id = ${materialId}

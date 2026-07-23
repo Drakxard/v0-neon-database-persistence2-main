@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 
 import { listGroqGenerationModels, requireGroqClient, validateGroqModelId } from "@/lib/groq-models"
 import { getSubjectById } from "@/lib/subjects"
@@ -123,7 +124,7 @@ function buildFallbackQuestions(answerTranscript: string) {
 }
 
 async function listRecentBufferQuestions(pairId: string) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT generated_questions_json
     FROM socratic_review_turns
     WHERE pair_id = ${pairId}
@@ -156,7 +157,7 @@ function mapPairRow(row: PairRow): SocraticReviewQueueItem {
 }
 
 async function selectEligiblePairs(subjectId: string, weekNumber: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT
       question.pair_id,
       question.subject_id,
@@ -197,7 +198,7 @@ async function selectEligiblePairs(subjectId: string, weekNumber: number) {
 }
 
 async function getPairById(pairId: string) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT
       question.pair_id,
       question.subject_id,
@@ -356,7 +357,7 @@ export async function generateSocraticReviewTurn(params: {
     console.error("Socratic review generation failed, using fallback:", error)
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     INSERT INTO socratic_review_turns (
       pair_id,
       subject_id,
@@ -393,7 +394,7 @@ export async function generateSocraticReviewTurn(params: {
 }
 
 export async function revealSocraticReviewTurn(turnId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     UPDATE socratic_review_turns
     SET revealed_at = COALESCE(revealed_at, NOW())
     WHERE id = ${turnId}
@@ -404,7 +405,7 @@ export async function revealSocraticReviewTurn(turnId: number) {
 }
 
 export async function getSocraticReviewTurn(turnId: number) {
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT id, pair_id, subject_id, week_number, answer_entry_id, generated_questions_json, fallback_used, model_id
     FROM socratic_review_turns
     WHERE id = ${turnId}
@@ -420,7 +421,7 @@ export async function getSocraticReviewSettings(email: string): Promise<Socratic
     return { selectedModel: null }
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     SELECT selected_model
     FROM user_socratic_review_settings
     WHERE email = ${normalizedEmail}
@@ -451,7 +452,7 @@ export async function updateSocraticReviewSettings(params: {
     throw new Error("MODEL_ID_INVALID")
   }
 
-  const rows = await sql`
+  const rows = await requireSql(sql)`
     INSERT INTO user_socratic_review_settings (
       email,
       selected_model

@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { findLocalMaterialById, listLocalSubjectDayEntries, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
@@ -106,7 +107,7 @@ async function getNextOrderIndex(params: {
   const { subjectId, weekNumber, sessionDate, materialId } = params
 
   try {
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -122,7 +123,7 @@ async function getNextOrderIndex(params: {
   } catch (error) {
     if (!isMissingColumn(error)) throw error
 
-    const [countRow] = await sql`
+    const [countRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -144,7 +145,7 @@ async function resolveMaterialId(params: {
   if (materialId == null) return null
 
   try {
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT id
       FROM subject_day_materials
       WHERE id = ${materialId}
@@ -168,7 +169,7 @@ async function getEntryLinks(entryIds: number[]) {
 
   let rows: EntryLinkRow[]
   try {
-    rows = await sql`
+    rows = await requireSql(sql)`
       SELECT id, entry_id, label, url, order_index
       FROM subject_day_entry_links
       WHERE entry_id = ANY(${entryIds})
@@ -208,7 +209,7 @@ async function withLinks(rows: EntryRow[]) {
 async function selectEntries(subjectId: string, weekNumber: number, sessionDate?: string, materialId?: number | null) {
   try {
     if (sessionDate) {
-      return await sql`
+      return await requireSql(sql)`
         SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
@@ -217,7 +218,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
       ` as EntryRow[]
     }
 
-    return await sql`
+    return await requireSql(sql)`
       SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
@@ -228,7 +229,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
     if (!isMissingColumn(error)) throw error
 
     if (sessionDate) {
-      return await sql`
+      return await requireSql(sql)`
         SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
         FROM subject_day_entries
         WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
@@ -236,7 +237,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
       ` as EntryRow[]
     }
 
-    return await sql`
+    return await requireSql(sql)`
       SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId} AND week_number = ${weekNumber}
@@ -247,7 +248,7 @@ async function selectEntries(subjectId: string, weekNumber: number, sessionDate?
 
 async function selectAllEntries(subjectId: string) {
   try {
-    return await sql`
+    return await requireSql(sql)`
       SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -256,7 +257,7 @@ async function selectAllEntries(subjectId: string) {
   } catch (error) {
     if (!isMissingColumn(error)) throw error
 
-    return await sql`
+    return await requireSql(sql)`
       SELECT id, NULL::INTEGER AS subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, NULL::TEXT AS custom_title, NULL::TEXT AS practice_state, NULL::TEXT AS pair_id, NULL::TEXT AS pair_role, FALSE AS is_featured, created_at, updated_at
       FROM subject_day_entries
       WHERE subject_id = ${subjectId}
@@ -306,7 +307,7 @@ export async function GET(request: Request) {
       )
     }
 
-    let rows: EntryRow[]
+    let rows: EntryRow[] = []
     if (sessionDate && parsedDate) {
       if (Number.isNaN(weekNumber)) {
         return badRequest("Missing weekNumber")
@@ -429,9 +430,9 @@ export async function POST(request: Request) {
       materialId: resolvedMaterialId,
     })
 
-    let rows: EntryRow[]
+    let rows: EntryRow[] = []
     try {
-      rows = await sql`
+      rows = await requireSql(sql)`
         INSERT INTO subject_day_entries (
           subject_id,
           subject_day_material_id,
@@ -466,7 +467,7 @@ export async function POST(request: Request) {
       ` as EntryRow[]
     } catch (error) {
       if (isForeignKeyViolation(error) && resolvedMaterialId != null) {
-        rows = await sql`
+        rows = await requireSql(sql)`
           INSERT INTO subject_day_entries (
             subject_id,
             subject_day_material_id,
@@ -504,7 +505,7 @@ export async function POST(request: Request) {
       }
 
       if (isMissingColumn(error)) {
-        rows = await sql`
+        rows = await requireSql(sql)`
           INSERT INTO subject_day_entries (
             subject_id,
             week_number,

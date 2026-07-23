@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { findLocalEntryById, readEntryManifest, saveEntryManifest } from "@/lib/local-r2-manifests"
@@ -71,7 +72,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return NextResponse.json(nextLink)
     }
 
-    const existingEntry = await sql`
+    const existingEntry = await requireSql(sql)`
       SELECT id, subject_id
       FROM subject_day_entries
       WHERE id = ${entryId}
@@ -84,14 +85,14 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const forbidden = ensureSubjectAccess(auth.session!, String(existingEntry[0].subject_id || ""))
     if (forbidden) return forbidden
 
-    const [orderRow] = await sql`
+    const [orderRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_entry_links
       WHERE entry_id = ${entryId}
     `
     const nextOrderIndex = Number(orderRow?.max_order ?? -1) + 1
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       INSERT INTO subject_day_entry_links (entry_id, label, url, order_index)
       VALUES (${entryId}, ${label}, ${normalizedUrl}, ${nextOrderIndex})
       RETURNING id, entry_id, label, url, order_index, created_at, updated_at

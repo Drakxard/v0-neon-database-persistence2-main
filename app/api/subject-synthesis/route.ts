@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless"
+import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -65,7 +66,7 @@ export async function GET(request: Request) {
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       SELECT subject_id, week_number, exercise_solved_count, exercise_total_count, exercise_skipped_text, updated_at
       FROM subject_synthesis_weeks
       WHERE subject_id = ${subjectId}
@@ -127,7 +128,7 @@ export async function PUT(request: Request) {
     const forbidden = ensureSubjectAccess(auth.session!, subjectId)
     if (forbidden) return forbidden
 
-    const rows = await sql`
+    const rows = await requireSql(sql)`
       INSERT INTO subject_synthesis_weeks (
         subject_id,
         week_number,
