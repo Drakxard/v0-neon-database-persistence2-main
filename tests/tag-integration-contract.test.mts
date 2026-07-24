@@ -21,11 +21,21 @@ test("el modo local cubre catalogo, asignacion y consulta por material", () => {
   assert.match(interceptor, /listLocalTagsForMaterial/)
 })
 
-test("la lista de materiales permite filtrar y asignar por arrastre", () => {
+test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF", () => {
   const subjectWheel = source("components/subject-wheel.tsx")
+  const tagBar = source("components/material-tag-bar.tsx")
   assert.match(subjectWheel, /materialMatchesTagFilter/)
-  assert.match(subjectWheel, /application\/x-study-material-id/)
+  assert.match(subjectWheel, /getData\("application\/x-study-tag-id"\)/)
+  assert.match(tagBar, /setData\("application\/x-study-tag-id"/)
+  assert.doesNotMatch(subjectWheel, /setData\("application\/x-study-material-id"/)
   assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\}/)
+})
+
+test("la barra de tags captura escritura global fuera de otros campos", () => {
+  const tagBar = source("components/material-tag-bar.tsx")
+  assert.match(tagBar, /event\.key\.length !== 1/)
+  assert.match(tagBar, /inputRef\.current\?\.focus\(\)/)
+  assert.match(tagBar, /setInput\(event\.key\)/)
 })
 
 test("el visor usa la envoltura React y no modifica internamente PDF.js para mostrar tags", () => {

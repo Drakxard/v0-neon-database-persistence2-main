@@ -839,8 +839,17 @@ export async function deleteLocalMaterialTag(tagId: number, force: boolean) {
   return { deleted: true, missing: false, usageCount: tag.usageCount }
 }
 
-export async function assignLocalTagToMaterial(materialId: number, tagId: number) {
-  const material = await findMaterialById(materialId)
+export async function assignLocalTagToMaterial(
+  materialId: number,
+  tagId: number,
+  scope?: { subjectId?: string; weekNumber?: number }
+) {
+  const scopedMaterial =
+    scope?.subjectId && Number.isInteger(scope.weekNumber)
+      ? (await readMaterialManifest(scope.subjectId, Number(scope.weekNumber)))
+          .materials.find((candidate) => candidate.id === materialId) ?? null
+      : null
+  const material = scopedMaterial ?? await findMaterialById(materialId)
   if (!material) return null
   const manifest = await readTagManifest()
   if (!manifest.tags.some((tag) => tag.id === tagId)) return null

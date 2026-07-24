@@ -1674,6 +1674,7 @@ export function SubjectWheel({
   const [dialogShowAllSubjectsForDay, setDialogShowAllSubjectsForDay] = useState(false)
   const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
+  const [tagDropMaterialId, setTagDropMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
   const [linkDraft, setLinkDraft] = useState({ label: "", url: "" })
@@ -6095,16 +6096,31 @@ export function SubjectWheel({
             filteredMaterialsForMode.map((material) => (
               <div
                 key={material.id}
-                draggable={!("is_pending_upload" in material)}
-                onDragStart={(event) => {
-                  if ("is_pending_upload" in material) {
-                    event.preventDefault()
-                    return
-                  }
-                  event.dataTransfer.setData("application/x-study-material-id", String(material.id))
-                  event.dataTransfer.effectAllowed = "link"
+                onDragOver={(event) => {
+                  if ("is_pending_upload" in material || !event.dataTransfer.types.includes("application/x-study-tag-id")) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  event.dataTransfer.dropEffect = "copy"
+                  setTagDropMaterialId(material.id)
                 }}
-                className="rounded-xl border border-border bg-card px-3 py-3"
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setTagDropMaterialId((current) => current === material.id ? null : current)
+                  }
+                }}
+                onDrop={(event) => {
+                  if ("is_pending_upload" in material) return
+                  const tagId = Number(event.dataTransfer.getData("application/x-study-tag-id"))
+                  if (!Number.isInteger(tagId)) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setTagDropMaterialId(null)
+                  void materialTags.assignTag(material.id, tagId)
+                }}
+                className={cn(
+                  "rounded-xl border bg-card px-3 py-3 transition",
+                  tagDropMaterialId === material.id ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "border-border"
+                )}
               >
                 {"is_pending_upload" in material ? (
                   <div className="space-y-2">

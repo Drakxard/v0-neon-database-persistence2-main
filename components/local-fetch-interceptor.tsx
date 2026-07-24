@@ -444,7 +444,11 @@ async function handleLocalApiRequest(request: Request) {
         const tagId = Number.parseInt(pathSegments[4] || "", 10)
         if (!Number.isInteger(tagId)) return errorResponse("Invalid tag id")
         if (method === "PUT") {
-          const tags = await assignLocalTagToMaterial(materialId, tagId)
+          const weekNumberParam = Number.parseInt(url.searchParams.get("weekNumber") || "", 10)
+          const tags = await assignLocalTagToMaterial(materialId, tagId, {
+            subjectId: url.searchParams.get("subjectId") || undefined,
+            weekNumber: Number.isInteger(weekNumberParam) ? weekNumberParam : undefined,
+          })
           return tags ? jsonResponse(tags) : errorResponse("Tag or material not found", 404)
         }
         if (method === "DELETE") {

@@ -38,12 +38,15 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "#" || event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey) return
+      if (event.altKey && !event.getModifierState("AltGraph")) return
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
+      if (event.key.length !== 1 || !event.key.trim()) return
       event.preventDefault()
       inputRef.current?.focus()
-      setInput("#")
+      setInput(event.key)
+      setNotice("")
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
@@ -203,25 +206,19 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
             <button
               key={tag.id}
               type="button"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.setData("application/x-study-tag-id", String(tag.id))
+                event.dataTransfer.setData("text/plain", `#${tag.name}`)
+                event.dataTransfer.effectAllowed = "copy"
+              }}
               onClick={() => chooseTag(tag.id)}
-              onDragOver={(event) => {
-                if (event.dataTransfer.types.includes("application/x-study-material-id")) {
-                  event.preventDefault()
-                  event.dataTransfer.dropEffect = "link"
-                }
-              }}
-              onDrop={(event) => {
-                const materialId = Number(event.dataTransfer.getData("application/x-study-material-id"))
-                if (!Number.isInteger(materialId)) return
-                event.preventDefault()
-                void controller.assignTag(materialId, tag.id)
-              }}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-xs transition",
+                "cursor-grab rounded-full border px-2.5 py-1 text-xs transition active:cursor-grabbing",
                 active ? "text-white shadow-sm" : "bg-background text-foreground hover:bg-accent"
               )}
               style={{ borderColor: tag.color, backgroundColor: active ? tag.color : undefined }}
-              title={parent ? `Dentro de #${parent.name}. Arrastra un material para asignarlo.` : "Arrastra un material para asignarlo."}
+              title={parent ? `Dentro de #${parent.name}. Arrastra este tag sobre un PDF para asignarlo.` : "Arrastra este tag sobre un PDF para asignarlo."}
             >
               {parent ? `${parent.name} / ` : ""}#{tag.name}
             </button>

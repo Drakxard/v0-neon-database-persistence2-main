@@ -147,8 +147,12 @@ export function useMaterialTags(scope: {
   }, [load, request])
 
   const assignTag = useCallback(async (materialId: number, tagId: number) => {
+    const params = new URLSearchParams()
+    if (scope.subjectId) params.set("subjectId", scope.subjectId)
+    if (Number.isInteger(scope.weekNumber)) params.set("weekNumber", String(scope.weekNumber))
+    const query = params.size > 0 ? `?${params.toString()}` : ""
     const tags = await request<StudyTag[]>(
-      `/api/subject-day-materials/${materialId}/tags/${tagId}`,
+      `/api/subject-day-materials/${materialId}/tags/${tagId}${query}`,
       { method: "PUT" },
       "No se pudo asignar el tag."
     )
@@ -162,11 +166,15 @@ export function useMaterialTags(scope: {
       ),
     }))
     return tags
-  }, [request])
+  }, [request, scope.subjectId, scope.weekNumber])
 
   const unassignTag = useCallback(async (materialId: number, tagId: number) => {
+    const params = new URLSearchParams()
+    if (scope.subjectId) params.set("subjectId", scope.subjectId)
+    if (Number.isInteger(scope.weekNumber)) params.set("weekNumber", String(scope.weekNumber))
+    const query = params.size > 0 ? `?${params.toString()}` : ""
     const tags = await request<StudyTag[]>(
-      `/api/subject-day-materials/${materialId}/tags/${tagId}`,
+      `/api/subject-day-materials/${materialId}/tags/${tagId}${query}`,
       { method: "DELETE" },
       "No se pudo quitar el tag."
     )
@@ -180,7 +188,7 @@ export function useMaterialTags(scope: {
       ),
     }))
     return tags
-  }, [request])
+  }, [request, scope.subjectId, scope.weekNumber])
 
   const toggleSelectedTag = useCallback((tagId: number) => {
     setSelectedTagIds((current) =>
