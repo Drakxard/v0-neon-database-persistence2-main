@@ -28,7 +28,7 @@ test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF
   assert.match(subjectWheel, /getData\("application\/x-study-tag-id"\)/)
   assert.match(tagBar, /setData\("application\/x-study-tag-id"/)
   assert.doesNotMatch(subjectWheel, /setData\("application\/x-study-material-id"/)
-  assert.doesNotMatch(subjectWheel, /<MaterialTagBar/)
+  assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\} \/>/)
 })
 
 test("el visor PDF.js abre un panel compacto de tags y lo cierra al desplazar el documento", () => {

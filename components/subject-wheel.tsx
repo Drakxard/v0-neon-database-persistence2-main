@@ -6,6 +6,7 @@ import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
+import { MaterialTagBar } from "@/components/material-tag-bar"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -2376,9 +2377,6 @@ export function SubjectWheel({
         return
       }
 
-      if (e.key === 'g' || e.key === 'G') {
-        openAiModal()
-      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
@@ -2390,7 +2388,6 @@ export function SubjectWheel({
     isCreateCustomSubjectOpen,
     isCreateWorkspaceTabOpen,
     isDialogOpen,
-    openAiModal,
     resetCustomSubjectDraft,
     selectWorkspaceTab,
     workspaceTabList,
@@ -7273,6 +7270,7 @@ export function SubjectWheel({
       <Dialog open={isDialogOpen} onOpenChange={(open) => (!open ? void closeSubjectDialogOrReturn() : undefined)}>
         <DialogContent className="h-[100dvh] w-screen max-w-none border-0 bg-card p-0 shadow-none sm:h-[96vh] sm:w-[98vw] sm:max-w-[98vw] sm:border sm:border-border" showCloseButton={false}>
           <div className="relative flex h-full flex-col overflow-hidden px-3 py-3 sm:p-8">
+            <MaterialTagBar controller={materialTags} />
             <Button
               variant="outline"
               size="icon"
