@@ -6148,13 +6148,22 @@ export function SubjectWheel({
                       <div className="mt-2 flex flex-wrap gap-1">
                         {materialTags.workspace.tags
                           .filter((tag) => (materialTags.workspace.assignments[String(material.id)] ?? []).includes(tag.id))
-                          .map((tag) => (
-                            <span key={tag.id} className="inline-flex items-center rounded-full border" style={{ borderColor: tag.color }}>
+                          .map((tag) => {
+                            const active = materialTags.selectedTagIds.includes(tag.id)
+                            return (
+                            <span
+                              key={tag.id}
+                              className="inline-flex items-center rounded-full border"
+                              style={{ borderColor: tag.color, backgroundColor: active ? tag.color : undefined }}
+                            >
                               <button
                                 type="button"
-                                onClick={() => materialTags.setSelectedTagIds([tag.id])}
-                                className="rounded-l-full px-2 py-0.5 text-[0.68rem] text-muted-foreground hover:text-foreground"
-                                title={`Ver materiales con #${tag.name}`}
+                                onClick={() => materialTags.toggleSelectedTag(tag.id)}
+                                className={cn(
+                                  "rounded-l-full px-2 py-0.5 text-[0.68rem] hover:text-foreground",
+                                  active ? "text-white hover:text-white" : "text-muted-foreground"
+                                )}
+                                title={active ? `Quitar filtro #${tag.name}` : `Ver materiales con #${tag.name}`}
                               >
                                 #{tag.name}
                               </button>
@@ -6168,7 +6177,8 @@ export function SubjectWheel({
                                 ×
                               </button>
                             </span>
-                          ))}
+                            )
+                          })}
                       </div>
                     </div>
                     <Button

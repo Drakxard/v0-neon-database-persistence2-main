@@ -854,7 +854,7 @@ export function PracticeViewerClient({
       if (event.data.type === "viewerSelectMaterialTag") {
         const tagId = Number(event.data.tagId)
         if (Number.isInteger(tagId)) {
-          viewerMaterialTags.setSelectedTagIds([tagId])
+          viewerMaterialTags.toggleSelectedTag(tagId)
         }
         return
       }

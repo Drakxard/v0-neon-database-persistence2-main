@@ -43,7 +43,7 @@ test("el visor PDF.js abre un panel compacto de tags y lo cierra al desplazar el
   assert.match(pdfJs, /viewerUpdateMaterialTag/)
   assert.match(pdfJs, /viewerSelectMaterialTag/)
   assert.match(viewer, /viewerSelectMaterialTag/)
-  assert.match(viewer, /setSelectedTagIds\(\[tagId\]\)/)
+  assert.match(viewer, /toggleSelectedTag\(tagId\)/)
   assert.match(pdfJs, /viewerContainer"\)\?\.addEventListener\("scroll", closeMaterialTagPanel/)
   assert.match(pdfJs, /viewerRequestMaterialTag/)
   assert.match(viewer, /assignViewerMaterialTag/)
@@ -57,7 +57,7 @@ test("un tag del objeto materia filtra; su x separada es la que lo quita del PDF
   const subjectWheel = source("components/subject-wheel.tsx")
   assert.match(subjectWheel, /Ver materiales con #\$\{tag\.name\}/)
   assert.match(subjectWheel, /Quitar #\$\{tag\.name\} de este PDF/)
-  assert.match(subjectWheel, /materialTags\.setSelectedTagIds\(\[tag\.id\]\)/)
+  assert.match(subjectWheel, /materialTags\.toggleSelectedTag\(tag\.id\)/)
   assert.match(subjectWheel, /materialTags\.unassignTag\(material\.id, tag\.id\)/)
 })
 
