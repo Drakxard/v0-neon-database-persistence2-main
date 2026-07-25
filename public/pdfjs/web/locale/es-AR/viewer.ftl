@@ -199,6 +199,11 @@ pdfjs-thumb-page-title =
     .title = Página { $page }
 # Variables:
 #   $page (Number) - the page number
+#   $total (Number) - the number of pages
+pdfjs-thumb-page-title1 =
+    .title = Página { $page } de { $total }
+# Variables:
+#   $page (Number) - the page number
 pdfjs-thumb-page-canvas =
     .aria-label = Miniatura de página { $page }
 
@@ -643,11 +648,16 @@ pdfjs-editor-add-comment-button =
 
 pdfjs-toggle-views-manager-button =
     .title = Alternar barra lateral
+pdfjs-toggle-views-manager-button1 =
+    .title = Administrar páginas
 pdfjs-toggle-views-manager-notification-button =
     .title = Alternar barra lateral (el documento contiene miniaturas/esquemas/adjuntos/capas)
 pdfjs-toggle-views-manager-button-label = Alternar barra lateral
+pdfjs-toggle-views-manager-button1-label = Administrar páginas
 pdfjs-views-manager-sidebar =
     .aria-label = Barra lateral
+pdfjs-views-manager-sidebar-resizer =
+    .aria-label = Redimensionador de la barra lateral
 pdfjs-views-manager-view-selector-button =
     .title = Vistas
 pdfjs-views-manager-view-selector-button-label = Vistas

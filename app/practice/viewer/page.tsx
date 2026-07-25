@@ -66,7 +66,7 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
 async function getMaterial(materialId: number) {
   if (!sql) return undefined
   const rows = await sql`
-    SELECT id, subject_id, week_number, session_date, weekday_index, file_name, drive_mime_type
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, file_name, drive_file_id, drive_mime_type, updated_at
     FROM subject_day_materials
     WHERE id = ${materialId}
     LIMIT 1
@@ -79,8 +79,11 @@ async function getMaterial(materialId: number) {
         week_number: number
         session_date: string
         weekday_index: number
+        material_type: "practice" | "theory"
         file_name: string
+        drive_file_id: string
         drive_mime_type: string
+        updated_at: string
       }
     | undefined
 }
@@ -235,7 +238,9 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
           sessionDate: normalizeSessionDateKey(material.session_date),
           weekNumber: material.week_number,
           weekdayIndex: material.weekday_index,
+          materialType: material.material_type,
           fileName: material.file_name,
+          sourceRevision: `${material.drive_file_id}:${material.updated_at}`,
           returnToken,
         }}
       />

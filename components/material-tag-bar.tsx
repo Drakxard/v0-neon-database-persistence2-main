@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Loader2, Settings2, Tag, X } from "lucide-react"
+import { Loader2, Settings2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -20,8 +20,11 @@ import { cn } from "@/lib/utils"
 
 export function MaterialTagBar({ controller }: { controller: MaterialTagsController }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const anchorRef = useRef<HTMLElement | null>(null)
+  const ignoreScrollRef = useRef(false)
   const [input, setInput] = useState("")
   const [notice, setNotice] = useState("")
+  const [isFloating, setIsFloating] = useState(false)
   const [isManagerOpen, setIsManagerOpen] = useState(false)
   const [editingTagId, setEditingTagId] = useState<number | null>(null)
   const [editName, setEditName] = useState("")
@@ -30,8 +33,8 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
   const [mergeTargetId, setMergeTargetId] = useState("none")
   const [isSaving, setIsSaving] = useState(false)
 
-  const suggestions = useMemo(
-    () => controller.workspace.tags.filter((tag) => matchesTagSearch(tag.name, input)).slice(0, 8),
+  const visibleTags = useMemo(
+    () => controller.workspace.tags.filter((tag) => matchesTagSearch(tag.name, input)),
     [controller.workspace.tags, input]
   )
   const editingTag = controller.workspace.tags.find((tag) => tag.id === editingTagId) ?? null
@@ -43,14 +46,49 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
       if (event.key.length !== 1 || !event.key.trim()) return
+
+      const scrollX = window.scrollX
+      const scrollY = window.scrollY
+      const anchorRect = anchorRef.current?.getBoundingClientRect()
+      const anchorIsVisible = Boolean(
+        anchorRect &&
+        anchorRect.bottom > 0 &&
+        anchorRect.top < window.innerHeight
+      )
+
       event.preventDefault()
-      inputRef.current?.focus()
+      if (!anchorIsVisible) setIsFloating(true)
+      inputRef.current?.focus({ preventScroll: true })
       setInput(event.key)
       setNotice("")
+
+      requestAnimationFrame(() => {
+        if (window.scrollX === scrollX && window.scrollY === scrollY) return
+        ignoreScrollRef.current = true
+        window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" })
+        requestAnimationFrame(() => {
+          ignoreScrollRef.current = false
+        })
+      })
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
+
+  useEffect(() => {
+    if (!isFloating) return
+
+    const onScroll = () => {
+      if (ignoreScrollRef.current) return
+      setIsFloating(false)
+      setInput("")
+      setNotice("")
+      inputRef.current?.blur()
+    }
+
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [isFloating])
 
   useEffect(() => {
     if (!editingTag) return
@@ -134,10 +172,14 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
   }
 
   return (
-    <section className="space-y-2 rounded-2xl border border-border bg-card/80 p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[14rem] flex-1">
-          <Tag className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    <section ref={anchorRef} className="relative min-h-12">
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/95 px-2 py-1.5",
+          isFloating && "fixed left-3 right-3 top-3 z-[90] shadow-lg backdrop-blur"
+        )}
+      >
+        <div className="w-40 shrink-0">
           <Input
             ref={inputRef}
             value={input}
@@ -150,83 +192,78 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
                 event.preventDefault()
                 void submitInput()
               }
-              if (event.key === "Escape") setInput("")
+              if (event.key === "Escape") {
+                setInput("")
+                setIsFloating(false)
+                inputRef.current?.blur()
+              }
             }}
             placeholder="# crear o filtrar"
-            className="pl-9"
+            className="h-8 border-0 bg-transparent px-2 shadow-none outline-none ring-0 focus-visible:border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
             aria-label="Crear o filtrar por tag"
           />
-          {input ? (
-            <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-border bg-popover shadow-xl">
-              {suggestions.map((tag) => (
-                <button
-                  key={tag.id}
-                  type="button"
-                  onClick={() => chooseTag(tag.id)}
-                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent"
-                >
-                  <span>#{tag.name}</span>
-                  <span className="text-xs text-muted-foreground">{tag.usageCount}</span>
-                </button>
-              ))}
-              {!suggestions.some((tag) => tag.normalizedName === normalizeTagName(input.replace(/^#/, ""))) ? (
-                <button type="button" onClick={() => void submitInput()} className="w-full px-3 py-2 text-left text-sm text-emerald-700 hover:bg-accent">
-                  Crear “{input.replace(/^#/, "").trim() || "…"}”
-                </button>
-              ) : null}
-            </div>
+        </div>
+
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {controller.isLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" /> : null}
+          {visibleTags.map((tag) => {
+            const active = controller.selectedTagIds.includes(tag.id)
+            const parent = tag.parentId == null ? null : controller.workspace.tags.find((candidate) => candidate.id === tag.parentId)
+            return (
+              <button
+                key={tag.id}
+                type="button"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.setData("application/x-study-tag-id", String(tag.id))
+                  event.dataTransfer.setData("text/plain", `#${tag.name}`)
+                  event.dataTransfer.effectAllowed = "copy"
+                }}
+                onClick={() => chooseTag(tag.id)}
+                className={cn(
+                  "shrink-0 cursor-grab rounded-full border px-2.5 py-1 text-xs transition active:cursor-grabbing",
+                  active ? "text-white shadow-sm" : "bg-background text-foreground hover:bg-accent"
+                )}
+                style={{ borderColor: tag.color, backgroundColor: active ? tag.color : undefined }}
+                title={parent ? `Dentro de #${parent.name}. Arrastra este tag sobre un PDF para asignarlo.` : "Arrastra este tag sobre un PDF para asignarlo."}
+              >
+                {parent ? `${parent.name} / ` : ""}#{tag.name}
+              </button>
+            )
+          })}
+          {input.trim() && visibleTags.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => void submitInput()}
+              className="shrink-0 rounded-full px-2.5 py-1 text-xs text-emerald-700 hover:bg-accent"
+            >
+              Crear “{input.replace(/^#/, "").trim()}”
+            </button>
           ) : null}
         </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => controller.setFilterMode(controller.filterMode === "and" ? "or" : "and")}
-          title="Cambiar forma de combinar filtros"
-        >
-          {controller.filterMode.toUpperCase()}
-        </Button>
-        {controller.selectedTagIds.length > 0 ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => controller.setSelectedTagIds([])}>
-            Limpiar
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => controller.setFilterMode(controller.filterMode === "and" ? "or" : "and")}
+            title="Cambiar forma de combinar filtros"
+          >
+            {controller.filterMode.toUpperCase()}
           </Button>
-        ) : null}
-        <Button type="button" variant="ghost" size="icon" onClick={() => setIsManagerOpen(true)} aria-label="Administrar tags">
-          <Settings2 className="h-4 w-4" />
-        </Button>
-      </div>
-
-      <div className="flex min-h-7 flex-wrap gap-1.5">
-        {controller.isLoading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
-        {controller.workspace.tags.map((tag) => {
-          const active = controller.selectedTagIds.includes(tag.id)
-          const parent = tag.parentId == null ? null : controller.workspace.tags.find((candidate) => candidate.id === tag.parentId)
-          return (
-            <button
-              key={tag.id}
-              type="button"
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.setData("application/x-study-tag-id", String(tag.id))
-                event.dataTransfer.setData("text/plain", `#${tag.name}`)
-                event.dataTransfer.effectAllowed = "copy"
-              }}
-              onClick={() => chooseTag(tag.id)}
-              className={cn(
-                "cursor-grab rounded-full border px-2.5 py-1 text-xs transition active:cursor-grabbing",
-                active ? "text-white shadow-sm" : "bg-background text-foreground hover:bg-accent"
-              )}
-              style={{ borderColor: tag.color, backgroundColor: active ? tag.color : undefined }}
-              title={parent ? `Dentro de #${parent.name}. Arrastra este tag sobre un PDF para asignarlo.` : "Arrastra este tag sobre un PDF para asignarlo."}
-            >
-              {parent ? `${parent.name} / ` : ""}#{tag.name}
-            </button>
-          )
-        })}
+          {controller.selectedTagIds.length > 0 ? (
+            <Button type="button" variant="ghost" size="sm" onClick={() => controller.setSelectedTagIds([])}>
+              Limpiar
+            </Button>
+          ) : null}
+          <Button type="button" variant="ghost" size="icon" onClick={() => setIsManagerOpen(true)} aria-label="Administrar tags">
+            <Settings2 className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       {notice || controller.error ? (
-        <p className={cn("text-xs", controller.error ? "text-red-600" : "text-muted-foreground")}>
+        <p className={cn("mt-1 px-2 text-xs", controller.error ? "text-red-600" : "text-muted-foreground")}>
           {controller.error || notice}
         </p>
       ) : null}

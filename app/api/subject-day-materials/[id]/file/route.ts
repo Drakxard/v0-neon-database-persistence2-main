@@ -45,7 +45,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
         headers: {
           "Content-Type": remoteFile.mimeType || material.drive_mime_type || "application/pdf",
           "Content-Disposition": `inline; filename="${material.file_name}"`,
-          "Cache-Control": "private, max-age=0, must-revalidate",
+          "Cache-Control": "private, no-store, max-age=0",
+          "X-Material-Id": String(materialId),
         },
       })
     }
@@ -83,7 +84,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       headers: {
         "Content-Type": fileResult.value.mimeType || material.drive_mime_type || "application/pdf",
         "Content-Disposition": `inline; filename="${material.file_name}"`,
-        "Cache-Control": "private, max-age=0, must-revalidate",
+        "Cache-Control": "private, no-store, max-age=0",
+        "X-Material-Id": String(materialId),
       },
     })
   } catch (error) {

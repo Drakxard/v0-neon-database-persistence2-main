@@ -2359,7 +2359,13 @@
     applyEnhancedPdfReadability();
     refreshSyncButtons();
     hideLoadingOverlay();
-    postToParent({ type: "viewerDocumentLoaded" });
+    postToParent({
+      type: "viewerDocumentLoaded",
+      materialId: state.query?.materialId,
+      fileName: state.query?.fileName || state.app?._docFilename || "",
+      fingerprint: state.app?.pdfDocument?.fingerprints?.[0] || "",
+      numPages: state.app?.pdfDocument?.numPages || 0,
+    });
   }
 
   function handleKeyDown(event) {
@@ -2429,7 +2435,11 @@
       updateDraftOverlay();
       refreshSyncButtons();
       hideLoadingOverlay();
-      postToParent({ type: "viewerDocumentError" });
+      postToParent({
+        type: "viewerDocumentError",
+        materialId: state.query?.materialId,
+        fileName: state.query?.fileName || "",
+      });
     });
     document.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -2443,7 +2453,11 @@
         console.error("Custom PDF.js local workspace open failed:", error);
         hideLoadingOverlay();
         showToast(error instanceof Error ? error.message : "No se pudo abrir el PDF local.", "error", 5000);
-        postToParent({ type: "viewerDocumentError" });
+        postToParent({
+          type: "viewerDocumentError",
+          materialId: state.query?.materialId,
+          fileName: state.query?.fileName || "",
+        });
       }
     }
 

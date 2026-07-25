@@ -31,11 +31,15 @@ test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF
   assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\}/)
 })
 
-test("la barra de tags captura escritura global fuera de otros campos", () => {
+test("la barra de tags captura escritura sin mover el scroll y filtra los chips en la misma fila", () => {
   const tagBar = source("components/material-tag-bar.tsx")
   assert.match(tagBar, /event\.key\.length !== 1/)
-  assert.match(tagBar, /inputRef\.current\?\.focus\(\)/)
+  assert.match(tagBar, /focus\(\{ preventScroll: true \}\)/)
   assert.match(tagBar, /setInput\(event\.key\)/)
+  assert.match(tagBar, /visibleTags\.map/)
+  assert.match(tagBar, /window\.addEventListener\("scroll"/)
+  assert.match(tagBar, /setIsFloating\(false\)/)
+  assert.doesNotMatch(tagBar, /top-full z-50/)
 })
 
 test("el visor usa la envoltura React y no modifica internamente PDF.js para mostrar tags", () => {
@@ -44,4 +48,17 @@ test("el visor usa la envoltura React y no modifica internamente PDF.js para mos
   assert.match(subjectWheel, /\/practice\/viewer\?/)
   assert.match(viewer, /<MaterialTagPicker/)
   assert.doesNotMatch(source("public/pdfjs/web/viewer-custom.js"), /MaterialTagPicker|\/api\/tags/)
+})
+
+test("el visor local valida una sola fuente y el remoto versiona su cache", () => {
+  const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
+  const cache = source("app/practice/viewer/pdf-memory-cache.ts")
+  const pdfJs = source("public/pdfjs/web/viewer-custom.js")
+  assert.match(viewer, /validateWorkspaceMaterialIdentity/)
+  assert.match(viewer, /getWorkspaceFile\(resolvedMaterial\.workspaceFileId!\)/)
+  assert.match(viewer, /localWorkspaceMode\s*\?\s*""/)
+  assert.match(viewer, /key=\{viewerIdentity\}/)
+  assert.match(cache, /buildPracticePdfCacheKey/)
+  assert.match(cache, /cache: "no-store"/)
+  assert.match(pdfJs, /fingerprint: state\.app\?\.pdfDocument\?\.fingerprints/)
 })

@@ -2,6 +2,7 @@
 
 export type CachedPracticePdf = {
   blobUrl: string
+  cacheKey: string
   contentType: string
   fileName: string
   materialId: number
@@ -13,10 +14,17 @@ type CacheEntry = {
   value?: CachedPracticePdf
 }
 
-const pdfCache = new Map<number, CacheEntry>()
+const pdfCache = new Map<string, CacheEntry>()
 
-function buildPracticePdfUrl(materialId: number) {
-  return `/api/subject-day-materials/${materialId}/file`
+export function buildPracticePdfCacheKey(materialId: number, sourceRevision = "") {
+  return `${materialId}:${sourceRevision || "current"}`
+}
+
+function buildPracticePdfUrl(materialId: number, sourceRevision: string) {
+  const params = new URLSearchParams()
+  if (sourceRevision) params.set("revision", sourceRevision)
+  const query = params.toString()
+  return `/api/subject-day-materials/${materialId}/file${query ? `?${query}` : ""}`
 }
 
 function extractErrorMessage(payload: unknown, fallback: string) {
@@ -27,8 +35,10 @@ function extractErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
-async function fetchPracticePdf(materialId: number, fileName: string) {
-  const response = await fetch(buildPracticePdfUrl(materialId), {
+async function fetchPracticePdf(materialId: number, fileName: string, sourceRevision: string) {
+  const cacheKey = buildPracticePdfCacheKey(materialId, sourceRevision)
+  const response = await fetch(buildPracticePdfUrl(materialId, sourceRevision), {
+    cache: "no-store",
     credentials: "same-origin",
   })
 
@@ -43,11 +53,21 @@ async function fetchPracticePdf(materialId: number, fileName: string) {
     throw new Error(message)
   }
 
+  const responseMaterialId = Number.parseInt(response.headers.get("X-Material-Id") || "", 10)
+  if (Number.isInteger(responseMaterialId) && responseMaterialId !== materialId) {
+    throw new Error(`La descarga devolvió el material ${responseMaterialId}, pero se esperaba ${materialId}.`)
+  }
+
   const blob = await response.blob()
   const safeBlob = blob.type ? blob : new Blob([blob], { type: "application/pdf" })
+  const header = await safeBlob.slice(0, 1024).text()
+  if (!header.includes("%PDF-")) {
+    throw new Error(`El archivo recibido para el material ${materialId} no contiene una cabecera PDF válida.`)
+  }
 
   return {
     blobUrl: URL.createObjectURL(safeBlob),
+    cacheKey,
     contentType: safeBlob.type || "application/pdf",
     fileName,
     materialId,
@@ -55,33 +75,34 @@ async function fetchPracticePdf(materialId: number, fileName: string) {
   } satisfies CachedPracticePdf
 }
 
-export function preloadPracticePdf(materialId: number, fileName: string) {
-  const existing = pdfCache.get(materialId)
+export function preloadPracticePdf(materialId: number, fileName: string, sourceRevision = "") {
+  const cacheKey = buildPracticePdfCacheKey(materialId, sourceRevision)
+  const existing = pdfCache.get(cacheKey)
   if (existing) {
     return existing.promise
   }
 
-  const promise = fetchPracticePdf(materialId, fileName)
+  const promise = fetchPracticePdf(materialId, fileName, sourceRevision)
     .then((value) => {
-      const current = pdfCache.get(materialId)
+      const current = pdfCache.get(cacheKey)
       if (current) {
         current.value = value
       }
       return value
     })
     .catch((error) => {
-      pdfCache.delete(materialId)
+      pdfCache.delete(cacheKey)
       throw error
     })
 
-  pdfCache.set(materialId, { promise })
+  pdfCache.set(cacheKey, { promise })
   return promise
 }
 
-export function releasePracticePdf(materialId: number) {
-  const existing = pdfCache.get(materialId)
+export function releasePracticePdf(cacheKey: string) {
+  const existing = pdfCache.get(cacheKey)
   if (!existing?.value) return
 
   URL.revokeObjectURL(existing.value.blobUrl)
-  pdfCache.delete(materialId)
+  pdfCache.delete(cacheKey)
 }
