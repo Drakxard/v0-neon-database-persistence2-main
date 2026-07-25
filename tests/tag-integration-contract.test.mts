@@ -33,11 +33,15 @@ test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF
 
 test("la barra de tags captura escritura sin mover el scroll y filtra los chips en la misma fila", () => {
   const tagBar = source("components/material-tag-bar.tsx")
+  const subjectWheel = source("components/subject-wheel.tsx")
   assert.match(tagBar, /event\.key\.length !== 1/)
   assert.match(tagBar, /focus\(\{ preventScroll: true \}\)/)
   assert.match(tagBar, /setInput\(event\.key\)/)
   assert.match(tagBar, /visibleTags\.map/)
-  assert.match(tagBar, /window\.addEventListener\("scroll"/)
+  assert.match(tagBar, /document\.addEventListener\("scroll", onScroll, \{ capture: true, passive: true \}\)/)
+  assert.match(tagBar, /floatingAnchorRef\?\.current\?\.getBoundingClientRect\(\)/)
+  assert.match(tagBar, /setIsFloating\(false\)/)
+  assert.match(subjectWheel, /floatingAnchorRef=\{materialTagFloatingAnchorRef\}/)
   assert.match(tagBar, /setIsFloating\(false\)/)
   assert.doesNotMatch(tagBar, /top-full z-50/)
 })
