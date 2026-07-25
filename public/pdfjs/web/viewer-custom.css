@@ -192,6 +192,69 @@
   display: flex;
 }
 
+.pdfjs-custom-tag-button {
+  background-image: none !important;
+  color: var(--toolbar-icon-color, #374151);
+  font: 700 19px/1 system-ui, sans-serif;
+}
+
+.pdfjs-custom-tag-button > span {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+
+.pdfjs-custom-tag-panel {
+  position: fixed;
+  top: 40px;
+  left: 8px;
+  z-index: 1100;
+  display: none;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--toolbar-border-color, #9ca3af) 72%, transparent);
+  border-radius: 7px;
+  background: var(--toolbar-bg-color, #f8fafc);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.2);
+  font: 500 12px/1 system-ui, sans-serif;
+}
+
+.pdfjs-custom-tag-panel[data-open="true"] {
+  display: flex;
+}
+
+.pdfjs-custom-tag-panel input {
+  width: min(220px, 48vw);
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--field-border-color, #9ca3af);
+  border-radius: 4px;
+  background: var(--field-bg-color, #fff);
+  color: var(--field-color, #111827);
+  font: inherit;
+}
+
+.pdfjs-custom-tag-panel button {
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: #0f766e;
+  color: #fff;
+  font: 700 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pdfjs-custom-tag-panel span {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--main-color, #111827);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pdfjs-custom-loading-overlay {
   position: fixed;
   inset: 0;

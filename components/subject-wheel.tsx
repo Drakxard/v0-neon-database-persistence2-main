@@ -5,7 +5,6 @@ import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, C
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
-import { MaterialTagBar } from "@/components/material-tag-bar"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -7419,10 +7418,6 @@ export function SubjectWheel({
             <div className="flex-1 overflow-y-auto py-4 sm:py-6 sm:pl-14 sm:pr-14">
               {entriesError ? (
                 <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
-              ) : null}
-
-              {currentSubject ? (
-                <MaterialTagBar controller={materialTags} />
               ) : null}
 
               {isSubjectDayRefreshing ? (

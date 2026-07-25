@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
-import { MaterialTagPicker } from "@/components/material-tag-picker"
+import { useMaterialTags } from "@/hooks/use-material-tags"
 import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
 import { createObjectUrlForWorkspaceFile, getLocalMaterialById, getWorkspaceFile } from "@/lib/local-workspace-data"
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getSubjectById } from "@/lib/subjects"
+import { normalizeTagName } from "@/lib/tag-utils"
 import { buildPracticePdfCacheKey, preloadPracticePdf, releasePracticePdf } from "./pdf-memory-cache"
 
 type MaterialContext = {
@@ -84,6 +85,7 @@ type ViewerMessage =
   | { type: "viewerReady" }
   | { type: "viewerDocumentLoaded"; materialId?: number; fileName?: string; fingerprint?: string; numPages?: number }
   | { type: "viewerDocumentError"; materialId?: number; fileName?: string }
+  | { type: "viewerRequestMaterialTag"; name?: string }
   | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
 type DeleteEntriesResponse = {
@@ -292,6 +294,10 @@ export function PracticeViewerClient({
   const { rootHandle } = useLocalWorkspace()
   const playbackUrlCacheRef = useRef(new Map<string, string>())
   const isLocalMode = isLocalStorageMode()
+  const viewerMaterialTags = useMaterialTags({
+    subjectId: resolvedMaterial?.subjectId,
+    weekNumber: resolvedMaterial?.weekNumber,
+  })
 
   const viewerSrc = useMemo(
     () =>
@@ -331,6 +337,38 @@ export function PracticeViewerClient({
   const postToViewer = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
   }, [])
+
+  const assignViewerMaterialTag = useCallback(async (name: string) => {
+    if (!resolvedMaterial) {
+      postToViewer({ type: "viewerMaterialTagResult", ok: false, error: "No hay un PDF activo para etiquetar." })
+      return
+    }
+
+    const normalizedName = name.replace(/^#/, "").trim()
+    if (!normalizedName) {
+      postToViewer({ type: "viewerMaterialTagResult", ok: false, error: "Escribe un tag para asignarlo." })
+      return
+    }
+
+    try {
+      const existing = viewerMaterialTags.workspace.tags.find(
+        (tag) => tag.normalizedName === normalizeTagName(normalizedName)
+      )
+      const tag = existing ?? (await viewerMaterialTags.createTag({ name: normalizedName })).tag
+      const assignedTags = await viewerMaterialTags.assignTag(resolvedMaterial.id, tag.id)
+      postToViewer({
+        type: "viewerMaterialTagResult",
+        ok: true,
+        tags: assignedTags.map((assignedTag) => ({ id: assignedTag.id, name: assignedTag.name, color: assignedTag.color })),
+      })
+    } catch (error) {
+      postToViewer({
+        type: "viewerMaterialTagResult",
+        ok: false,
+        error: error instanceof Error ? error.message : "No se pudo asignar el tag.",
+      })
+    }
+  }, [postToViewer, resolvedMaterial, viewerMaterialTags])
 
   const disposeReviewAudio = useCallback((reviewAudio?: ReviewAudio | null) => {
     if (reviewAudio) {
@@ -755,6 +793,11 @@ export function PracticeViewerClient({
         return
       }
 
+      if (event.data.type === "viewerRequestMaterialTag") {
+        void assignViewerMaterialTag(event.data.name || "")
+        return
+      }
+
       if (event.data.type === "uploadPracticeFragment") {
         const payload = event.data.payload
         if (!payload?.blob || !(payload.blob instanceof Blob)) return
@@ -894,6 +937,7 @@ export function PracticeViewerClient({
     },
     [
       activeEntryId,
+      assignViewerMaterialTag,
       closeRecorder,
       hasMaterial,
       isLocalMode,
@@ -1146,13 +1190,6 @@ export function PracticeViewerClient({
 
   return (
     <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 text-white">
-      {resolvedMaterial ? (
-        <MaterialTagPicker
-          materialId={resolvedMaterial.id}
-          subjectId={resolvedMaterial.subjectId}
-          weekNumber={resolvedMaterial.weekNumber}
-        />
-      ) : null}
       {canRenderViewer ? (
         <iframe
           key={viewerIdentity}

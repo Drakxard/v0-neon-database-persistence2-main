@@ -49,6 +49,10 @@
     workspaceMode: "remote",
     workspaceRootHandle: null,
     localWorkspaceObjectUrl: "",
+    tagButton: null,
+    tagPanel: null,
+    tagInput: null,
+    tagStatus: null,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -286,6 +290,42 @@
   }
 
   function ensureUi() {
+    if (!state.tagButton) {
+      const toolbar = document.getElementById("toolbarViewerLeft") || document.getElementById("toolbarViewer");
+      if (toolbar) {
+        const button = document.createElement("button");
+        button.id = "pdfjs-custom-tag-button";
+        button.className = "toolbarButton pdfjs-custom-tag-button";
+        button.type = "button";
+        button.tabIndex = 0;
+        button.title = "Agregar tag al PDF";
+        button.setAttribute("aria-label", "Agregar tag al PDF");
+        button.setAttribute("aria-expanded", "false");
+        button.innerHTML = '<span aria-hidden="true">⌑</span>';
+        button.addEventListener("click", () => toggleMaterialTagPanel());
+        toolbar.appendChild(button);
+        state.tagButton = button;
+
+        const panel = document.createElement("form");
+        panel.className = "pdfjs-custom-tag-panel";
+        panel.innerHTML = [
+          '<input id="pdfjs-custom-tag-input" type="text" autocomplete="off" placeholder="# asignar o crear" aria-label="Asignar o crear tag" />',
+          '<button type="submit">Agregar</button>',
+          '<span id="pdfjs-custom-tag-status" role="status"></span>',
+        ].join("");
+        panel.addEventListener("submit", (event) => {
+          event.preventDefault();
+          submitMaterialTag();
+        });
+        document.body.appendChild(panel);
+        state.tagPanel = panel;
+        state.tagInput = panel.querySelector("#pdfjs-custom-tag-input");
+        state.tagStatus = panel.querySelector("#pdfjs-custom-tag-status");
+
+        document.getElementById("viewerContainer")?.addEventListener("scroll", closeMaterialTagPanel, { passive: true });
+      }
+    }
+
     if (!state.toastStack) {
       state.toastStack = document.createElement("div");
       state.toastStack.className = "pdfjs-custom-toast-stack";
@@ -659,6 +699,45 @@
     if (!state.draftOverlay) return;
     const shouldShow = isDraftMode() && !state.app?.pdfDocument;
     state.draftOverlay.dataset.open = shouldShow ? "true" : "false";
+  }
+
+  function closeMaterialTagPanel() {
+    if (!state.tagPanel) return;
+    state.tagPanel.dataset.open = "false";
+    state.tagButton?.setAttribute("aria-expanded", "false");
+    if (state.tagStatus) state.tagStatus.textContent = "";
+  }
+
+  function toggleMaterialTagPanel() {
+    if (!state.tagPanel || !state.tagInput) return;
+    if (!Number.isInteger(state.query?.materialId)) {
+      showToast("Abre un PDF guardado para poder asignarle tags.", "info");
+      return;
+    }
+
+    const isOpen = state.tagPanel.dataset.open === "true";
+    if (isOpen) {
+      closeMaterialTagPanel();
+      return;
+    }
+
+    state.tagPanel.dataset.open = "true";
+    state.tagButton?.setAttribute("aria-expanded", "true");
+    state.tagInput.value = "";
+    if (state.tagStatus) state.tagStatus.textContent = "";
+    window.setTimeout(() => state.tagInput?.focus(), 0);
+  }
+
+  function submitMaterialTag() {
+    const name = state.tagInput?.value || "";
+    if (!name.trim()) {
+      if (state.tagStatus) state.tagStatus.textContent = "Escribe un tag.";
+      state.tagInput?.focus();
+      return;
+    }
+
+    if (state.tagStatus) state.tagStatus.textContent = "Guardando...";
+    postToParent({ type: "viewerRequestMaterialTag", name });
   }
 
   function getCurrentViewerLocation() {
@@ -2214,6 +2293,20 @@
     if (event.data.type === "viewerWorkspaceMode" && event.data.mode === "local") {
       state.workspaceMode = "local";
       refreshSyncButtons();
+      return;
+    }
+
+    if (event.data.type === "viewerMaterialTagResult") {
+      if (!state.tagPanel) return;
+      if (event.data.ok) {
+        const tagNames = Array.isArray(event.data.tags)
+          ? event.data.tags.map((tag) => `#${tag.name}`).join(", ")
+          : "";
+        if (state.tagStatus) state.tagStatus.textContent = tagNames ? `Asignado: ${tagNames}` : "Tag asignado.";
+        window.setTimeout(closeMaterialTagPanel, 900);
+      } else if (state.tagStatus) {
+        state.tagStatus.textContent = event.data.error || "No se pudo asignar el tag.";
+      }
       return;
     }
 

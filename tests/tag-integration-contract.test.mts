@@ -28,30 +28,20 @@ test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF
   assert.match(subjectWheel, /getData\("application\/x-study-tag-id"\)/)
   assert.match(tagBar, /setData\("application\/x-study-tag-id"/)
   assert.doesNotMatch(subjectWheel, /setData\("application\/x-study-material-id"/)
-  assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\}/)
+  assert.doesNotMatch(subjectWheel, /<MaterialTagBar/)
 })
 
-test("la barra de tags captura escritura sin mover el scroll y filtra los chips en la misma fila", () => {
-  const tagBar = source("components/material-tag-bar.tsx")
-  const subjectWheel = source("components/subject-wheel.tsx")
-  assert.match(tagBar, /event\.key\.length !== 1/)
-  assert.match(tagBar, /focus\(\{ preventScroll: true \}\)/)
-  assert.match(tagBar, /setInput\(event\.key\)/)
-  assert.match(tagBar, /visibleTags\.map/)
-  assert.match(tagBar, /document\.addEventListener\("scroll", onScroll, \{ capture: true, passive: true \}\)/)
-  assert.match(tagBar, /isFloating \? "fixed left-3 right-3 top-3 z-\[90\]/)
-  assert.match(tagBar, /: "hidden"/)
-  assert.match(tagBar, /setIsFloating\(false\)/)
-  assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\} \/>/)
-  assert.doesNotMatch(tagBar, /top-full z-50/)
-})
-
-test("el visor usa la envoltura React y no modifica internamente PDF.js para mostrar tags", () => {
-  const subjectWheel = source("components/subject-wheel.tsx")
+test("el visor PDF.js abre un panel compacto de tags y lo cierra al desplazar el documento", () => {
   const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
-  assert.match(subjectWheel, /\/practice\/viewer\?/)
-  assert.match(viewer, /<MaterialTagPicker/)
-  assert.doesNotMatch(source("public/pdfjs/web/viewer-custom.js"), /MaterialTagPicker|\/api\/tags/)
+  const pdfJs = source("public/pdfjs/web/viewer-custom.js")
+  assert.match(pdfJs, /pdfjs-custom-tag-button/)
+  assert.match(pdfJs, /pdfjs-custom-tag-panel/)
+  assert.match(pdfJs, /viewerContainer"\)\?\.addEventListener\("scroll", closeMaterialTagPanel/)
+  assert.match(pdfJs, /viewerRequestMaterialTag/)
+  assert.match(viewer, /assignViewerMaterialTag/)
+  assert.match(viewer, /viewerMaterialTagResult/)
+  assert.doesNotMatch(viewer, /<MaterialTagPicker/)
+  assert.doesNotMatch(pdfJs, /\/api\/tags/)
 })
 
 test("el visor local valida una sola fuente y el remoto versiona su cache", () => {
