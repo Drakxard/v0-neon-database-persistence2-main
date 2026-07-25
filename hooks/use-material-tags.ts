@@ -76,6 +76,29 @@ export function useMaterialTags(scope: {
 
   useEffect(() => {
     if (!storageKey) return
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== storageKey) return
+      try {
+        const parsed = JSON.parse(event.newValue || "{}") as { selectedTagIds?: unknown; filterMode?: unknown }
+        setSelectedTagIds(
+          Array.isArray(parsed.selectedTagIds)
+            ? parsed.selectedTagIds.map(Number).filter(Number.isInteger)
+            : []
+        )
+        setFilterMode(parsed.filterMode === "and" ? "and" : "or")
+      } catch {
+        setSelectedTagIds([])
+        setFilterMode("or")
+      }
+    }
+
+    window.addEventListener("storage", handleStorage)
+    return () => window.removeEventListener("storage", handleStorage)
+  }, [storageKey])
+
+  useEffect(() => {
+    if (!storageKey) return
     window.localStorage.setItem(storageKey, JSON.stringify({ selectedTagIds, filterMode }))
   }, [filterMode, selectedTagIds, storageKey])
 

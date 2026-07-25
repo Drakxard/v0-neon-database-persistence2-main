@@ -85,7 +85,10 @@ type ViewerMessage =
   | { type: "viewerReady" }
   | { type: "viewerDocumentLoaded"; materialId?: number; fileName?: string; fingerprint?: string; numPages?: number }
   | { type: "viewerDocumentError"; materialId?: number; fileName?: string }
+  | { type: "viewerRequestMaterialTags" }
   | { type: "viewerRequestMaterialTag"; name?: string }
+  | { type: "viewerUpdateMaterialTag"; tagId?: number; name?: string; color?: string }
+  | { type: "viewerSelectMaterialTag"; tagId?: number }
   | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
 type DeleteEntriesResponse = {
@@ -338,6 +341,17 @@ export function PracticeViewerClient({
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
   }, [])
 
+  const publishViewerMaterialTags = useCallback(() => {
+    if (!resolvedMaterial) return
+    const assignedTagIds = new Set(viewerMaterialTags.workspace.assignments[String(resolvedMaterial.id)] ?? [])
+    postToViewer({
+      type: "viewerMaterialTags",
+      tags: viewerMaterialTags.workspace.tags
+        .map((tag) => ({ id: tag.id, name: tag.name, color: tag.color })),
+      assignedTagIds: Array.from(assignedTagIds),
+    })
+  }, [postToViewer, resolvedMaterial, viewerMaterialTags.workspace])
+
   const assignViewerMaterialTag = useCallback(async (name: string) => {
     if (!resolvedMaterial) {
       postToViewer({ type: "viewerMaterialTagResult", ok: false, error: "No hay un PDF activo para etiquetar." })
@@ -369,6 +383,30 @@ export function PracticeViewerClient({
       })
     }
   }, [postToViewer, resolvedMaterial, viewerMaterialTags])
+
+  const updateViewerMaterialTag = useCallback(async (tagId: number, name: string, color: string) => {
+    const normalizedName = name.replace(/^#/, "").trim()
+    if (!Number.isInteger(tagId) || !normalizedName) {
+      postToViewer({ type: "viewerMaterialTagResult", ok: false, error: "El tag necesita un nombre." })
+      return
+    }
+
+    try {
+      await viewerMaterialTags.updateTag(tagId, { name: normalizedName, color })
+      postToViewer({ type: "viewerMaterialTagResult", ok: true, updated: true })
+      publishViewerMaterialTags()
+    } catch (error) {
+      postToViewer({
+        type: "viewerMaterialTagResult",
+        ok: false,
+        error: error instanceof Error ? error.message : "No se pudo actualizar el tag.",
+      })
+    }
+  }, [postToViewer, publishViewerMaterialTags, viewerMaterialTags])
+
+  useEffect(() => {
+    publishViewerMaterialTags()
+  }, [publishViewerMaterialTags])
 
   const disposeReviewAudio = useCallback((reviewAudio?: ReviewAudio | null) => {
     if (reviewAudio) {
@@ -740,6 +778,7 @@ export function PracticeViewerClient({
 
       if (event.data.type === "viewerReady") {
         syncPositionsToViewer(hasMaterial ? positions : [])
+        publishViewerMaterialTags()
         if (rootHandle) {
           postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
         }
@@ -793,8 +832,30 @@ export function PracticeViewerClient({
         return
       }
 
+      if (event.data.type === "viewerRequestMaterialTags") {
+        publishViewerMaterialTags()
+        return
+      }
+
       if (event.data.type === "viewerRequestMaterialTag") {
         void assignViewerMaterialTag(event.data.name || "")
+        return
+      }
+
+      if (event.data.type === "viewerUpdateMaterialTag") {
+        void updateViewerMaterialTag(
+          Number(event.data.tagId),
+          event.data.name || "",
+          event.data.color || "#10b981"
+        )
+        return
+      }
+
+      if (event.data.type === "viewerSelectMaterialTag") {
+        const tagId = Number(event.data.tagId)
+        if (Number.isInteger(tagId)) {
+          viewerMaterialTags.setSelectedTagIds([tagId])
+        }
         return
       }
 
@@ -944,11 +1005,14 @@ export function PracticeViewerClient({
       loadPositions,
       positions,
       postToViewer,
+      publishViewerMaterialTags,
       replacePairDraft,
       resolvedMaterial,
       startRecording,
       stopPreviewPlayback,
       syncPositionsToViewer,
+      updateViewerMaterialTag,
+      viewerMaterialTags,
       rootHandle,
       onRequestClose,
       uploadPracticeFragment,
@@ -1210,11 +1274,15 @@ export function PracticeViewerClient({
           }}
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-          <div className="max-w-xl rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-center text-sm text-slate-300">
-            {viewerSourceError || "Resolviendo el archivo exacto del material…"}
+        viewerSourceError ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+            <div className="max-w-xl rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-center text-sm text-slate-300">
+              {viewerSourceError}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="min-h-0 flex-1" aria-busy="true" aria-label="Cargando PDF" />
+        )
       )}
 
       <audio ref={audioRef} hidden preload="none" />

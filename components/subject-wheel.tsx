@@ -6149,16 +6149,25 @@ export function SubjectWheel({
                         {materialTags.workspace.tags
                           .filter((tag) => (materialTags.workspace.assignments[String(material.id)] ?? []).includes(tag.id))
                           .map((tag) => (
-                            <button
-                              key={tag.id}
-                              type="button"
-                              onClick={() => void materialTags.unassignTag(material.id, tag.id)}
-                              className="rounded-full border px-2 py-0.5 text-[0.68rem] text-muted-foreground hover:text-foreground"
-                              style={{ borderColor: tag.color }}
-                              title={`Quitar #${tag.name}`}
-                            >
-                              #{tag.name} ×
-                            </button>
+                            <span key={tag.id} className="inline-flex items-center rounded-full border" style={{ borderColor: tag.color }}>
+                              <button
+                                type="button"
+                                onClick={() => materialTags.setSelectedTagIds([tag.id])}
+                                className="rounded-l-full px-2 py-0.5 text-[0.68rem] text-muted-foreground hover:text-foreground"
+                                title={`Ver materiales con #${tag.name}`}
+                              >
+                                #{tag.name}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void materialTags.unassignTag(material.id, tag.id)}
+                                className="rounded-r-full px-1.5 py-0.5 text-[0.68rem] text-muted-foreground hover:bg-accent hover:text-foreground"
+                                title={`Quitar #${tag.name} de este PDF`}
+                                aria-label={`Quitar #${tag.name} de este PDF`}
+                              >
+                                ×
+                              </button>
+                            </span>
                           ))}
                       </div>
                     </div>

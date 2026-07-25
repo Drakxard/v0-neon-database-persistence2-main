@@ -53,6 +53,12 @@
     tagPanel: null,
     tagInput: null,
     tagStatus: null,
+    tagList: null,
+    tagSuggestions: null,
+    tagColorInput: null,
+    tagCatalog: [],
+    assignedTagIds: new Set(),
+    editingTagId: null,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -301,7 +307,7 @@
         button.title = "Agregar tag al PDF";
         button.setAttribute("aria-label", "Agregar tag al PDF");
         button.setAttribute("aria-expanded", "false");
-        button.innerHTML = '<span aria-hidden="true">⌑</span>';
+        button.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 13.5 13.5 20a2.12 2.12 0 0 1-3 0L4 13.5V4h9.5L20 10.5a2.12 2.12 0 0 1 0 3Z"></path><circle cx="9" cy="9" r="1.2"></circle></svg>';
         button.addEventListener("click", () => toggleMaterialTagPanel());
         toolbar.appendChild(button);
         state.tagButton = button;
@@ -309,8 +315,11 @@
         const panel = document.createElement("form");
         panel.className = "pdfjs-custom-tag-panel";
         panel.innerHTML = [
+          '<div id="pdfjs-custom-tag-list" class="pdfjs-custom-tag-list" aria-label="Tags asignados"></div>',
           '<input id="pdfjs-custom-tag-input" type="text" autocomplete="off" placeholder="# asignar o crear" aria-label="Asignar o crear tag" />',
+          '<input id="pdfjs-custom-tag-color" type="color" aria-label="Color del tag" hidden />',
           '<button type="submit">Agregar</button>',
+          '<div id="pdfjs-custom-tag-suggestions" class="pdfjs-custom-tag-suggestions" hidden></div>',
           '<span id="pdfjs-custom-tag-status" role="status"></span>',
         ].join("");
         panel.addEventListener("submit", (event) => {
@@ -321,6 +330,10 @@
         state.tagPanel = panel;
         state.tagInput = panel.querySelector("#pdfjs-custom-tag-input");
         state.tagStatus = panel.querySelector("#pdfjs-custom-tag-status");
+        state.tagList = panel.querySelector("#pdfjs-custom-tag-list");
+        state.tagSuggestions = panel.querySelector("#pdfjs-custom-tag-suggestions");
+        state.tagColorInput = panel.querySelector("#pdfjs-custom-tag-color");
+        state.tagInput.addEventListener("input", () => renderMaterialTagSuggestions());
 
         document.getElementById("viewerContainer")?.addEventListener("scroll", closeMaterialTagPanel, { passive: true });
       }
@@ -706,6 +719,83 @@
     state.tagPanel.dataset.open = "false";
     state.tagButton?.setAttribute("aria-expanded", "false");
     if (state.tagStatus) state.tagStatus.textContent = "";
+    if (state.tagSuggestions) state.tagSuggestions.hidden = true;
+    if (state.tagColorInput) state.tagColorInput.hidden = true;
+    state.editingTagId = null;
+  }
+
+  function renderMaterialTags() {
+    if (!state.tagList) return;
+    state.tagList.replaceChildren();
+    for (const tag of state.tagCatalog.filter((candidate) => state.assignedTagIds.has(candidate.id))) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "pdfjs-custom-tag-chip";
+      chip.textContent = `#${tag.name || "tag"}`;
+      chip.title = `Ver materiales con #${tag.name}`;
+      if (typeof tag.color === "string" && tag.color) {
+        chip.style.borderColor = tag.color;
+      }
+      chip.addEventListener("click", () => {
+        postToParent({ type: "viewerSelectMaterialTag", tagId: tag.id });
+        if (state.tagStatus) state.tagStatus.textContent = `Mostrando materiales con #${tag.name}.`;
+        window.setTimeout(closeMaterialTagPanel, 650);
+      });
+      state.tagList.appendChild(chip);
+
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "pdfjs-custom-tag-edit";
+      edit.textContent = "…";
+      edit.title = `Editar #${tag.name}`;
+      edit.setAttribute("aria-label", `Editar #${tag.name}`);
+      edit.addEventListener("click", () => openMaterialTagEditor(tag));
+      state.tagList.appendChild(edit);
+    }
+  }
+
+  function renderMaterialTagSuggestions() {
+    if (!state.tagSuggestions || !state.tagInput) return;
+    if (state.editingTagId != null) {
+      state.tagSuggestions.hidden = true;
+      return;
+    }
+
+    const query = state.tagInput.value.replace(/^#/, "").trim().toLocaleLowerCase();
+    const matches = query
+      ? state.tagCatalog.filter((tag) => tag.name.toLocaleLowerCase().includes(query)).slice(0, 5)
+      : [];
+    state.tagSuggestions.replaceChildren();
+    for (const tag of matches) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.textContent = `#${tag.name}`;
+      option.style.setProperty("--tag-color", tag.color || "#0f766e");
+      option.addEventListener("click", () => {
+        state.tagInput.value = tag.name;
+        state.tagSuggestions.hidden = true;
+        submitMaterialTag();
+      });
+      state.tagSuggestions.appendChild(option);
+    }
+    state.tagSuggestions.hidden = matches.length === 0;
+  }
+
+  function openMaterialTagEditor(tag) {
+    if (!state.tagInput || !state.tagColorInput || !state.tagPanel) return;
+    state.editingTagId = tag.id;
+    state.tagInput.value = tag.name || "";
+    state.tagColorInput.value = tag.color || "#10b981";
+    state.tagColorInput.hidden = false;
+    state.tagPanel.querySelector('button[type="submit"]').textContent = "Guardar";
+    if (state.tagSuggestions) state.tagSuggestions.hidden = true;
+    state.tagInput.focus();
+  }
+
+  function resetMaterialTagEditor() {
+    state.editingTagId = null;
+    if (state.tagColorInput) state.tagColorInput.hidden = true;
+    state.tagPanel?.querySelector('button[type="submit"]').replaceChildren("Agregar");
   }
 
   function toggleMaterialTagPanel() {
@@ -723,8 +813,10 @@
 
     state.tagPanel.dataset.open = "true";
     state.tagButton?.setAttribute("aria-expanded", "true");
+    resetMaterialTagEditor();
     state.tagInput.value = "";
     if (state.tagStatus) state.tagStatus.textContent = "";
+    postToParent({ type: "viewerRequestMaterialTags" });
     window.setTimeout(() => state.tagInput?.focus(), 0);
   }
 
@@ -737,6 +829,15 @@
     }
 
     if (state.tagStatus) state.tagStatus.textContent = "Guardando...";
+    if (state.editingTagId != null) {
+      postToParent({
+        type: "viewerUpdateMaterialTag",
+        tagId: state.editingTagId,
+        name,
+        color: state.tagColorInput?.value || "#10b981",
+      });
+      return;
+    }
     postToParent({ type: "viewerRequestMaterialTag", name });
   }
 
@@ -2299,14 +2400,30 @@
     if (event.data.type === "viewerMaterialTagResult") {
       if (!state.tagPanel) return;
       if (event.data.ok) {
+        if (Array.isArray(event.data.tags)) {
+          const catalogById = new Map(state.tagCatalog.map((tag) => [tag.id, tag]));
+          for (const tag of event.data.tags) catalogById.set(tag.id, tag);
+          state.tagCatalog = Array.from(catalogById.values());
+          state.assignedTagIds = new Set(event.data.tags.map((tag) => tag.id));
+          renderMaterialTags();
+        }
         const tagNames = Array.isArray(event.data.tags)
           ? event.data.tags.map((tag) => `#${tag.name}`).join(", ")
           : "";
-        if (state.tagStatus) state.tagStatus.textContent = tagNames ? `Asignado: ${tagNames}` : "Tag asignado.";
+        if (state.tagStatus) state.tagStatus.textContent = tagNames ? `Asignado: ${tagNames}` : "Tag actualizado.";
         window.setTimeout(closeMaterialTagPanel, 900);
       } else if (state.tagStatus) {
         state.tagStatus.textContent = event.data.error || "No se pudo asignar el tag.";
       }
+      return;
+    }
+
+    if (event.data.type === "viewerMaterialTags") {
+      state.tagCatalog = Array.isArray(event.data.tags) ? event.data.tags : [];
+      state.assignedTagIds = new Set(
+        Array.isArray(event.data.assignedTagIds) ? event.data.assignedTagIds.map(Number).filter(Number.isInteger) : []
+      );
+      renderMaterialTags();
       return;
     }
 

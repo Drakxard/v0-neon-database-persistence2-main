@@ -198,10 +198,14 @@
   font: 700 19px/1 system-ui, sans-serif;
 }
 
-.pdfjs-custom-tag-button > span {
-  display: grid;
-  place-items: center;
-  height: 100%;
+.pdfjs-custom-tag-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .pdfjs-custom-tag-panel {
@@ -225,6 +229,39 @@
   display: flex;
 }
 
+.pdfjs-custom-tag-list {
+  display: flex;
+  max-width: min(300px, 42vw);
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pdfjs-custom-tag-chip {
+  max-width: 130px;
+  overflow: hidden;
+  padding: 4px 6px;
+  border: 1px solid #0f766e;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--main-color, #111827);
+  cursor: pointer;
+  font: 500 12px/1 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdfjs-custom-tag-edit {
+  width: 20px;
+  min-width: 20px;
+  padding: 0 !important;
+  border: 1px solid var(--field-border-color, #9ca3af) !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--main-color, #111827) !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+}
+
 .pdfjs-custom-tag-panel input {
   width: min(220px, 48vw);
   height: 28px;
@@ -234,6 +271,12 @@
   background: var(--field-bg-color, #fff);
   color: var(--field-color, #111827);
   font: inherit;
+}
+
+.pdfjs-custom-tag-panel input[type="color"] {
+  width: 28px;
+  padding: 2px;
+  cursor: pointer;
 }
 
 .pdfjs-custom-tag-panel button {
@@ -253,6 +296,34 @@
   color: var(--main-color, #111827);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pdfjs-custom-tag-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 6px;
+  display: grid;
+  min-width: 180px;
+  max-width: min(280px, calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid var(--toolbar-border-color, #9ca3af);
+  border-radius: 6px;
+  background: var(--toolbar-bg-color, #f8fafc);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+}
+
+.pdfjs-custom-tag-suggestions button {
+  height: auto;
+  padding: 7px 9px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--main-color, #111827);
+  font-weight: 500;
+  text-align: left;
+}
+
+.pdfjs-custom-tag-suggestions button:hover {
+  background: color-mix(in srgb, var(--tag-color) 16%, transparent);
 }
 
 .pdfjs-custom-loading-overlay {
