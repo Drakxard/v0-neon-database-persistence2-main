@@ -1889,7 +1889,6 @@ export function SubjectWheel({
   const pendingFeaturedSaveTimerRef = useRef<number | null>(null)
   const shortcutLongPressTimerRef = useRef<number | null>(null)
   const shouldSuppressShortcutClickRef = useRef(false)
-  const materialTagFloatingAnchorRef = useRef<HTMLDivElement | null>(null)
   const subjectDayDataRequestIdRef = useRef(0)
   const hasAttemptedViewerReturnRestoreRef = useRef(false)
   const pendingViewerReturnContinueRef = useRef<Pick<ViewerReturnSnapshot, "continueMode" | "continueMaterialId"> | null>(null)
@@ -7317,7 +7316,7 @@ export function SubjectWheel({
                   {renderNextWeekAdvanceButton("mobile")}
                 </div>
 
-                <div ref={materialTagFloatingAnchorRef} className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {practiceSectionView === "exercises" && currentSubject
                     ? ([
                         { key: "e_fich" as const, label: "E-Fich" },
@@ -7423,9 +7422,7 @@ export function SubjectWheel({
               ) : null}
 
               {currentSubject ? (
-                <div className="mb-4">
-                  <MaterialTagBar controller={materialTags} floatingAnchorRef={materialTagFloatingAnchorRef} />
-                </div>
+                <MaterialTagBar controller={materialTags} />
               ) : null}
 
               {isSubjectDayRefreshing ? (

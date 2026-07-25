@@ -39,10 +39,10 @@ test("la barra de tags captura escritura sin mover el scroll y filtra los chips 
   assert.match(tagBar, /setInput\(event\.key\)/)
   assert.match(tagBar, /visibleTags\.map/)
   assert.match(tagBar, /document\.addEventListener\("scroll", onScroll, \{ capture: true, passive: true \}\)/)
-  assert.match(tagBar, /floatingAnchorRef\?\.current\?\.getBoundingClientRect\(\)/)
+  assert.match(tagBar, /isFloating \? "fixed left-3 right-3 top-3 z-\[90\]/)
+  assert.match(tagBar, /: "hidden"/)
   assert.match(tagBar, /setIsFloating\(false\)/)
-  assert.match(subjectWheel, /floatingAnchorRef=\{materialTagFloatingAnchorRef\}/)
-  assert.match(tagBar, /setIsFloating\(false\)/)
+  assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\} \/>/)
   assert.doesNotMatch(tagBar, /top-full z-50/)
 })
 

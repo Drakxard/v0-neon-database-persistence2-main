@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, Settings2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -18,19 +18,12 @@ import type { MaterialTagsController } from "@/hooks/use-material-tags"
 import { matchesTagSearch, normalizeTagName } from "@/lib/tag-utils"
 import { cn } from "@/lib/utils"
 
-type MaterialTagBarProps = {
-  controller: MaterialTagsController
-  floatingAnchorRef?: RefObject<HTMLElement | null>
-}
-
-export function MaterialTagBar({ controller, floatingAnchorRef }: MaterialTagBarProps) {
+export function MaterialTagBar({ controller }: { controller: MaterialTagsController }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const anchorRef = useRef<HTMLElement | null>(null)
   const ignoreScrollRef = useRef(false)
   const [input, setInput] = useState("")
   const [notice, setNotice] = useState("")
   const [isFloating, setIsFloating] = useState(false)
-  const [floatingTop, setFloatingTop] = useState<number | null>(null)
   const [isManagerOpen, setIsManagerOpen] = useState(false)
   const [editingTagId, setEditingTagId] = useState<number | null>(null)
   const [editName, setEditName] = useState("")
@@ -55,24 +48,14 @@ export function MaterialTagBar({ controller, floatingAnchorRef }: MaterialTagBar
 
       const scrollX = window.scrollX
       const scrollY = window.scrollY
-      const anchorRect = anchorRef.current?.getBoundingClientRect()
-      const anchorIsVisible = Boolean(
-        anchorRect &&
-        anchorRect.bottom > 0 &&
-        anchorRect.top < window.innerHeight
-      )
 
       event.preventDefault()
-      if (!anchorIsVisible) {
-        const floatingAnchorRect = floatingAnchorRef?.current?.getBoundingClientRect()
-        setFloatingTop(floatingAnchorRect ? floatingAnchorRect.bottom + 8 : 12)
-        setIsFloating(true)
-      }
-      inputRef.current?.focus({ preventScroll: true })
-      setInput(event.key)
-      setNotice("")
+      setIsFloating(true)
 
       requestAnimationFrame(() => {
+        inputRef.current?.focus({ preventScroll: true })
+        setInput(event.key)
+        setNotice("")
         if (window.scrollX === scrollX && window.scrollY === scrollY) return
         ignoreScrollRef.current = true
         window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" })
@@ -91,23 +74,16 @@ export function MaterialTagBar({ controller, floatingAnchorRef }: MaterialTagBar
     const onScroll = () => {
       if (ignoreScrollRef.current) return
       setIsFloating(false)
-      setFloatingTop(null)
       setInput("")
       setNotice("")
       inputRef.current?.blur()
     }
 
     document.addEventListener("scroll", onScroll, { capture: true, passive: true })
-    const onResize = () => {
-      const floatingAnchorRect = floatingAnchorRef?.current?.getBoundingClientRect()
-      setFloatingTop(floatingAnchorRect ? floatingAnchorRect.bottom + 8 : 12)
-    }
-    window.addEventListener("resize", onResize)
     return () => {
       document.removeEventListener("scroll", onScroll, true)
-      window.removeEventListener("resize", onResize)
     }
-  }, [floatingAnchorRef, isFloating])
+  }, [isFloating])
 
   useEffect(() => {
     if (!editingTag) return
@@ -191,13 +167,12 @@ export function MaterialTagBar({ controller, floatingAnchorRef }: MaterialTagBar
   }
 
   return (
-    <section ref={anchorRef} className="relative min-h-12">
+    <section className="relative">
       <div
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card/95 px-2 py-1.5",
-          isFloating && "fixed left-3 right-3 z-[90] shadow-lg backdrop-blur"
+          isFloating ? "fixed left-3 right-3 top-3 z-[90] shadow-lg backdrop-blur" : "hidden"
         )}
-        style={isFloating && floatingTop != null ? { top: `${floatingTop}px` } : undefined}
       >
         <div className="w-40 shrink-0">
           <Input
@@ -282,7 +257,7 @@ export function MaterialTagBar({ controller, floatingAnchorRef }: MaterialTagBar
           </Button>
         </div>
       </div>
-      {notice || controller.error ? (
+      {isFloating && (notice || controller.error) ? (
         <p className={cn("mt-1 px-2 text-xs", controller.error ? "text-red-600" : "text-muted-foreground")}>
           {controller.error || notice}
         </p>
