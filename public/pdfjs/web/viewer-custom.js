@@ -364,24 +364,10 @@
       overlay.className = "pdfjs-custom-presentation";
       overlay.setAttribute("aria-label", "Presentacion de recortes etiquetados");
 
-      const header = document.createElement("header");
-      header.className = "pdfjs-custom-presentation-header";
-      const heading = document.createElement("div");
-      const eyebrow = document.createElement("span");
-      eyebrow.textContent = "Presentacion";
-      const title = document.createElement("h1");
-      title.textContent = "Recortes etiquetados";
-      heading.append(eyebrow, title);
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "Cerrar";
-      close.addEventListener("click", () => window.close());
-      header.append(heading, close);
-
       const content = document.createElement("div");
       content.className = "pdfjs-custom-presentation-content";
       content.textContent = "Cargando recortes...";
-      overlay.append(header, content);
+      overlay.appendChild(content);
       document.body.appendChild(overlay);
       document.body.classList.add("pdfjs-custom-presentation-mode");
       state.presentationOverlay = overlay;
@@ -849,21 +835,17 @@
         const crop = document.createElement("canvas");
         crop.width = sourceWidth;
         crop.height = sourceHeight;
+        crop.style.width = `${sourceWidth / 2}px`;
+        crop.style.height = `${sourceHeight / 2}px`;
         const cropContext = crop.getContext("2d");
         if (!cropContext) continue;
         cropContext.drawImage(pageCanvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
 
         const card = document.createElement("article");
         card.className = "pdfjs-custom-presentation-card";
-        const meta = document.createElement("div");
-        meta.className = "pdfjs-custom-presentation-meta";
-        const tagLabel = document.createElement("span");
-        tagLabel.textContent = `#${region.tag.name}`;
-        tagLabel.style.borderColor = region.tag.color || "#0f766e";
-        const pageLabel = document.createElement("span");
-        pageLabel.textContent = `Pagina ${pageNumber}`;
-        meta.append(tagLabel, pageLabel);
-        card.append(meta, crop);
+        card.setAttribute("aria-label", `Region de #${region.tag.name}, pagina ${pageNumber}`);
+        card.title = `#${region.tag.name} - pagina ${pageNumber}`;
+        card.appendChild(crop);
         content.appendChild(card);
       }
     } catch (error) {

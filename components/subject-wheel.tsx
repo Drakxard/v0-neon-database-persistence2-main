@@ -25,6 +25,7 @@ import type { AuthSession } from "@/lib/authz"
 import { getErrorMessage, parseJsonResponse, requireOkJson } from "@/lib/client/api"
 import { uploadCronogramaPdf } from "@/lib/client/cronograma"
 import { buildCronogramaViewerHref } from "@/lib/client/cronograma-viewer"
+import { createPdfFileFromText } from "@/lib/client/text-to-pdf"
 import { saveDailySession } from "@/lib/daily-study-client"
 import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
@@ -185,6 +186,19 @@ type MaterialEditDraft = {
   weekNumber: string
   isCheckupDone: boolean
   containerId: string
+}
+
+type MaterialUploadContextSnapshot = {
+  subject: Subject
+  weekNumber: number
+  sessionDate: string
+  weekdayIndex: number
+}
+
+type DroppedTextPdfDraft = MaterialUploadContextSnapshot & {
+  text: string
+  materialType: SubjectDayMaterialType
+  containerId: number | null
 }
 
 type SynthesisViewMode = "overview" | "detail"
@@ -1650,6 +1664,10 @@ export function SubjectWheel({
   const [containerNameDraft, setContainerNameDraft] = useState("")
   const [containerError, setContainerError] = useState("")
   const [isSavingContainer, setIsSavingContainer] = useState(false)
+  const [droppedTextPdfDraft, setDroppedTextPdfDraft] = useState<DroppedTextPdfDraft | null>(null)
+  const [droppedTextPdfName, setDroppedTextPdfName] = useState("")
+  const [droppedTextPdfError, setDroppedTextPdfError] = useState("")
+  const [isCreatingTextPdf, setIsCreatingTextPdf] = useState(false)
   const [editingContainerId, setEditingContainerId] = useState<number | null>(null)
   const [editingContainerName, setEditingContainerName] = useState("")
   const [deleteContainerTarget, setDeleteContainerTarget] = useState<SubjectMaterialContainer | null>(null)
@@ -2005,7 +2023,7 @@ export function SubjectWheel({
       const isTagSearch = Boolean(target?.closest("[data-material-tag-search='true']"))
       const isEditable = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"))
       if (isEditable && !isTagSearch) return
-      if (isCreateContainerOpen || isShortcutDialogOpen || editingMaterial) return
+      if (isCreateContainerOpen || isShortcutDialogOpen || editingMaterial || droppedTextPdfDraft) return
       event.preventDefault()
       event.stopPropagation()
       setContainerNameDraft("")
@@ -2014,7 +2032,7 @@ export function SubjectWheel({
     }
     window.addEventListener("keydown", onPlus, true)
     return () => window.removeEventListener("keydown", onPlus, true)
-  }, [editingMaterial, isCreateContainerOpen, isDialogOpen, isShortcutDialogOpen])
+  }, [droppedTextPdfDraft, editingMaterial, isCreateContainerOpen, isDialogOpen, isShortcutDialogOpen])
 
   const saveNewContainer = async () => {
     if (!currentSubject || !containerNameDraft.trim()) return
@@ -4561,9 +4579,10 @@ export function SubjectWheel({
   const handleMaterialUpload = async (
     materialType: SubjectDayMaterialType,
     files: File[],
-    containerId?: number | null
+    containerId?: number | null,
+    contextSnapshot?: MaterialUploadContextSnapshot
   ) => {
-    if (!currentSubject || files.length === 0) return
+    if ((!currentSubject && !contextSnapshot) || files.length === 0) return
 
     const validFiles = files.filter((file) => isPdfFile(file))
     const skippedFiles = files.filter((file) => !isPdfFile(file))
@@ -4573,12 +4592,12 @@ export function SubjectWheel({
       return
     }
 
-    const subjectSnapshot = currentSubject
+    const subjectSnapshot = contextSnapshot?.subject ?? currentSubject!
     const subjectId = subjectSnapshot.id
     const subjectName = getSubjectDisplayName(subjectSnapshot)
-    const weekNumber = dialogSelectedWeekNumber
-    const sessionDate = subjectDialogDateKey
-    const weekdayIndex = subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0
+    const weekNumber = contextSnapshot?.weekNumber ?? dialogSelectedWeekNumber
+    const sessionDate = contextSnapshot?.sessionDate ?? subjectDialogDateKey
+    const weekdayIndex = contextSnapshot?.weekdayIndex ?? (subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0)
 
     setEntriesError("")
     const failedUploads = await uploadMaterials({
@@ -4632,7 +4651,7 @@ export function SubjectWheel({
     } else if (skippedFiles.length > 0) {
       setEntriesError("")
     }
-    if (currentSubject) void loadMaterialContainers(currentSubject.id)
+    void loadMaterialContainers(subjectId)
 
     if (skippedFiles.length > 0) {
       toast({
@@ -4656,15 +4675,35 @@ export function SubjectWheel({
     return Array.from(dataTransfer.types).includes("application/x-study-material-id")
   }
 
+  const dataTransferHasPlainText = (dataTransfer: DataTransfer | null) => {
+    if (!dataTransfer) return false
+    const types = new Set(Array.from(dataTransfer.types))
+    return (
+      types.has("text/plain") &&
+      !types.has("Files") &&
+      !types.has("text/uri-list") &&
+      !types.has("application/x-study-material-id") &&
+      !types.has("application/x-study-tag-id")
+    )
+  }
+
   const handleMaterialDragEnter = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
+    if (
+      !dataTransferHasFiles(event.dataTransfer) &&
+      !dataTransferHasMaterial(event.dataTransfer) &&
+      !dataTransferHasPlainText(event.dataTransfer)
+    ) return
     event.preventDefault()
     materialDropDepthRef.current[key] = (materialDropDepthRef.current[key] ?? 0) + 1
     setDragOverMaterialType(key)
   }
 
   const handleMaterialDragOver = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
+    if (
+      !dataTransferHasFiles(event.dataTransfer) &&
+      !dataTransferHasMaterial(event.dataTransfer) &&
+      !dataTransferHasPlainText(event.dataTransfer)
+    ) return
     event.preventDefault()
     event.dataTransfer.dropEffect = dataTransferHasMaterial(event.dataTransfer) ? "move" : "copy"
     if (dragOverMaterialType !== key) {
@@ -4673,7 +4712,11 @@ export function SubjectWheel({
   }
 
   const handleMaterialDragLeave = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
+    if (
+      !dataTransferHasFiles(event.dataTransfer) &&
+      !dataTransferHasMaterial(event.dataTransfer) &&
+      !dataTransferHasPlainText(event.dataTransfer)
+    ) return
     event.preventDefault()
     materialDropDepthRef.current[key] = Math.max(0, (materialDropDepthRef.current[key] ?? 0) - 1)
     if (materialDropDepthRef.current[key] === 0 && dragOverMaterialType === key) {
@@ -4695,13 +4738,72 @@ export function SubjectWheel({
       void moveMaterialToContainer(draggedMaterialId, container)
       return
     }
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (dataTransferHasFiles(event.dataTransfer)) {
+      event.preventDefault()
+      materialDropDepthRef.current[key] = 0
+      setDragOverMaterialType(null)
+      const droppedFiles = Array.from(event.dataTransfer.files ?? [])
+      if (droppedFiles.length === 0) return
+      void handleMaterialUpload(materialType, droppedFiles, container?.id ?? null)
+      return
+    }
+    if (!dataTransferHasPlainText(event.dataTransfer) || !currentSubject) return
+
     event.preventDefault()
     materialDropDepthRef.current[key] = 0
     setDragOverMaterialType(null)
-    const droppedFiles = Array.from(event.dataTransfer.files ?? [])
-    if (droppedFiles.length === 0) return
-    void handleMaterialUpload(materialType, droppedFiles, container?.id ?? null)
+    const text = event.dataTransfer.getData("text/plain")
+    if (!text.trim()) {
+      setEntriesError("El texto arrastrado está vacío.")
+      return
+    }
+    setDroppedTextPdfDraft({
+      text,
+      subject: currentSubject,
+      weekNumber: dialogSelectedWeekNumber,
+      sessionDate: subjectDialogDateKey,
+      weekdayIndex: subjectDialogDayIndex >= 0 ? subjectDialogDayIndex : 0,
+      materialType,
+      containerId: container?.id ?? null,
+    })
+    setDroppedTextPdfName("")
+    setDroppedTextPdfError("")
+  }
+
+  const closeDroppedTextPdfDialog = () => {
+    if (isCreatingTextPdf) return
+    setDroppedTextPdfDraft(null)
+    setDroppedTextPdfName("")
+    setDroppedTextPdfError("")
+  }
+
+  const createDroppedTextPdf = async () => {
+    if (!droppedTextPdfDraft || !droppedTextPdfName.trim()) return
+    const draft = droppedTextPdfDraft
+    setIsCreatingTextPdf(true)
+    setDroppedTextPdfError("")
+
+    try {
+      const file = await createPdfFileFromText(draft.text, droppedTextPdfName)
+      setDroppedTextPdfDraft(null)
+      setDroppedTextPdfName("")
+      setDroppedTextPdfError("")
+      setIsCreatingTextPdf(false)
+      void handleMaterialUpload(
+        draft.materialType,
+        [file],
+        draft.containerId,
+        {
+          subject: draft.subject,
+          weekNumber: draft.weekNumber,
+          sessionDate: draft.sessionDate,
+          weekdayIndex: draft.weekdayIndex,
+        }
+      )
+    } catch (error) {
+      setDroppedTextPdfError(error instanceof Error ? error.message : "No se pudo crear el PDF.")
+      setIsCreatingTextPdf(false)
+    }
   }
 
   const moveMaterialToContainer = async (
@@ -7230,6 +7332,44 @@ export function SubjectWheel({
             </DialogClose>
             <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
               Borrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(droppedTextPdfDraft)}
+        onOpenChange={(open) => {
+          if (!open) closeDroppedTextPdfDialog()
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogTitle className="sr-only">Crear PDF desde texto</DialogTitle>
+          <Input
+            value={droppedTextPdfName}
+            onChange={(event) => {
+              setDroppedTextPdfName(event.target.value)
+              setDroppedTextPdfError("")
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void createDroppedTextPdf()
+              }
+            }}
+            placeholder="Nombre"
+            disabled={isCreatingTextPdf}
+            autoFocus
+          />
+          {droppedTextPdfError ? <p className="text-sm text-red-600">{droppedTextPdfError}</p> : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => void createDroppedTextPdf()}
+              disabled={!droppedTextPdfName.trim() || isCreatingTextPdf}
+            >
+              {isCreatingTextPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Crear
             </Button>
           </DialogFooter>
         </DialogContent>

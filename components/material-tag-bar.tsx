@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, Settings2, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -34,6 +34,13 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
     [controller.workspace.tags, input]
   )
   const editingTag = controller.workspace.tags.find((tag) => tag.id === editingTagId) ?? null
+
+  const closeFloatingSearch = useCallback(() => {
+    setIsFloating(false)
+    setInput("")
+    setNotice("")
+    inputRef.current?.blur()
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -70,17 +77,14 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
 
     const onScroll = () => {
       if (ignoreScrollRef.current) return
-      setIsFloating(false)
-      setInput("")
-      setNotice("")
-      inputRef.current?.blur()
+      closeFloatingSearch()
     }
 
     document.addEventListener("scroll", onScroll, { capture: true, passive: true })
     return () => {
       document.removeEventListener("scroll", onScroll, true)
     }
-  }, [isFloating])
+  }, [closeFloatingSearch, isFloating])
 
   useEffect(() => {
     if (!editingTag) return
@@ -90,8 +94,7 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
 
   const chooseTag = (tagId: number) => {
     controller.toggleSelectedTag(tagId)
-    setInput("")
-    setNotice("")
+    closeFloatingSearch()
   }
 
   const submitInput = async () => {
@@ -108,8 +111,7 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
     try {
       const result = await controller.createTag({ name: displayName })
       controller.toggleSelectedTag(result.tag.id)
-      setInput("")
-      setNotice("")
+      closeFloatingSearch()
     } catch {}
   }
 
@@ -159,7 +161,12 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
             data-material-tag-search="true"
             value={input}
             onChange={(event) => {
-              setInput(event.target.value.replace(/\+/g, ""))
+              const nextInput = event.target.value.replace(/\+/g, "")
+              if (!nextInput.trim()) {
+                closeFloatingSearch()
+                return
+              }
+              setInput(nextInput)
               setNotice("")
             }}
             onKeyDown={(event) => {
@@ -172,9 +179,7 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
                 void submitInput()
               }
               if (event.key === "Escape") {
-                setInput("")
-                setIsFloating(false)
-                inputRef.current?.blur()
+                closeFloatingSearch()
               }
             }}
             placeholder="# crear o filtrar"
