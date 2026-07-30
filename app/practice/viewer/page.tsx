@@ -31,6 +31,7 @@ type ViewerPageProps = {
     weekdayIndex?: string
     materialType?: string
     returnToken?: string
+    presentationTagIds?: string
   }>
 }
 
@@ -104,6 +105,12 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const weekNumber = Number.parseInt(params.weekNumber || "", 10)
   const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
   const returnToken = (params.returnToken || "").trim()
+  const presentationTagIds = Array.from(new Set(
+    String(params.presentationTagIds || "")
+      .split(",")
+      .map((value) => Number.parseInt(value, 10))
+      .filter(Number.isInteger)
+  ))
   const materialType =
     params.materialType === "practice" || params.materialType === "theory"
       ? params.materialType
@@ -169,7 +176,14 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   }
 
   if (isLocalStorageMode()) {
-    return <PracticeViewerClient materialId={materialId} mode="standalone" returnToken={returnToken} />
+    return (
+      <PracticeViewerClient
+        materialId={materialId}
+        mode="standalone"
+        returnToken={returnToken}
+        presentationTagIds={presentationTagIds}
+      />
+    )
   }
 
   try {
@@ -243,6 +257,7 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
           sourceRevision: `${material.drive_file_id}:${material.updated_at}`,
           returnToken,
         }}
+        presentationTagIds={presentationTagIds}
       />
     )
   } catch (error) {

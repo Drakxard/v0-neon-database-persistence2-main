@@ -62,6 +62,11 @@
     activeRegionTagId: null,
     activeRegionTagName: "",
     editingTagId: null,
+    presentationOverlay: null,
+    presentationContent: null,
+    presentationRegionsByTag: new Map(),
+    presentationPendingTagIds: new Set(),
+    presentationRenderToken: 0,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -86,6 +91,12 @@
       workspaceFileId: String(params.get("workspaceFileId") || "").trim(),
       viewerMode: String(params.get("viewerMode") || "standalone").trim() === "inline" ? "inline" : "standalone",
       returnToken: String(params.get("returnToken") || "").trim(),
+      presentationTagIds: Array.from(new Set(
+        String(params.get("presentationTagIds") || "")
+          .split(",")
+          .map((value) => Number.parseInt(value, 10))
+          .filter(Number.isInteger)
+      )),
     };
   }
 
@@ -97,6 +108,10 @@
 
   function isCronogramaResource() {
     return state.query?.resourceType === "cronograma";
+  }
+
+  function isPresentationMode() {
+    return Array.isArray(state.query?.presentationTagIds) && state.query.presentationTagIds.length > 0;
   }
 
   function isEditableTarget(target) {
@@ -299,7 +314,7 @@
   }
 
   function ensureUi() {
-    if (!state.tagButton) {
+    if (!state.tagButton && !isPresentationMode()) {
       const toolbar = document.getElementById("toolbarViewerLeft") || document.getElementById("toolbarViewer");
       if (toolbar) {
         const button = document.createElement("button");
@@ -342,6 +357,35 @@
           if (state.activeRegionTagId == null) closeMaterialTagPanel();
         }, { passive: true });
       }
+    }
+
+    if (isPresentationMode() && !state.presentationOverlay) {
+      const overlay = document.createElement("section");
+      overlay.className = "pdfjs-custom-presentation";
+      overlay.setAttribute("aria-label", "Presentacion de recortes etiquetados");
+
+      const header = document.createElement("header");
+      header.className = "pdfjs-custom-presentation-header";
+      const heading = document.createElement("div");
+      const eyebrow = document.createElement("span");
+      eyebrow.textContent = "Presentacion";
+      const title = document.createElement("h1");
+      title.textContent = "Recortes etiquetados";
+      heading.append(eyebrow, title);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "Cerrar";
+      close.addEventListener("click", () => window.close());
+      header.append(heading, close);
+
+      const content = document.createElement("div");
+      content.className = "pdfjs-custom-presentation-content";
+      content.textContent = "Cargando recortes...";
+      overlay.append(header, content);
+      document.body.appendChild(overlay);
+      document.body.classList.add("pdfjs-custom-presentation-mode");
+      state.presentationOverlay = overlay;
+      state.presentationContent = content;
     }
 
     if (!state.toastStack) {
@@ -728,6 +772,108 @@
     if (state.tagSuggestions) state.tagSuggestions.hidden = true;
     if (state.tagColorInput) state.tagColorInput.hidden = true;
     state.editingTagId = null;
+  }
+
+  function requestPresentationRegions() {
+    if (!isPresentationMode() || !state.app?.pdfDocument) return;
+    state.presentationRegionsByTag.clear();
+    state.presentationPendingTagIds = new Set(state.query.presentationTagIds);
+    if (state.presentationContent) {
+      state.presentationContent.textContent = "Cargando recortes...";
+    }
+    postToParent({ type: "viewerRequestMaterialTags" });
+    for (const tagId of state.query.presentationTagIds) {
+      postToParent({ type: "viewerRequestMaterialTagRegions", tagId });
+    }
+  }
+
+  async function renderPresentationRegions() {
+    if (!isPresentationMode() || state.presentationPendingTagIds.size > 0 || !state.presentationContent) return;
+    const content = state.presentationContent;
+    const renderToken = ++state.presentationRenderToken;
+    const regions = [];
+    for (const tagId of state.query.presentationTagIds) {
+      const tag = state.tagCatalog.find((candidate) => candidate.id === tagId) || {
+        id: tagId,
+        name: `tag ${tagId}`,
+        color: "#0f766e",
+      };
+      for (const region of state.presentationRegionsByTag.get(tagId) || []) {
+        regions.push({ ...region, tag });
+      }
+    }
+    regions.sort((left, right) =>
+      Number(left.pageNumber) - Number(right.pageNumber) ||
+      Number(left.y1) - Number(right.y1) ||
+      Number(left.x1) - Number(right.x1) ||
+      Number(left.orderIndex || 0) - Number(right.orderIndex || 0)
+    );
+
+    content.replaceChildren();
+    if (!regions.length) {
+      const empty = document.createElement("p");
+      empty.className = "pdfjs-custom-presentation-empty";
+      empty.textContent = "No hay regiones guardadas para las etiquetas activas.";
+      content.appendChild(empty);
+      return;
+    }
+
+    const pageCache = new Map();
+    try {
+      for (const region of regions) {
+        if (renderToken !== state.presentationRenderToken) return;
+        const pageNumber = Number(region.pageNumber);
+        const rotation = Number(region.pageRotation || 0);
+        const cacheKey = `${pageNumber}:${rotation}`;
+        let pageCanvas = pageCache.get(cacheKey);
+        if (!pageCanvas) {
+          const page = await state.app.pdfDocument.getPage(pageNumber);
+          const viewport = page.getViewport({ scale: 2, rotation });
+          pageCanvas = document.createElement("canvas");
+          pageCanvas.width = Math.ceil(viewport.width);
+          pageCanvas.height = Math.ceil(viewport.height);
+          const context = pageCanvas.getContext("2d");
+          if (!context) throw new Error("El navegador no pudo preparar el recorte.");
+          await page.render({ canvas: pageCanvas, canvasContext: context, viewport }).promise;
+          pageCache.set(cacheKey, pageCanvas);
+        }
+
+        const left = clamp01(Math.min(Number(region.x1), Number(region.x2)));
+        const top = clamp01(Math.min(Number(region.y1), Number(region.y2)));
+        const right = clamp01(Math.max(Number(region.x1), Number(region.x2)));
+        const bottom = clamp01(Math.max(Number(region.y1), Number(region.y2)));
+        const sourceX = Math.floor(left * pageCanvas.width);
+        const sourceY = Math.floor(top * pageCanvas.height);
+        const sourceWidth = Math.max(1, Math.ceil((right - left) * pageCanvas.width));
+        const sourceHeight = Math.max(1, Math.ceil((bottom - top) * pageCanvas.height));
+        const crop = document.createElement("canvas");
+        crop.width = sourceWidth;
+        crop.height = sourceHeight;
+        const cropContext = crop.getContext("2d");
+        if (!cropContext) continue;
+        cropContext.drawImage(pageCanvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+
+        const card = document.createElement("article");
+        card.className = "pdfjs-custom-presentation-card";
+        const meta = document.createElement("div");
+        meta.className = "pdfjs-custom-presentation-meta";
+        const tagLabel = document.createElement("span");
+        tagLabel.textContent = `#${region.tag.name}`;
+        tagLabel.style.borderColor = region.tag.color || "#0f766e";
+        const pageLabel = document.createElement("span");
+        pageLabel.textContent = `Pagina ${pageNumber}`;
+        meta.append(tagLabel, pageLabel);
+        card.append(meta, crop);
+        content.appendChild(card);
+      }
+    } catch (error) {
+      console.error("Custom PDF.js presentation failed:", error);
+      content.replaceChildren();
+      const failure = document.createElement("p");
+      failure.className = "pdfjs-custom-presentation-empty";
+      failure.textContent = error instanceof Error ? error.message : "No se pudieron preparar los recortes.";
+      content.appendChild(failure);
+    }
   }
 
   function renderMaterialTags() {
@@ -2444,6 +2590,18 @@
     }
 
     if (event.data.type === "viewerMaterialTagRegions") {
+      if (isPresentationMode()) {
+        const presentationTagId = Number(event.data.tagId);
+        if (state.presentationPendingTagIds.has(presentationTagId)) {
+          state.presentationRegionsByTag.set(
+            presentationTagId,
+            event.data.ok && Array.isArray(event.data.regions) ? event.data.regions : []
+          );
+          state.presentationPendingTagIds.delete(presentationTagId);
+          void renderPresentationRegions();
+        }
+        return;
+      }
       if (!event.data.ok) {
         if (state.tagStatus) state.tagStatus.textContent = event.data.error || "No se pudieron cargar las regiones.";
         return;
@@ -2516,6 +2674,9 @@
         ? event.data.regionCounts
         : {};
       renderMaterialTags();
+      if (isPresentationMode() && state.presentationPendingTagIds.size === 0) {
+        void renderPresentationRegions();
+      }
       return;
     }
 
@@ -2670,6 +2831,9 @@
       fingerprint: state.app?.pdfDocument?.fingerprints?.[0] || "",
       numPages: state.app?.pdfDocument?.numPages || 0,
     });
+    if (isPresentationMode()) {
+      requestPresentationRegions();
+    }
   }
 
   function handleKeyDown(event) {

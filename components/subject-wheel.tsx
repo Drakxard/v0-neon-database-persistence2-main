@@ -820,8 +820,8 @@ function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcu
 
 function buildMaterialRegionPresentationHref(materialId: number, tagIds: number[]) {
   const params = new URLSearchParams({ materialId: String(materialId) })
-  if (tagIds.length > 0) params.set("tagIds", tagIds.join(","))
-  return `/practice/presentation?${params.toString()}`
+  params.set("presentationTagIds", tagIds.join(","))
+  return `/practice/viewer?${params.toString()}`
 }
 
 function isPdfFile(file: File) {
@@ -4651,24 +4651,29 @@ export function SubjectWheel({
     return Array.from(dataTransfer.types).includes("Files")
   }
 
+  const dataTransferHasMaterial = (dataTransfer: DataTransfer | null) => {
+    if (!dataTransfer) return false
+    return Array.from(dataTransfer.types).includes("application/x-study-material-id")
+  }
+
   const handleMaterialDragEnter = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
     event.preventDefault()
     materialDropDepthRef.current[key] = (materialDropDepthRef.current[key] ?? 0) + 1
     setDragOverMaterialType(key)
   }
 
   const handleMaterialDragOver = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = "copy"
+    event.dataTransfer.dropEffect = dataTransferHasMaterial(event.dataTransfer) ? "move" : "copy"
     if (dragOverMaterialType !== key) {
       setDragOverMaterialType(key)
     }
   }
 
   const handleMaterialDragLeave = (key: string, event: React.DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return
+    if (!dataTransferHasFiles(event.dataTransfer) && !dataTransferHasMaterial(event.dataTransfer)) return
     event.preventDefault()
     materialDropDepthRef.current[key] = Math.max(0, (materialDropDepthRef.current[key] ?? 0) - 1)
     if (materialDropDepthRef.current[key] === 0 && dragOverMaterialType === key) {
@@ -4679,16 +4684,69 @@ export function SubjectWheel({
   const handleMaterialDrop = (
     key: string,
     materialType: ContinueMode,
-    containerId: number | null,
+    container: SubjectMaterialContainer | null,
     event: React.DragEvent<HTMLElement>
   ) => {
+    const draggedMaterialId = Number(event.dataTransfer.getData("application/x-study-material-id"))
+    if (Number.isInteger(draggedMaterialId) && container) {
+      event.preventDefault()
+      materialDropDepthRef.current[key] = 0
+      setDragOverMaterialType(null)
+      void moveMaterialToContainer(draggedMaterialId, container)
+      return
+    }
     if (!dataTransferHasFiles(event.dataTransfer)) return
     event.preventDefault()
     materialDropDepthRef.current[key] = 0
     setDragOverMaterialType(null)
     const droppedFiles = Array.from(event.dataTransfer.files ?? [])
     if (droppedFiles.length === 0) return
-    void handleMaterialUpload(materialType, droppedFiles, containerId)
+    void handleMaterialUpload(materialType, droppedFiles, container?.id ?? null)
+  }
+
+  const moveMaterialToContainer = async (
+    materialId: number,
+    container: SubjectMaterialContainer
+  ) => {
+    const material = materials.find((candidate) => candidate.id === materialId)
+    if (!material || material.container_id === container.id) return
+
+    const previousMaterial = material
+    const nextMaterialType: SubjectDayMaterialType = container.kind === "theory" ? "theory" : "practice"
+    setEntriesError("")
+    setMaterials((current) =>
+      sortSubjectDayMaterials(
+        current.map((candidate) =>
+          candidate.id === materialId
+            ? { ...candidate, container_id: container.id, material_type: nextMaterialType }
+            : candidate
+        )
+      )
+    )
+
+    try {
+      const response = await fetch(`/api/subject-day-materials/${materialId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ containerId: container.id, materialType: nextMaterialType }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(getErrorMessage(payload, "No se pudo mover el PDF."))
+      const updatedMaterial = payload as SubjectDayMaterial
+      setMaterials((current) =>
+        sortSubjectDayMaterials(
+          current.map((candidate) => candidate.id === updatedMaterial.id ? updatedMaterial : candidate)
+        )
+      )
+      if (currentSubject) void loadMaterialContainers(currentSubject.id)
+    } catch (error) {
+      setMaterials((current) =>
+        sortSubjectDayMaterials(
+          current.map((candidate) => candidate.id === previousMaterial.id ? previousMaterial : candidate)
+        )
+      )
+      setEntriesError(error instanceof Error ? error.message : "No se pudo mover el PDF.")
+    }
   }
 
   const loadContinuePayload = async (
@@ -6247,7 +6305,7 @@ export function SubjectWheel({
         onDragEnter={(event) => handleMaterialDragEnter(dropKey, event)}
         onDragOver={(event) => handleMaterialDragOver(dropKey, event)}
         onDragLeave={(event) => handleMaterialDragLeave(dropKey, event)}
-        onDrop={(event) => handleMaterialDrop(dropKey, mode, container?.id ?? null, event)}
+        onDrop={(event) => handleMaterialDrop(dropKey, mode, container, event)}
         className={cn(
           "space-y-3 rounded-2xl border bg-muted/40 p-3 transition-colors sm:p-4",
           isDropActive ? "border-primary bg-primary/5" : "border-border"
@@ -6304,6 +6362,16 @@ export function SubjectWheel({
             filteredMaterialsForMode.map((material) => (
               <div
                 key={material.id}
+                draggable={!isMaterialEditSaving && !("is_pending_upload" in material)}
+                onDragStart={(event) => {
+                  if ("is_pending_upload" in material) {
+                    event.preventDefault()
+                    return
+                  }
+                  event.dataTransfer.effectAllowed = "move"
+                  event.dataTransfer.setData("application/x-study-material-id", String(material.id))
+                  event.dataTransfer.setData("text/plain", material.file_name)
+                }}
                 onDragOver={(event) => {
                   if ("is_pending_upload" in material || !event.dataTransfer.types.includes("application/x-study-tag-id")) return
                   event.preventDefault()
@@ -6350,6 +6418,7 @@ export function SubjectWheel({
                         href={buildMaterialViewerHref(material)}
                         target="_blank"
                         rel="noopener noreferrer"
+                        draggable={false}
                         className="block min-w-0 truncate text-sm text-foreground hover:underline"
                       >
                         {material.file_name}
@@ -6394,36 +6463,23 @@ export function SubjectWheel({
                       {(() => {
                         const counts = materialTags.workspace.regionCounts[String(material.id)] ?? {}
                         const assignedIds = materialTags.workspace.assignments[String(material.id)] ?? []
-                        const availableIds = assignedIds.filter((tagId) => Number(counts[String(tagId)] ?? 0) > 0)
-                        const filteredIds = materialTags.selectedTagIds.length > 0
-                          ? availableIds.filter((tagId) => materialTags.selectedTagIds.includes(tagId))
-                          : availableIds
-                        const canPresent = filteredIds.length > 0
-                        return (
+                        const filteredIds = materialTags.selectedTagIds.filter(
+                          (tagId) => assignedIds.includes(tagId) && Number(counts[String(tagId)] ?? 0) > 0
+                        )
+                        return filteredIds.length > 0 ? (
                           <Button
                             type="button"
                             variant="ghost"
                             size="icon"
-                            disabled={!canPresent}
                             onClick={() => window.open(buildMaterialRegionPresentationHref(material.id, filteredIds), "_blank", "noopener,noreferrer")}
                             className="h-7 w-7 rounded-full text-muted-foreground"
                             aria-label={`Presentar recortes de ${material.file_name}`}
-                            title={canPresent ? "Presentar recortes guardados" : "Este PDF no tiene recortes para los tags activos"}
+                            title="Presentar recortes de los tags activos"
                           >
                             <Eye className="h-3.5 w-3.5" />
                           </Button>
-                        )
+                        ) : null
                       })()}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => openMaterialEditDialog(material)}
-                        className="h-7 w-7 rounded-full text-muted-foreground"
-                        aria-label={`Editar ${material.file_name}`}
-                      >
-                        <FilePenLine className="h-3.5 w-3.5" />
-                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -7180,13 +7236,15 @@ export function SubjectWheel({
       </Dialog>
 
       <Dialog open={isCreateContainerOpen} onOpenChange={(open) => {
-        if (!isSavingContainer) setIsCreateContainerOpen(open)
+        if (isSavingContainer) return
+        setIsCreateContainerOpen(open)
+        if (!open) {
+          setContainerNameDraft("")
+          setContainerError("")
+        }
       }}>
         <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Nuevo contenedor</DialogTitle>
-            <DialogDescription>Se agregará a esta materia para organizar PDFs y tags.</DialogDescription>
-          </DialogHeader>
+          <DialogTitle className="sr-only">Nuevo contenedor</DialogTitle>
           <Input
             value={containerNameDraft}
             onChange={(event) => {
@@ -7734,12 +7792,6 @@ export function SubjectWheel({
                 <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Actualizando...
-                </div>
-              ) : null}
-
-              {LOCAL_STORAGE_MODE && isWeeklyAdvanceContext && !currentSubjectHasAnyContent ? (
-                <div className="mb-4 rounded-2xl border border-[color:color-mix(in_srgb,var(--chart-3)_32%,var(--border))] bg-[color:color-mix(in_srgb,var(--chart-3)_10%,var(--card))] px-4 py-3 text-sm text-foreground">
-                  Esta materia todavia no tiene semanas con contenido. Manten pulsado el boton <span className="font-semibold text-[color:var(--chart-3)]">+</span> sobre la flecha derecha para crear una nueva.
                 </div>
               ) : null}
 

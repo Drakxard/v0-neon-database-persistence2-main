@@ -21,13 +21,14 @@ test("el modo local cubre catalogo, asignacion y consulta por material", () => {
   assert.match(interceptor, /listLocalTagsForMaterial/)
 })
 
-test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF", () => {
+test("la lista de materiales permite filtrar, asignar tags y mover PDFs entre contenedores", () => {
   const subjectWheel = source("components/subject-wheel.tsx")
   const tagBar = source("components/material-tag-bar.tsx")
   assert.match(subjectWheel, /materialMatchesTagFilter/)
   assert.match(subjectWheel, /getData\("application\/x-study-tag-id"\)/)
   assert.match(tagBar, /setData\("application\/x-study-tag-id"/)
-  assert.doesNotMatch(subjectWheel, /setData\("application\/x-study-material-id"/)
+  assert.match(subjectWheel, /setData\("application\/x-study-material-id"/)
+  assert.match(subjectWheel, /moveMaterialToContainer/)
   assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\} \/>/)
 })
 
@@ -43,6 +44,8 @@ test("el visor PDF.js captura y persiste varias regiones por tag", () => {
   assert.match(pdfJs, /viewerUpdateMaterialTag/)
   assert.match(pdfJs, /viewerRequestMaterialTagRegions/)
   assert.match(pdfJs, /viewerSaveMaterialTagRegions/)
+  assert.match(pdfJs, /renderPresentationRegions/)
+  assert.match(pdfJs, /presentationTagIds/)
   assert.match(viewer, /loadViewerMaterialTagRegions/)
   assert.match(viewer, /saveViewerMaterialTagRegions/)
   assert.match(pdfJs, /activeRegionTagId == null\) closeMaterialTagPanel/)
@@ -52,6 +55,7 @@ test("el visor PDF.js captura y persiste varias regiones por tag", () => {
   assert.match(viewer, /updateViewerMaterialTag/)
   assert.doesNotMatch(viewer, /<MaterialTagPicker/)
   assert.doesNotMatch(pdfJs, /\/api\/tags/)
+  assert.doesNotMatch(viewer, /RegionPresentationClient/)
 })
 
 test("contenedores, NLM y regiones tienen contratos persistentes y locales", () => {

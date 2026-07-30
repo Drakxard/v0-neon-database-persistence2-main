@@ -13,7 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { MaterialTagsController } from "@/hooks/use-material-tags"
 import { matchesTagSearch, normalizeTagName } from "@/lib/tag-utils"
 import { cn } from "@/lib/utils"
@@ -28,8 +27,6 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
   const [editingTagId, setEditingTagId] = useState<number | null>(null)
   const [editName, setEditName] = useState("")
   const [editColor, setEditColor] = useState("#10b981")
-  const [editParentId, setEditParentId] = useState("none")
-  const [mergeTargetId, setMergeTargetId] = useState("none")
   const [isSaving, setIsSaving] = useState(false)
 
   const visibleTags = useMemo(
@@ -89,8 +86,6 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
     if (!editingTag) return
     setEditName(editingTag.name)
     setEditColor(editingTag.color)
-    setEditParentId(editingTag.parentId == null ? "none" : String(editingTag.parentId))
-    setMergeTargetId("none")
   }, [editingTag])
 
   const chooseTag = (tagId: number) => {
@@ -125,24 +120,8 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
       await controller.updateTag(editingTag.id, {
         name: editName,
         color: editColor,
-        parentId: editParentId === "none" ? null : Number(editParentId),
       })
       setNotice("Tag actualizado.")
-    } catch {
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  const mergeEdit = async () => {
-    if (!editingTag || mergeTargetId === "none") return
-    const target = controller.workspace.tags.find((tag) => tag.id === Number(mergeTargetId))
-    if (!target || !window.confirm(`Fusionar #${editingTag.name} dentro de #${target.name}?`)) return
-    setIsSaving(true)
-    try {
-      await controller.mergeTags(editingTag.id, target.id)
-      setEditingTagId(target.id)
-      setNotice("Tags fusionados.")
     } catch {
     } finally {
       setIsSaving(false)
@@ -208,7 +187,6 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
           {controller.isLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" /> : null}
           {visibleTags.map((tag) => {
             const active = controller.selectedTagIds.includes(tag.id)
-            const parent = tag.parentId == null ? null : controller.workspace.tags.find((candidate) => candidate.id === tag.parentId)
             return (
               <button
                 key={tag.id}
@@ -225,9 +203,9 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
                   active ? "text-white shadow-sm" : "bg-background text-foreground hover:bg-accent"
                 )}
                 style={{ borderColor: tag.color, backgroundColor: active ? tag.color : undefined }}
-                title={parent ? `Dentro de #${parent.name}. Arrastra este tag sobre un PDF para asignarlo.` : "Arrastra este tag sobre un PDF para asignarlo."}
+                title="Arrastra este tag sobre un PDF para asignarlo."
               >
-                {parent ? `${parent.name} / ` : ""}#{tag.name}
+                #{tag.name}
               </button>
             )
           })}
@@ -272,7 +250,7 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Administrar tags</DialogTitle>
-            <DialogDescription>Renombra, recolorea, organiza, fusiona o elimina tags manuales.</DialogDescription>
+            <DialogDescription>Edita el nombre o el color, o elimina una etiqueta.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
             <div className="max-h-80 space-y-1 overflow-auto">
@@ -298,33 +276,10 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
                   Color
                   <input type="color" value={editColor} onChange={(event) => setEditColor(event.target.value)} />
                 </label>
-                <Select value={editParentId} onValueChange={setEditParentId}>
-                  <SelectTrigger><SelectValue placeholder="Tag padre" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Sin padre</SelectItem>
-                    {controller.workspace.tags.filter((tag) => tag.id !== editingTag.id).map((tag) => (
-                      <SelectItem key={tag.id} value={String(tag.id)}>#{tag.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
                 <Button type="button" onClick={() => void saveEdit()} disabled={isSaving}>
                   {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   Guardar cambios
                 </Button>
-                <div className="border-t pt-3">
-                  <Select value={mergeTargetId} onValueChange={setMergeTargetId}>
-                    <SelectTrigger><SelectValue placeholder="Fusionar dentro de…" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Elegir destino</SelectItem>
-                      {controller.workspace.tags.filter((tag) => tag.id !== editingTag.id).map((tag) => (
-                        <SelectItem key={tag.id} value={String(tag.id)}>#{tag.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button type="button" variant="outline" className="mt-2" disabled={mergeTargetId === "none" || isSaving} onClick={() => void mergeEdit()}>
-                    Fusionar explícitamente
-                  </Button>
-                </div>
                 <Button type="button" variant="destructive" onClick={() => void deleteEdit()} disabled={isSaving}>
                   <X className="mr-2 h-4 w-4" />
                   Eliminar tag

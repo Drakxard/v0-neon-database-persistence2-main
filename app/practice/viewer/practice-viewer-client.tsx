@@ -98,6 +98,7 @@ type DeleteEntriesResponse = {
 }
 
 const PAIR_ROLES: PairRole[] = ["question", "answer"]
+const EMPTY_PRESENTATION_TAG_IDS: number[] = []
 
 function sanitizeWorkspaceSegment(value: string) {
   return value
@@ -183,6 +184,7 @@ function buildViewerSrc({
   pendingMaterialId,
   mode,
   returnToken,
+  presentationTagIds,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
@@ -191,6 +193,7 @@ function buildViewerSrc({
   pendingMaterialId?: number
   mode?: "inline" | "standalone"
   returnToken?: string
+  presentationTagIds?: number[]
 }) {
   const params = new URLSearchParams()
 
@@ -237,6 +240,9 @@ function buildViewerSrc({
   if (returnToken) {
     params.set("returnToken", returnToken)
   }
+  if (presentationTagIds?.length) {
+    params.set("presentationTagIds", presentationTagIds.join(","))
+  }
 
   return `/pdfjs/web/viewer.html?${params.toString()}#locale=es-AR`
 }
@@ -262,6 +268,7 @@ export function PracticeViewerClient({
   mode = "standalone",
   onRequestClose,
   returnToken,
+  presentationTagIds = EMPTY_PRESENTATION_TAG_IDS,
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
@@ -269,6 +276,7 @@ export function PracticeViewerClient({
   mode?: "inline" | "standalone"
   onRequestClose?: () => void
   returnToken?: string
+  presentationTagIds?: number[]
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -314,8 +322,9 @@ export function PracticeViewerClient({
         pendingMaterialId: Number.isInteger(materialId) ? materialId : undefined,
         mode,
         returnToken: resolvedMaterial?.returnToken || draftContext?.returnToken || returnToken,
+        presentationTagIds,
       }),
-    [draftContext, isLocalMode, materialFileUrl, materialId, mode, resolvedMaterial, returnToken]
+    [draftContext, isLocalMode, materialFileUrl, materialId, mode, presentationTagIds, resolvedMaterial, returnToken]
   )
   const viewerIdentity = useMemo(() => {
     if (draftContext) return `draft:${draftContext.subjectId}:${draftContext.sessionDate}`
