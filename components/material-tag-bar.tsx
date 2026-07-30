@@ -44,7 +44,7 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
       if (event.altKey && !event.getModifierState("AltGraph")) return
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
-      if (event.key.length !== 1 || !event.key.trim()) return
+      if (event.key === "+" || event.key.length !== 1 || !event.key.trim()) return
 
       const scrollX = window.scrollX
       const scrollY = window.scrollY
@@ -177,12 +177,17 @@ export function MaterialTagBar({ controller }: { controller: MaterialTagsControl
         <div className="w-40 shrink-0">
           <Input
             ref={inputRef}
+            data-material-tag-search="true"
             value={input}
             onChange={(event) => {
-              setInput(event.target.value)
+              setInput(event.target.value.replace(/\+/g, ""))
               setNotice("")
             }}
             onKeyDown={(event) => {
+              if (event.key === "+") {
+                event.preventDefault()
+                return
+              }
               if (event.key === "Enter") {
                 event.preventDefault()
                 void submitInput()

@@ -31,7 +31,7 @@ test("la lista de materiales permite filtrar y asignar arrastrando el tag al PDF
   assert.match(subjectWheel, /<MaterialTagBar controller=\{materialTags\} \/>/)
 })
 
-test("el visor PDF.js abre un panel compacto de tags y lo cierra al desplazar el documento", () => {
+test("el visor PDF.js captura y persiste varias regiones por tag", () => {
   const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
   const pdfJs = source("public/pdfjs/web/viewer-custom.js")
   assert.match(pdfJs, /pdfjs-custom-tag-button/)
@@ -41,16 +41,33 @@ test("el visor PDF.js abre un panel compacto de tags y lo cierra al desplazar el
   assert.match(pdfJs, /renderMaterialTags/)
   assert.match(pdfJs, /renderMaterialTagSuggestions/)
   assert.match(pdfJs, /viewerUpdateMaterialTag/)
-  assert.match(pdfJs, /viewerSelectMaterialTag/)
-  assert.match(viewer, /viewerSelectMaterialTag/)
-  assert.match(viewer, /toggleSelectedTag\(tagId\)/)
-  assert.match(pdfJs, /viewerContainer"\)\?\.addEventListener\("scroll", closeMaterialTagPanel/)
+  assert.match(pdfJs, /viewerRequestMaterialTagRegions/)
+  assert.match(pdfJs, /viewerSaveMaterialTagRegions/)
+  assert.match(viewer, /loadViewerMaterialTagRegions/)
+  assert.match(viewer, /saveViewerMaterialTagRegions/)
+  assert.match(pdfJs, /activeRegionTagId == null\) closeMaterialTagPanel/)
   assert.match(pdfJs, /viewerRequestMaterialTag/)
   assert.match(viewer, /assignViewerMaterialTag/)
   assert.match(viewer, /viewerMaterialTagResult/)
   assert.match(viewer, /updateViewerMaterialTag/)
   assert.doesNotMatch(viewer, /<MaterialTagPicker/)
   assert.doesNotMatch(pdfJs, /\/api\/tags/)
+})
+
+test("contenedores, NLM y regiones tienen contratos persistentes y locales", () => {
+  const migration = source("scripts/030-add-material-containers-nlm-and-tag-regions.sql")
+  const subjectWheel = source("components/subject-wheel.tsx")
+  const tagBar = source("components/material-tag-bar.tsx")
+  const interceptor = source("components/local-fetch-interceptor.tsx")
+  assert.match(migration, /subject_material_containers/)
+  assert.match(migration, /material_tag_regions/)
+  assert.match(migration, /'nlm'/)
+  assert.match(subjectWheel, /createSubjectMaterialContainer/)
+  assert.match(subjectWheel, /event\.key !== "\+"/)
+  assert.match(subjectWheel, /buildMaterialRegionPresentationHref/)
+  assert.match(tagBar, /event\.key === "\+"/)
+  assert.match(interceptor, /listLocalSubjectMaterialContainers/)
+  assert.match(interceptor, /replaceLocalMaterialTagRegions/)
 })
 
 test("un tag del objeto materia filtra; su x separada es la que lo quita del PDF", () => {

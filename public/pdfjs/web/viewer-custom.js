@@ -58,6 +58,9 @@
     tagColorInput: null,
     tagCatalog: [],
     assignedTagIds: new Set(),
+    tagRegionCounts: {},
+    activeRegionTagId: null,
+    activeRegionTagName: "",
     editingTagId: null,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
@@ -335,7 +338,9 @@
         state.tagColorInput = panel.querySelector("#pdfjs-custom-tag-color");
         state.tagInput.addEventListener("input", () => renderMaterialTagSuggestions());
 
-        document.getElementById("viewerContainer")?.addEventListener("scroll", closeMaterialTagPanel, { passive: true });
+        document.getElementById("viewerContainer")?.addEventListener("scroll", () => {
+          if (state.activeRegionTagId == null) closeMaterialTagPanel();
+        }, { passive: true });
       }
     }
 
@@ -716,6 +721,7 @@
 
   function closeMaterialTagPanel() {
     if (!state.tagPanel) return;
+    if (state.activeRegionTagId != null) return;
     state.tagPanel.dataset.open = "false";
     state.tagButton?.setAttribute("aria-expanded", "false");
     if (state.tagStatus) state.tagStatus.textContent = "";
@@ -731,15 +737,40 @@
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "pdfjs-custom-tag-chip";
-      chip.textContent = `#${tag.name || "tag"}`;
-      chip.title = `Ver materiales con #${tag.name}`;
+      const regionCount = Number(state.tagRegionCounts?.[String(tag.id)] || 0);
+      const isActive = state.activeRegionTagId === tag.id;
+      chip.textContent = `${isActive ? "Guardar " : ""}#${tag.name || "tag"} · ${isActive ? state.selections.length : regionCount}`;
+      chip.title = isActive
+        ? `Guardar ${state.selections.length} regiones de #${tag.name}`
+        : `Marcar regiones para #${tag.name}`;
+      chip.classList.toggle("is-active", isActive);
       if (typeof tag.color === "string" && tag.color) {
         chip.style.borderColor = tag.color;
       }
       chip.addEventListener("click", () => {
-        postToParent({ type: "viewerSelectMaterialTag", tagId: tag.id });
-        if (state.tagStatus) state.tagStatus.textContent = `Mostrando materiales con #${tag.name}.`;
-        window.setTimeout(closeMaterialTagPanel, 650);
+        if (state.activeRegionTagId === tag.id) {
+          if (state.tagStatus) state.tagStatus.textContent = "Guardando regiones...";
+          postToParent({
+            type: "viewerSaveMaterialTagRegions",
+            tagId: tag.id,
+            regions: state.selections.map((selection, orderIndex) => ({
+              pageNumber: selection.pageNum,
+              pageRotation: selection.pageRotation || 0,
+              x1: selection.xp1,
+              y1: selection.yp1,
+              x2: selection.xp2,
+              y2: selection.yp2,
+              orderIndex,
+            })),
+          });
+          return;
+        }
+        if (state.activeRegionTagId != null) {
+          showToast("Guarda o cancela el tag activo antes de elegir otro.", "info");
+          return;
+        }
+        if (state.tagStatus) state.tagStatus.textContent = `Cargando regiones de #${tag.name}...`;
+        postToParent({ type: "viewerRequestMaterialTagRegions", tagId: tag.id });
       });
       state.tagList.appendChild(chip);
 
@@ -947,6 +978,17 @@
       return;
     }
 
+    if (state.activeRegionTagId != null) {
+      event?.preventDefault?.();
+      state.activeRegionTagId = null;
+      state.activeRegionTagName = "";
+      clearSelections();
+      leaveSelectionMode("Cambios de regiones cancelados.");
+      renderMaterialTags();
+      if (state.tagStatus) state.tagStatus.textContent = "";
+      return;
+    }
+
     if (state.selectionMode) {
       event?.preventDefault?.();
       leaveSelectionMode("Seleccion cancelada.");
@@ -988,6 +1030,8 @@
       return;
     }
     clearSelections();
+    state.activeRegionTagId = null;
+    state.activeRegionTagName = "";
     state.selectionMode = true;
     refreshLayers();
     showStatus("Modo seleccion activo. Delimita areas y luego pulsa Ctrl+M.");
@@ -1102,6 +1146,7 @@
           if (selection) {
             state.selections.push(selection);
             showToast(`Seleccion agregada en pagina ${pageNumber}.`, "success", 1800);
+            if (state.activeRegionTagId != null) renderMaterialTags();
           }
           refreshLayers();
         };
@@ -1152,6 +1197,7 @@
           event.stopPropagation();
           state.selections = state.selections.filter((item) => item.id !== selection.id);
           refreshLayers();
+          if (state.activeRegionTagId != null) renderMaterialTags();
           showToast("Seleccion eliminada.", "info", 1600);
         });
         box.appendChild(chip);
@@ -2164,7 +2210,7 @@
             ? "Usando highlights reconstruidos desde el PDF actual."
             : "";
     state.replacementDescription.textContent =
-      [baseDescription, sourceDescription, typeof preview?.migrationWarning === "string" ? preview.migrationWarning.trim() : ""]
+      [baseDescription, sourceDescription, "Los recortes guardados por tag se limpiarán porque sus coordenadas pertenecen al PDF anterior.", typeof preview?.migrationWarning === "string" ? preview.migrationWarning.trim() : ""]
         .filter(Boolean)
         .join(" ");
     state.replacementAutoCount.textContent = String(preview.summary.autoMatches || 0);
@@ -2397,6 +2443,49 @@
       return;
     }
 
+    if (event.data.type === "viewerMaterialTagRegions") {
+      if (!event.data.ok) {
+        if (state.tagStatus) state.tagStatus.textContent = event.data.error || "No se pudieron cargar las regiones.";
+        return;
+      }
+      const tagId = Number(event.data.tagId);
+      const tag = state.tagCatalog.find((candidate) => candidate.id === tagId);
+      state.activeRegionTagId = tagId;
+      state.activeRegionTagName = tag?.name || "tag";
+      state.selections = (Array.isArray(event.data.regions) ? event.data.regions : []).map((region, index) => ({
+        id: `tag-${tagId}-${index}-${Date.now()}`,
+        pageNum: Number(region.pageNumber),
+        pageRotation: Number(region.pageRotation || 0),
+        xp1: Number(region.x1),
+        yp1: Number(region.y1),
+        xp2: Number(region.x2),
+        yp2: Number(region.y2),
+      }));
+      state.selectionMode = true;
+      refreshLayers();
+      renderMaterialTags();
+      if (state.tagStatus) state.tagStatus.textContent = `Marca regiones y vuelve a pulsar #${state.activeRegionTagName} para guardar.`;
+      showToast(`Captura activa para #${state.activeRegionTagName}.`, "info", 2600);
+      return;
+    }
+
+    if (event.data.type === "viewerMaterialTagRegionsSaved") {
+      if (!event.data.ok) {
+        if (state.tagStatus) state.tagStatus.textContent = event.data.error || "No se pudieron guardar las regiones.";
+        return;
+      }
+      const tagId = Number(event.data.tagId);
+      state.tagRegionCounts[String(tagId)] = Array.isArray(event.data.regions) ? event.data.regions.length : state.selections.length;
+      state.activeRegionTagId = null;
+      state.activeRegionTagName = "";
+      clearSelections();
+      leaveSelectionMode();
+      renderMaterialTags();
+      if (state.tagStatus) state.tagStatus.textContent = "Regiones guardadas.";
+      showToast("Regiones del tag guardadas.", "success", 2200);
+      return;
+    }
+
     if (event.data.type === "viewerMaterialTagResult") {
       if (!state.tagPanel) return;
       if (event.data.ok) {
@@ -2423,6 +2512,9 @@
       state.assignedTagIds = new Set(
         Array.isArray(event.data.assignedTagIds) ? event.data.assignedTagIds.map(Number).filter(Number.isInteger) : []
       );
+      state.tagRegionCounts = event.data.regionCounts && typeof event.data.regionCounts === "object"
+        ? event.data.regionCounts
+        : {};
       renderMaterialTags();
       return;
     }
@@ -2562,6 +2654,8 @@
     state.sourcePdfBytes = null;
     state.sourcePdfLibDoc = null;
     clearSelections();
+    state.activeRegionTagId = null;
+    state.activeRegionTagName = "";
     clearPageTextModels();
     closeReplacementModal();
     leaveSelectionMode();
@@ -2597,12 +2691,20 @@
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && key === "i") {
       event.preventDefault();
+      if (state.activeRegionTagId != null) {
+        showToast("Guarda o cancela las regiones del tag activo.", "info");
+        return;
+      }
       toggleSelectionMode();
       return;
     }
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && key === "m") {
       event.preventDefault();
+      if (state.activeRegionTagId != null) {
+        showToast("Guarda o cancela las regiones del tag activo.", "info");
+        return;
+      }
       openModal();
     }
   }

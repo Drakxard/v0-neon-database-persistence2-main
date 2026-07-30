@@ -45,6 +45,7 @@ export async function POST(request: Request) {
     const requestedWeekNumber = Number.parseInt(String(payload?.weekNumber || ""), 10)
     const rawFileName = String(payload?.fileName || "").trim()
     const mimeType = String(payload?.mimeType || "").trim() || "application/pdf"
+    const containerId = Number(payload?.containerId)
 
     const parsedSessionDate = parseSessionDate(sessionDate)
     if (!subjectId || !subjectName || !parsedSessionDate) {
@@ -76,7 +77,8 @@ export async function POST(request: Request) {
               await sql!`
                 SELECT COALESCE(MAX(order_index), -1) AS max_order
                 FROM subject_day_materials
-                WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
+                WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate}
+                  AND (${Number.isInteger(containerId)} = FALSE OR container_id = ${Number.isInteger(containerId) ? containerId : null})
               `
             )[0]?.max_order ?? 0
           ) + 1
@@ -97,6 +99,7 @@ export async function POST(request: Request) {
       "week-number": String(weekNumber),
       "weekday-index": String(weekdayIndex),
       "material-type": materialType,
+      "container-id": Number.isInteger(containerId) ? String(containerId) : "",
       "original-file-name": finalFileName,
     }
 

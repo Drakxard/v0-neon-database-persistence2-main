@@ -161,6 +161,12 @@ export async function GET(request: Request) {
       WHERE subject_id = ${subjectId}
         AND week_number = ${weekNumber}
         AND material_type = 'theory'
+        AND (
+          container_id IS NULL OR EXISTS (
+            SELECT 1 FROM subject_material_containers container
+            WHERE container.id = subject_day_materials.container_id AND container.kind = 'theory'
+          )
+        )
         AND is_checkup_done = FALSE
       ORDER BY session_date ASC, order_index ASC, id ASC
       LIMIT 1

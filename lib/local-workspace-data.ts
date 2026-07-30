@@ -10,8 +10,10 @@ import type {
   SubjectDayMaterial,
   SubjectDayMaterialType,
   MaterialTagWorkspace,
+  MaterialTagRegion,
   StudyTag,
   SubjectMaterialSynthesisRecord,
+  SubjectMaterialContainer,
   SubjectShortcutKey,
   SubjectShortcuts,
 } from "@/lib/study-types"
@@ -40,9 +42,10 @@ type EntryManifest = {
 }
 
 type TagManifest = {
-  version: 1
+  version: 1 | 2
   tags: StudyTag[]
   assignments: Record<string, number[]>
+  regions: Record<string, MaterialTagRegion[]>
 }
 
 type SubjectCompletionRecord = {
@@ -124,6 +127,7 @@ const AUDIO_DIR = "audio"
 const ROOT_SUBDIRECTORIES = [CRONOGRAMA_DIR, THEORY_DIR, PRACTICE_DIR, AUDIO_DIR, MANIFESTS_DIR] as const
 const WORKSPACE_STATE_MANIFEST = [MANIFESTS_DIR, "workspace-state.json"]
 const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
+const MATERIAL_CONTAINERS_MANIFEST = [MANIFESTS_DIR, "material-containers.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
 
 function sanitizePathSegment(value: string) {
@@ -647,7 +651,7 @@ async function writeMaterialManifest(subjectId: string, weekNumber: number, mate
 
 async function readTagManifest(): Promise<TagManifest> {
   const payload = await readJsonFile<TagManifest | null>(TAGS_MANIFEST, null)
-  if (!payload) return { version: 1, tags: [], assignments: {} }
+  if (!payload) return { version: 2, tags: [], assignments: {}, regions: {} }
 
   const assignments: Record<string, number[]> = {}
   for (const [materialId, tagIds] of Object.entries(payload.assignments ?? {})) {
@@ -656,9 +660,10 @@ async function readTagManifest(): Promise<TagManifest> {
     )
   }
   return {
-    version: 1,
+    version: 2,
     tags: Array.isArray(payload.tags) ? payload.tags : [],
     assignments,
+    regions: payload.regions && typeof payload.regions === "object" ? payload.regions : {},
   }
 }
 
@@ -708,7 +713,14 @@ export async function listLocalMaterialTagWorkspace(scope: {
   for (const materialId of visibleMaterialIds) {
     assignments[String(materialId)] = [...(manifest.assignments[String(materialId)] ?? [])]
   }
-  return { tags: withLocalTagUsageCounts(manifest), assignments }
+  const regionCounts: Record<string, Record<string, number>> = {}
+  for (const [key, regions] of Object.entries(manifest.regions)) {
+    const [materialId, tagId] = key.split(":")
+    if (!visibleMaterialIds.has(Number(materialId)) || !Array.isArray(regions) || regions.length === 0) continue
+    regionCounts[materialId] ??= {}
+    regionCounts[materialId][tagId] = regions.length
+  }
+  return { tags: withLocalTagUsageCounts(manifest), assignments, regionCounts }
 }
 
 export async function listLocalTagsForMaterial(materialId: number) {
@@ -807,12 +819,24 @@ export async function mergeLocalMaterialTags(sourceTagId: number, targetTagId: n
       Array.from(new Set(tagIds.map((tagId) => (tagId === sourceTagId ? targetTagId : tagId)))),
     ])
   )
+  const regions: Record<string, MaterialTagRegion[]> = {}
+  for (const [key, tagRegions] of Object.entries(manifest.regions)) {
+    const targetKey = key.endsWith(`:${sourceTagId}`)
+      ? `${key.slice(0, key.lastIndexOf(":"))}:${targetTagId}`
+      : key
+    const moved = tagRegions.map((region) =>
+      region.tagId === sourceTagId ? { ...region, tagId: targetTagId } : region
+    )
+    regions[targetKey] = [...(regions[targetKey] ?? []), ...moved]
+      .map((region, orderIndex) => ({ ...region, orderIndex }))
+  }
   const nextManifest: TagManifest = {
-    version: 1,
+    version: 2,
     tags: manifest.tags
       .filter((tag) => tag.id !== sourceTagId)
       .map((tag) => (tag.parentId === sourceTagId ? { ...tag, parentId: targetTagId, updatedAt: nowIso() } : tag)),
     assignments,
+    regions,
   }
   await writeTagManifest(nextManifest)
   return withLocalTagUsageCounts(nextManifest).find((tag) => tag.id === targetTagId)!
@@ -830,11 +854,14 @@ export async function deleteLocalMaterialTag(tagId: number, force: boolean) {
     ])
   )
   await writeTagManifest({
-    version: 1,
+    version: 2,
     tags: manifest.tags
       .filter((candidate) => candidate.id !== tagId)
       .map((candidate) => candidate.parentId === tagId ? { ...candidate, parentId: null } : candidate),
     assignments,
+    regions: Object.fromEntries(
+      Object.entries(manifest.regions).filter(([key]) => !key.endsWith(`:${tagId}`))
+    ),
   })
   return { deleted: true, missing: false, usageCount: tag.usageCount }
 }
@@ -871,8 +898,166 @@ export async function unassignLocalTagFromMaterial(materialId: number, tagId: nu
       ...manifest.assignments,
       [key]: (manifest.assignments[key] ?? []).filter((candidate) => candidate !== tagId),
     },
+    regions: Object.fromEntries(
+      Object.entries(manifest.regions).filter(([regionKey]) => regionKey !== `${materialId}:${tagId}`)
+    ),
   })
   return listLocalTagsForMaterial(materialId)
+}
+
+async function readMaterialContainersManifest() {
+  return readJsonFile<Record<string, SubjectMaterialContainer[]>>(MATERIAL_CONTAINERS_MANIFEST, {})
+}
+
+async function writeMaterialContainersManifest(value: Record<string, SubjectMaterialContainer[]>) {
+  await writeJsonFile(MATERIAL_CONTAINERS_MANIFEST, value)
+}
+
+export async function listLocalSubjectMaterialContainers(subjectId: string) {
+  const manifest = await readMaterialContainersManifest()
+  let containers = manifest[subjectId]
+  if (!Array.isArray(containers) || !containers.some((container) => container.kind === "theory") || !containers.some((container) => container.kind === "practice")) {
+    const timestamp = nowIso()
+    const existing = Array.isArray(containers) ? containers.filter((container) => container.kind === "custom") : []
+    containers = [
+      {
+        id: nextLocalId(),
+        subjectId,
+        name: "Teoría",
+        normalizedName: "teoría",
+        kind: "theory",
+        orderIndex: 0,
+        materialCount: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: nextLocalId(),
+        subjectId,
+        name: "Práctica",
+        normalizedName: "práctica",
+        kind: "practice",
+        orderIndex: 1,
+        materialCount: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      ...existing,
+    ]
+    manifest[subjectId] = containers
+    await writeMaterialContainersManifest(manifest)
+  }
+  const counts = new Map<number, number>()
+  for (const weekNumber of await listLocalSubjectWeekNumbersWithContent(subjectId)) {
+    const materials = (await readMaterialManifest(subjectId, weekNumber)).materials
+    for (const material of materials) {
+      const container = material.container_id == null
+        ? containers.find((candidate) => candidate.kind === material.material_type)
+        : containers.find((candidate) => candidate.id === material.container_id)
+      if (container) counts.set(container.id, (counts.get(container.id) ?? 0) + 1)
+    }
+  }
+  return containers
+    .map((container) => ({ ...container, materialCount: counts.get(container.id) ?? 0 }))
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+}
+
+export async function createLocalSubjectMaterialContainer(subjectId: string, rawName: string) {
+  const name = normalizeTagDisplayName(rawName)
+  const normalizedName = normalizeTagName(rawName)
+  if (!name || !normalizedName) throw new Error("El nombre es obligatorio.")
+  const containers = await listLocalSubjectMaterialContainers(subjectId)
+  if (containers.some((container) => container.normalizedName === normalizedName)) {
+    throw new Error("Ya existe un contenedor con ese nombre.")
+  }
+  const timestamp = nowIso()
+  const container: SubjectMaterialContainer = {
+    id: nextLocalId(),
+    subjectId,
+    name,
+    normalizedName,
+    kind: "custom",
+    orderIndex: Math.max(1, ...containers.map((candidate) => candidate.orderIndex)) + 1,
+    materialCount: 0,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  const manifest = await readMaterialContainersManifest()
+  manifest[subjectId] = [...containers, container].map((candidate) => ({ ...candidate, materialCount: 0 }))
+  await writeMaterialContainersManifest(manifest)
+  return container
+}
+
+export async function renameLocalSubjectMaterialContainer(containerId: number, rawName: string) {
+  const manifest = await readMaterialContainersManifest()
+  for (const [subjectId, stored] of Object.entries(manifest)) {
+    const containers = await listLocalSubjectMaterialContainers(subjectId)
+    const current = containers.find((container) => container.id === containerId)
+    if (!current) continue
+    if (current.kind !== "custom") throw new Error("Teoría y Práctica son contenedores fijos.")
+    const name = normalizeTagDisplayName(rawName)
+    const normalizedName = normalizeTagName(rawName)
+    if (!name || !normalizedName) throw new Error("El nombre es obligatorio.")
+    if (containers.some((container) => container.id !== containerId && container.normalizedName === normalizedName)) {
+      throw new Error("Ya existe un contenedor con ese nombre.")
+    }
+    const updated = { ...current, name, normalizedName, updatedAt: nowIso() }
+    manifest[subjectId] = stored.map((container) => container.id === containerId ? updated : container)
+    await writeMaterialContainersManifest(manifest)
+    return updated
+  }
+  return null
+}
+
+export async function deleteLocalSubjectMaterialContainer(containerId: number) {
+  const manifest = await readMaterialContainersManifest()
+  for (const [subjectId, stored] of Object.entries(manifest)) {
+    const containers = await listLocalSubjectMaterialContainers(subjectId)
+    const current = containers.find((container) => container.id === containerId)
+    if (!current) continue
+    if (current.kind !== "custom") throw new Error("Teoría y Práctica son contenedores fijos.")
+    if (current.materialCount > 0) throw new Error(`El contenedor contiene ${current.materialCount} PDF${current.materialCount === 1 ? "" : "s"}.`)
+    manifest[subjectId] = stored.filter((container) => container.id !== containerId)
+    await writeMaterialContainersManifest(manifest)
+    return { deleted: true, materialCount: 0 }
+  }
+  return null
+}
+
+export async function listLocalMaterialTagRegions(materialId: number, tagId: number) {
+  const manifest = await readTagManifest()
+  return [...(manifest.regions[`${materialId}:${tagId}`] ?? [])]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+}
+
+export async function replaceLocalMaterialTagRegions(
+  materialId: number,
+  tagId: number,
+  regions: MaterialTagRegion[]
+) {
+  const manifest = await readTagManifest()
+  if (!(manifest.assignments[String(materialId)] ?? []).includes(tagId)) {
+    throw new Error("El tag no está asignado a este material.")
+  }
+  const normalized = regions.map((region, orderIndex) => ({
+    materialId,
+    tagId,
+    pageNumber: region.pageNumber,
+    pageRotation: region.pageRotation,
+    x1: region.x1,
+    y1: region.y1,
+    x2: region.x2,
+    y2: region.y2,
+    orderIndex,
+    createdAt: region.createdAt ?? nowIso(),
+    updatedAt: nowIso(),
+  }))
+  await writeTagManifest({
+    ...manifest,
+    version: 2,
+    regions: { ...manifest.regions, [`${materialId}:${tagId}`]: normalized },
+  })
+  return normalized
 }
 
 async function readEntryManifest(subjectId: string, weekNumber: number): Promise<EntryManifest> {
@@ -1196,6 +1381,7 @@ export async function getLocalSubjectShortcuts(subjectId: string) {
     subjectId,
     eFich: null,
     figma: null,
+    nlm: null,
   }
 }
 
@@ -1209,10 +1395,12 @@ export async function saveLocalSubjectShortcut(input: {
     subjectId: input.subjectId,
     eFich: null,
     figma: null,
+    nlm: null,
   }
   const next = {
     ...current,
-    [input.shortcutKey === "e_fich" ? "eFich" : "figma"]: input.url.trim() || null,
+    [input.shortcutKey === "e_fich" ? "eFich" : input.shortcutKey === "figma" ? "figma" : "nlm"]:
+      input.url.trim() || null,
   } satisfies SubjectShortcuts
   shortcuts[input.subjectId] = next
   await writeShortcutsManifest(shortcuts)
@@ -1301,6 +1489,7 @@ export async function createLocalMaterialUploadSession(input: {
   sessionDate: string
   weekNumber?: number
   materialType: SubjectDayMaterialType
+  containerId?: number | null
   fileName: string
   mimeType: string
 }) {
@@ -1329,6 +1518,7 @@ export async function createLocalMaterialUploadSession(input: {
       "week-number": String(weekNumber),
       "weekday-index": String(getWeekdayIndexFromDateKey(input.sessionDate)),
       "material-type": input.materialType,
+      "container-id": Number.isInteger(input.containerId) ? String(input.containerId) : "",
       "original-file-name": fileName,
     },
   } satisfies WorkspaceUploadSession
@@ -1339,6 +1529,7 @@ export async function completeLocalMaterialUpload(input: {
   sessionDate: string
   weekNumber?: number
   materialType: SubjectDayMaterialType
+  containerId?: number | null
   driveFileId: string
   fileName: string
 }) {
@@ -1352,8 +1543,13 @@ export async function completeLocalMaterialUpload(input: {
   const existing = manifest.materials.find((candidate) => candidate.drive_file_id === input.driveFileId)
   if (existing) return existing
 
+  const containers = await listLocalSubjectMaterialContainers(input.subjectId)
+  const container = Number.isInteger(input.containerId)
+    ? containers.find((candidate) => candidate.id === input.containerId)
+    : containers.find((candidate) => candidate.kind === input.materialType)
+  if (!container) throw new Error("El contenedor no existe.")
   const siblings = manifest.materials.filter(
-    (candidate) => candidate.session_date === input.sessionDate && candidate.material_type === input.materialType
+    (candidate) => candidate.session_date === input.sessionDate && candidate.container_id === container.id
   )
   const timestamp = nowIso()
   const nextMaterial: SubjectDayMaterial = {
@@ -1363,6 +1559,7 @@ export async function completeLocalMaterialUpload(input: {
     session_date: input.sessionDate,
     weekday_index: weekdayIndex,
     material_type: input.materialType,
+    container_id: container.id,
     order_index: siblings.length,
     file_name: normalizePdfFileName(input.fileName),
     drive_file_id: input.driveFileId,
@@ -1383,6 +1580,7 @@ export async function listLocalSubjectDayMaterials(scope: {
   materialType?: SubjectDayMaterialType | null
 }) {
   const manifest = await readMaterialManifest(scope.subjectId, scope.weekNumber)
+  const containers = await listLocalSubjectMaterialContainers(scope.subjectId)
   const tagManifest = await readTagManifest()
   const tagsWithCounts = withLocalTagUsageCounts(tagManifest)
   const materials = manifest.materials.filter((material) => {
@@ -1393,6 +1591,7 @@ export async function listLocalSubjectDayMaterials(scope: {
     const assigned = new Set(tagManifest.assignments[String(material.id)] ?? [])
     return {
       ...material,
+      container_id: material.container_id ?? containers.find((container) => container.kind === material.material_type)?.id ?? null,
       tags: tagsWithCounts.filter((tag) => assigned.has(tag.id)),
     }
   })
@@ -1410,7 +1609,7 @@ export async function listLocalSubjectDayMaterials(scope: {
 
 export async function updateLocalMaterial(
   materialId: number,
-  patch: Partial<Pick<SubjectDayMaterial, "is_checkup_done">>
+  patch: Partial<Pick<SubjectDayMaterial, "is_checkup_done" | "container_id" | "material_type">>
 ) {
   const material = await findMaterialById(materialId)
   if (!material) return null
@@ -1418,6 +1617,8 @@ export async function updateLocalMaterial(
   const updatedMaterial: SubjectDayMaterial = {
     ...material,
     is_checkup_done: patch.is_checkup_done ?? material.is_checkup_done,
+    container_id: patch.container_id === undefined ? material.container_id : patch.container_id,
+    material_type: patch.material_type ?? material.material_type,
     updated_at: nowIso(),
   }
   await writeMaterialManifest(
@@ -1463,11 +1664,15 @@ export async function deleteLocalMaterial(materialId: number) {
   }
 
   const tagManifest = await readTagManifest()
-  if (String(materialId) in tagManifest.assignments) {
-    const assignments = { ...tagManifest.assignments }
-    delete assignments[String(materialId)]
-    await writeTagManifest({ ...tagManifest, assignments })
-  }
+  const assignments = { ...tagManifest.assignments }
+  delete assignments[String(materialId)]
+  await writeTagManifest({
+    ...tagManifest,
+    assignments,
+    regions: Object.fromEntries(
+      Object.entries(tagManifest.regions).filter(([key]) => !key.startsWith(`${materialId}:`))
+    ),
+  })
 
   return material
 }
@@ -1876,7 +2081,13 @@ export async function buildLocalContinuePayload(input: {
     sessionDate: input.mode === "practice" ? input.sessionDate : undefined,
     materialType: input.mode,
   })
-  const material = materials.find((candidate) => !candidate.is_checkup_done) ?? null
+  const fixedContainer = (await listLocalSubjectMaterialContainers(input.subjectId))
+    .find((container) => container.kind === input.mode)
+  const material = materials.find(
+    (candidate) =>
+      !candidate.is_checkup_done &&
+      (candidate.container_id == null || candidate.container_id === fixedContainer?.id)
+  ) ?? null
   const entries = await listLocalSubjectDayEntries({
     subjectId: input.subjectId,
     weekNumber: input.weekNumber,
@@ -1912,6 +2123,13 @@ export async function syncLocalMaterialPdf(materialId: number, formData: FormDat
     material.week_number,
     manifest.materials.map((candidate) => (candidate.id === materialId ? updatedMaterial : candidate))
   )
+  const tagManifest = await readTagManifest()
+  await writeTagManifest({
+    ...tagManifest,
+    regions: Object.fromEntries(
+      Object.entries(tagManifest.regions).filter(([key]) => !key.startsWith(`${materialId}:`))
+    ),
+  })
   return updatedMaterial
 }
 

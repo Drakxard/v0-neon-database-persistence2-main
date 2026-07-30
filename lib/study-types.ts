@@ -45,6 +45,36 @@ export type StudyTag = {
 export type MaterialTagWorkspace = {
   tags: StudyTag[]
   assignments: Record<string, number[]>
+  regionCounts: Record<string, Record<string, number>>
+}
+
+export type SubjectMaterialContainerKind = "theory" | "practice" | "custom"
+
+export type SubjectMaterialContainer = {
+  id: number
+  subjectId: string
+  name: string
+  normalizedName: string
+  kind: SubjectMaterialContainerKind
+  orderIndex: number
+  materialCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type MaterialTagRegion = {
+  id?: number
+  materialId: number
+  tagId: number
+  pageNumber: number
+  pageRotation: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  orderIndex: number
+  createdAt?: string
+  updatedAt?: string
 }
 
 export type SubjectDayMaterial = {
@@ -54,6 +84,7 @@ export type SubjectDayMaterial = {
   session_date: string
   weekday_index: number
   material_type: SubjectDayMaterialType
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -104,12 +135,13 @@ export type VectorOverview = {
   }>
 }
 
-export type SubjectShortcutKey = "e_fich" | "figma"
+export type SubjectShortcutKey = "e_fich" | "figma" | "nlm"
 
 export type SubjectShortcuts = {
   subjectId: string
   eFich: string | null
   figma: string | null
+  nlm: string | null
 }
 
 export type DailySessionRecord = {

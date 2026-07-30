@@ -21,6 +21,7 @@ export type LocalSubjectDayMaterial = {
   session_date: string
   weekday_index: number
   material_type: MaterialType
+  container_id?: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -550,6 +551,7 @@ export async function ensureLocalMaterialFromUpload(params: {
   weekNumber: number
   weekdayIndex: number
   materialType: MaterialType
+  containerId?: number | null
   driveFileId: string
   fileName: string
 }) {
@@ -572,6 +574,7 @@ export async function ensureLocalMaterialFromUpload(params: {
     session_date: params.sessionDate,
     weekday_index: params.weekdayIndex,
     material_type: params.materialType,
+    container_id: params.containerId ?? null,
     order_index: nextOrderIndex,
     file_name: normalizeUploadedPdfFileName(params.fileName) || remoteFile.name,
     drive_file_id: remoteFile.id,

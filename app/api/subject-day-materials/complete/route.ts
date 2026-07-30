@@ -8,6 +8,7 @@ import { getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
+import { getFixedSubjectMaterialContainer, getSubjectMaterialContainer } from "@/lib/material-containers"
 
 export const runtime = "nodejs"
 
@@ -22,6 +23,7 @@ type SubjectDayMaterialRow = {
   session_date: string
   weekday_index: number
   material_type: MaterialType
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -75,7 +77,7 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 
 async function findMaterialByDriveFileId(driveFileId: string) {
   const rows = await requireSql(sql)`
-    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     FROM subject_day_materials
     WHERE drive_file_id = ${driveFileId}
     ORDER BY id ASC
@@ -101,6 +103,8 @@ export async function POST(request: Request) {
     const requestedWeekNumber = Number.parseInt(String(payload?.weekNumber || ""), 10)
     const driveFileId = String(payload?.driveFileId || "").trim()
     const uploadedFileName = String(payload?.fileName || "").trim()
+    const hasRequestedContainer = payload?.containerId !== undefined && payload?.containerId !== null
+    const requestedContainerId = Number(payload?.containerId)
 
     const parsedSessionDate = parseSessionDate(sessionDate)
     if (!subjectId || !parsedSessionDate || !driveFileId) {
@@ -149,7 +153,6 @@ export async function POST(request: Request) {
     const weekNumber =
       Number.isNaN(requestedWeekNumber) || requestedWeekNumber !== derivedWeekNumber ? derivedWeekNumber : requestedWeekNumber
     const weekdayIndex = getWeekdayIndexFromDateKey(sessionDate)
-
     if (isLocalStorageMode()) {
       const material = await ensureLocalMaterialFromUpload({
         subjectId,
@@ -157,12 +160,27 @@ export async function POST(request: Request) {
         weekNumber,
         weekdayIndex,
         materialType,
+        containerId: hasRequestedContainer && Number.isInteger(requestedContainerId) ? requestedContainerId : null,
         driveFileId: driveFile.id,
         fileName: persistedFileName,
       })
 
       return NextResponse.json(material)
     }
+
+    if (hasRequestedContainer && !Number.isInteger(requestedContainerId)) {
+      return badRequest("Invalid containerId")
+    }
+    const requestedContainer = hasRequestedContainer
+      ? await getSubjectMaterialContainer(requestedContainerId)
+      : null
+    if (hasRequestedContainer && !requestedContainer) {
+      return badRequest("El contenedor no existe")
+    }
+    if (requestedContainer && requestedContainer.subjectId !== subjectId) {
+      return badRequest("El contenedor no pertenece a la materia")
+    }
+    const container = requestedContainer ?? await getFixedSubjectMaterialContainer(subjectId, materialType)
 
     const existingRow = await findMaterialByDriveFileId(driveFile.id)
     if (existingRow) {
@@ -172,7 +190,7 @@ export async function POST(request: Request) {
     const [orderRow] = await requireSql(sql)`
       SELECT COALESCE(MAX(order_index), -1) AS max_order
       FROM subject_day_materials
-      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND material_type = ${materialType}
+      WHERE subject_id = ${subjectId} AND week_number = ${weekNumber} AND session_date = ${sessionDate} AND container_id = ${container.id}
     `
     const nextOrderIndex = Math.max(1, Number(orderRow?.max_order ?? 0) + 1)
 
@@ -184,6 +202,7 @@ export async function POST(request: Request) {
           session_date,
           weekday_index,
           material_type,
+          container_id,
           order_index,
           file_name,
           drive_file_id,
@@ -196,13 +215,14 @@ export async function POST(request: Request) {
           ${sessionDate},
           ${weekdayIndex},
           ${materialType},
+          ${container.id},
           ${nextOrderIndex},
           ${persistedFileName},
           ${driveFile.id},
           ${driveFile.mimeType},
           ${("webViewLink" in driveFile && driveFile.webViewLink) || ""}
         )
-        RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       ` as SubjectDayMaterialRow[]
 
       return NextResponse.json(normalizeRows(rows)[0])

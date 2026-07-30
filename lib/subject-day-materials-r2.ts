@@ -16,6 +16,7 @@ type SubjectDayMaterialRow = {
   session_date: string
   weekday_index: number
   material_type: MaterialType
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -219,7 +220,7 @@ function normalizeRows(rows: SubjectDayMaterialRow[]) {
 
 async function findMaterialByDriveFileId(driveFileId: string) {
   const rows = await requireSql(sql)`
-    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     FROM subject_day_materials
     WHERE drive_file_id = ${driveFileId}
     ORDER BY id ASC
@@ -380,14 +381,14 @@ export async function listSubjectDayMaterials(scope: ReconcileScope) {
   if (Number.isInteger(scope.weekNumber) && !scope.sessionDate) {
     if (scope.materialType) {
       rows = await requireSql(sql)`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND material_type = ${scope.materialType}
         ORDER BY session_date ASC, order_index ASC, id ASC
       ` as SubjectDayMaterialRow[]
     } else {
       rows = await requireSql(sql)`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!}
         ORDER BY session_date ASC, material_type ASC, order_index ASC, id ASC
@@ -396,14 +397,14 @@ export async function listSubjectDayMaterials(scope: ReconcileScope) {
   } else {
     if (scope.materialType) {
       rows = await requireSql(sql)`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!} AND material_type = ${scope.materialType}
         ORDER BY material_type ASC, order_index ASC, id ASC
       ` as SubjectDayMaterialRow[]
     } else {
       rows = await requireSql(sql)`
-        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+        SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
         FROM subject_day_materials
         WHERE subject_id = ${scope.subjectId!} AND week_number = ${scope.weekNumber!} AND session_date = ${scope.sessionDate!}
         ORDER BY material_type ASC, order_index ASC, id ASC

@@ -147,9 +147,26 @@ export async function listMaterialTagWorkspace(scope: {
     assignments[key].push(Number(row.tag_id))
   }
 
+  const visibleMaterialIds = Object.keys(assignments).map(Number).filter(Number.isInteger)
+  const regionCounts: Record<string, Record<string, number>> = {}
+  if (visibleMaterialIds.length > 0) {
+    const regionRows = await sql`
+      SELECT material_id, tag_id, COUNT(*)::int AS region_count
+      FROM material_tag_regions
+      WHERE material_id = ANY(${visibleMaterialIds})
+      GROUP BY material_id, tag_id
+    ` as Array<{ material_id: number; tag_id: number; region_count: number }>
+    for (const row of regionRows) {
+      const materialKey = String(Number(row.material_id))
+      regionCounts[materialKey] ??= {}
+      regionCounts[materialKey][String(Number(row.tag_id))] = Number(row.region_count)
+    }
+  }
+
   return {
     tags: tagRows.map(mapTag),
     assignments,
+    regionCounts,
   }
 }
 
@@ -291,6 +308,18 @@ export async function mergeMaterialTags(sourceTagId: number, targetTagId: number
   await assertParentIsValid(sourceTagId, targetTagId)
 
   const sql = getDatabase()
+  await sql`
+    INSERT INTO subject_day_material_tags (material_id, tag_id)
+    SELECT material_id, ${targetTagId}
+    FROM subject_day_material_tags
+    WHERE tag_id = ${sourceTagId}
+    ON CONFLICT (material_id, tag_id) DO NOTHING
+  `
+  await sql`
+    UPDATE material_tag_regions
+    SET tag_id = ${targetTagId}, updated_at = NOW()
+    WHERE tag_id = ${sourceTagId}
+  `
   await sql`
     WITH moved AS (
       INSERT INTO subject_day_material_tags (material_id, tag_id)

@@ -13,6 +13,7 @@ import {
 import { buildR2ObjectKey, deleteR2Object, downloadR2Object, uploadR2Object } from "@/lib/r2"
 import { getSubjectById } from "@/lib/subjects"
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
+import { clearMaterialTagRegions } from "@/lib/material-tag-regions"
 
 export const runtime = "nodejs"
 
@@ -25,6 +26,7 @@ type SubjectDayMaterialRow = {
   session_date: string
   weekday_index: number
   material_type: "theory" | "practice"
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -246,7 +248,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         drive_web_view_link = '',
         updated_at = NOW()
       WHERE id = ${material.id}
-      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     ` as SubjectDayMaterialRow[]
 
     const updatedMaterial = updatedRows[0]
@@ -259,6 +261,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       sourcePdfFingerprint: migrationResult.candidateFingerprint,
       highlightsJson: JSON.stringify(migrationResult.snapshot),
     })
+    const clearedTagRegionCount = await clearMaterialTagRegions(materialId)
 
     if (previousDriveFileId && previousDriveFileId !== finalObjectKey) {
       try {
@@ -288,6 +291,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       reviewAccepted: acceptedReviewMatches.length,
       reviewSkipped: (preview.reviewMatches || []).length - acceptedReviewMatches.length,
       unmatched: (preview.unmatched || []).length,
+      clearedTagRegionCount,
     })
   } catch (error) {
     if (finalObjectKey) {

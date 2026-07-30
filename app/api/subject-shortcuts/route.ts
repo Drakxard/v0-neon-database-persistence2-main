@@ -11,7 +11,7 @@ export const runtime = "nodejs"
 
 const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
-type ShortcutKey = "e_fich" | "figma"
+type ShortcutKey = "e_fich" | "figma" | "nlm"
 
 type ShortcutRow = {
   subject_id: string
@@ -37,6 +37,7 @@ function normalizeShortcutResponse(subjectId: string, rows: ShortcutRow[]) {
     subjectId,
     eFich: null as string | null,
     figma: null as string | null,
+    nlm: null as string | null,
   }
 
   for (const row of rows) {
@@ -44,6 +45,8 @@ function normalizeShortcutResponse(subjectId: string, rows: ShortcutRow[]) {
       response.eFich = row.url
     } else if (row.shortcut_key === "figma") {
       response.figma = row.url
+    } else if (row.shortcut_key === "nlm") {
+      response.nlm = row.url
     }
   }
 
@@ -82,6 +85,7 @@ export async function GET(request: Request) {
           subjectId,
           eFich: null,
           figma: null,
+          nlm: null,
         }
       )
     }
@@ -104,7 +108,10 @@ export async function PUT(request: Request) {
 
     const body = await request.json()
     const subjectId = parseRequiredString(body?.subjectId)
-    const shortcutKey = body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" ? body.shortcutKey : null
+    const shortcutKey =
+      body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" || body?.shortcutKey === "nlm"
+        ? body.shortcutKey
+        : null
     const url = parseRequiredString(body?.url)
 
     if (!subjectId) {
@@ -135,12 +142,14 @@ export async function PUT(request: Request) {
           subjectId,
           eFich: null,
           figma: null,
+          nlm: null,
         }
 
         const updated = {
           ...current,
           eFich: shortcutKey === "e_fich" ? normalizedUrl : current.eFich,
           figma: shortcutKey === "figma" ? normalizedUrl : current.figma,
+          nlm: shortcutKey === "nlm" ? normalizedUrl : current.nlm,
         }
         state.subjectShortcuts[subjectId] = updated
         return updated

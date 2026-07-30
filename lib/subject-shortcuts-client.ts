@@ -6,6 +6,7 @@ export function getEmptySubjectShortcuts(subjectId = ""): SubjectShortcuts {
     subjectId,
     eFich: null,
     figma: null,
+    nlm: null,
   }
 }
 

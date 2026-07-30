@@ -23,6 +23,7 @@ type LocalStateShape = {
     subjectId: string
     eFich: string | null
     figma: string | null
+    nlm: string | null
   }>
   subjectOpenCounts: Record<string, {
     id: number

@@ -23,6 +23,7 @@ type SubjectDayMaterialRow = {
   session_date: string
   weekday_index: number
   material_type: "theory" | "practice"
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -198,7 +199,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         drive_web_view_link = '',
         updated_at = NOW()
       WHERE id = ${materialId}
-      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     ` as SubjectDayMaterialRow[]
 
     const updatedMaterial = updatedRows[0]

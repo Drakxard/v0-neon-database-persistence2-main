@@ -8,6 +8,7 @@ import {
   completeLocalAudioEntryUpload,
   completeLocalCronogramaUpload,
   completeLocalMaterialUpload,
+  createLocalSubjectMaterialContainer,
   createLocalCronogramaUploadSession,
   createLocalEntryUploadSession,
   createLocalMaterialUploadSession,
@@ -16,6 +17,7 @@ import {
   deleteLocalMaterialTag,
   deleteLocalEntry,
   deleteLocalMaterial,
+  deleteLocalSubjectMaterialContainer,
   deleteLocalSubjectCompletion,
   getLocalAiPrompt,
   getLocalCronograma,
@@ -28,8 +30,10 @@ import {
   getWorkspaceFile,
   listLocalSubjectDayEntries,
   listLocalSubjectDayMaterials,
+  listLocalSubjectMaterialContainers,
   listLocalMaterialTagWorkspace,
   listLocalTagsForMaterial,
+  listLocalMaterialTagRegions,
   mergeLocalMaterialTags,
   readLocalWorkspaceTabsState,
   saveLocalAiPrompt,
@@ -43,7 +47,9 @@ import {
   syncLocalMaterialPdf,
   updateLocalEntry,
   updateLocalMaterial,
+  renameLocalSubjectMaterialContainer,
   updateLocalMaterialTag,
+  replaceLocalMaterialTagRegions,
   unassignLocalTagFromMaterial,
   uploadWorkspaceBlobFromFormData,
   type LocalWorkspaceTabsState,
@@ -247,8 +253,11 @@ async function handleLocalApiRequest(request: Request) {
       return jsonResponse(await getLocalSubjectShortcuts(subjectId))
     }
     if (method === "PUT") {
-      const body = await parseRequestJson<{ subjectId: string; shortcutKey: "e_fich" | "figma"; url: string }>(request)
-      const shortcutKey = body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" ? body.shortcutKey : null
+      const body = await parseRequestJson<{ subjectId: string; shortcutKey: "e_fich" | "figma" | "nlm"; url: string }>(request)
+      const shortcutKey =
+        body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" || body?.shortcutKey === "nlm"
+          ? body.shortcutKey
+          : null
       if (!shortcutKey) return errorResponse("Invalid shortcutKey")
       return jsonResponse(
         await saveLocalSubjectShortcut({
@@ -257,6 +266,43 @@ async function handleLocalApiRequest(request: Request) {
           url: String(body?.url || ""),
         })
       )
+    }
+  }
+
+  if (matchesPath(pathSegments, ["api", "subject-material-containers"])) {
+    if (method === "GET") {
+      const subjectId = String(url.searchParams.get("subjectId") || "").trim()
+      if (!subjectId) return errorResponse("Missing subjectId")
+      return jsonResponse(await listLocalSubjectMaterialContainers(subjectId))
+    }
+    if (method === "POST") {
+      const body = await parseRequestJson<{ subjectId?: string; name?: string }>(request)
+      try {
+        return jsonResponse(await createLocalSubjectMaterialContainer(
+          String(body?.subjectId || "").trim(),
+          String(body?.name || "")
+        ))
+      } catch (error) {
+        return errorResponse(error instanceof Error ? error.message : "No se pudo crear el contenedor.", 409)
+      }
+    }
+  }
+
+  if (pathSegments[0] === "api" && pathSegments[1] === "subject-material-containers" && pathSegments.length === 3) {
+    const containerId = Number(pathSegments[2])
+    if (!Number.isInteger(containerId)) return errorResponse("Invalid id")
+    try {
+      if (method === "PATCH") {
+        const body = await parseRequestJson<{ name?: string }>(request)
+        const updated = await renameLocalSubjectMaterialContainer(containerId, String(body?.name || ""))
+        return updated ? jsonResponse(updated) : errorResponse("Container not found", 404)
+      }
+      if (method === "DELETE") {
+        const deleted = await deleteLocalSubjectMaterialContainer(containerId)
+        return deleted ? jsonResponse(deleted) : errorResponse("Container not found", 404)
+      }
+    } catch (error) {
+      return errorResponse(error instanceof Error ? error.message : "No se pudo modificar el contenedor.", 409)
     }
   }
 
@@ -336,6 +382,7 @@ async function handleLocalApiRequest(request: Request) {
       sessionDate: string
       weekNumber?: number
       materialType: "theory" | "practice"
+      containerId?: number | null
       fileName: string
       mimeType: string
     }>(request)
@@ -347,6 +394,7 @@ async function handleLocalApiRequest(request: Request) {
         sessionDate: String(body?.sessionDate || "").trim(),
         weekNumber: body?.weekNumber,
         materialType,
+        containerId: Number.isInteger(Number(body?.containerId)) ? Number(body.containerId) : null,
         fileName: String(body?.fileName || ""),
         mimeType: String(body?.mimeType || "application/pdf"),
       })
@@ -359,6 +407,7 @@ async function handleLocalApiRequest(request: Request) {
       sessionDate: string
       weekNumber?: number
       materialType: "theory" | "practice"
+      containerId?: number | null
       driveFileId: string
       fileName: string
     }>(request)
@@ -370,6 +419,7 @@ async function handleLocalApiRequest(request: Request) {
         sessionDate: String(body?.sessionDate || "").trim(),
         weekNumber: body?.weekNumber,
         materialType,
+        containerId: Number.isInteger(Number(body?.containerId)) ? Number(body.containerId) : null,
         driveFileId: String(body?.driveFileId || "").trim(),
         fileName: String(body?.fileName || ""),
       })
@@ -410,9 +460,15 @@ async function handleLocalApiRequest(request: Request) {
 
     if (pathSegments.length === 3) {
       if (method === "PATCH") {
-        const body = await parseRequestJson<{ isCheckupDone?: boolean }>(request)
+        const body = await parseRequestJson<{
+          isCheckupDone?: boolean
+          containerId?: number | null
+          materialType?: "theory" | "practice"
+        }>(request)
         const material = await updateLocalMaterial(materialId, {
           is_checkup_done: typeof body?.isCheckupDone === "boolean" ? body.isCheckupDone : undefined,
+          container_id: Number.isInteger(Number(body?.containerId)) ? Number(body.containerId) : undefined,
+          material_type: body?.materialType === "theory" || body?.materialType === "practice" ? body.materialType : undefined,
         })
         return material ? jsonResponse(material) : errorResponse("Material not found", 404)
       }
@@ -453,6 +509,52 @@ async function handleLocalApiRequest(request: Request) {
         }
         if (method === "DELETE") {
           return jsonResponse(await unassignLocalTagFromMaterial(materialId, tagId))
+        }
+      }
+      if (pathSegments.length === 6 && pathSegments[5] === "regions") {
+        const tagId = Number.parseInt(pathSegments[4] || "", 10)
+        if (!Number.isInteger(tagId)) return errorResponse("Invalid tag id")
+        if (method === "GET") {
+          return jsonResponse(await listLocalMaterialTagRegions(materialId, tagId))
+        }
+        if (method === "PUT") {
+          const body = await parseRequestJson<{ regions?: Array<{
+            pageNumber: number
+            pageRotation: number
+            x1: number
+            y1: number
+            x2: number
+            y2: number
+          }> }>(request)
+          const regions = Array.isArray(body?.regions)
+            ? body.regions.map((region, orderIndex) => ({
+                materialId,
+                tagId,
+                pageNumber: Number(region.pageNumber),
+                pageRotation: Number(region.pageRotation),
+                x1: Number(region.x1),
+                y1: Number(region.y1),
+                x2: Number(region.x2),
+                y2: Number(region.y2),
+                orderIndex,
+              }))
+            : []
+          const valid = regions.every((region) =>
+            Number.isInteger(region.pageNumber) &&
+            region.pageNumber >= 1 &&
+            [0, 90, 180, 270].includes(region.pageRotation) &&
+            [region.x1, region.y1, region.x2, region.y2].every(
+              (value) => Number.isFinite(value) && value >= 0 && value <= 1
+            ) &&
+            Math.abs(region.x2 - region.x1) >= 0.005 &&
+            Math.abs(region.y2 - region.y1) >= 0.005
+          )
+          if (!valid) return errorResponse("Las coordenadas no son válidas.")
+          try {
+            return jsonResponse(await replaceLocalMaterialTagRegions(materialId, tagId, regions))
+          } catch (error) {
+            return errorResponse(error instanceof Error ? error.message : "No se pudieron guardar las regiones.", 409)
+          }
         }
       }
     }

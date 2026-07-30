@@ -6,6 +6,7 @@ import { deleteLocalMaterial, findLocalMaterialById, upsertLocalMaterial } from 
 import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-maintenance"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
+import { getSubjectMaterialContainer } from "@/lib/material-containers"
 
 export const runtime = "nodejs"
 
@@ -18,6 +19,7 @@ type SubjectDayMaterialRow = {
   session_date: string
   weekday_index: number
   material_type: "theory" | "practice"
+  container_id: number | null
   order_index: number
   file_name: string
   drive_file_id: string
@@ -61,6 +63,7 @@ function parseMaterialPatchBody(body: unknown) {
     sessionDate: string
     weekNumber: number
     isCheckupDone: boolean
+    containerId: number
   }> = {}
 
   if ("fileName" in payload) {
@@ -99,6 +102,12 @@ function parseMaterialPatchBody(body: unknown) {
     patch.isCheckupDone = payload.isCheckupDone
   }
 
+  if ("containerId" in payload) {
+    const containerId = Number(payload.containerId)
+    if (!Number.isInteger(containerId)) return { error: "Invalid containerId" }
+    patch.containerId = containerId
+  }
+
   if (Object.keys(patch).length === 0) return { error: "Missing patch fields" }
   return { patch }
 }
@@ -131,6 +140,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         ...material,
         file_name: patch.fileName ?? material.file_name,
         material_type: patch.materialType ?? material.material_type,
+        container_id: patch.containerId ?? material.container_id ?? null,
         session_date: patch.sessionDate ?? material.session_date,
         week_number: patch.weekNumber ?? material.week_number,
         weekday_index: getWeekdayIndexFromDateKey(patch.sessionDate ?? material.session_date),
@@ -163,7 +173,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 })
     const patch = parsed.patch
     const currentRows = await sql`
-      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      SELECT id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
       FROM subject_day_materials
       WHERE id = ${materialId}
       LIMIT 1
@@ -173,19 +183,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return NextResponse.json({ error: "Material not found" }, { status: 404 })
     }
     const nextSessionDate = patch.sessionDate ?? normalizeSessionDateKey(currentMaterial.session_date)
+    const nextContainer = patch.containerId == null ? null : await getSubjectMaterialContainer(patch.containerId)
+    if (nextContainer && nextContainer.subjectId !== currentMaterial.subject_id) {
+      return NextResponse.json({ error: "El contenedor no pertenece a la materia." }, { status: 400 })
+    }
 
     const rows = await sql`
       UPDATE subject_day_materials
       SET
         file_name = ${patch.fileName ?? currentMaterial.file_name},
         material_type = ${patch.materialType ?? currentMaterial.material_type},
+        container_id = ${patch.containerId ?? currentMaterial.container_id},
         session_date = ${nextSessionDate},
         week_number = ${patch.weekNumber ?? currentMaterial.week_number},
         weekday_index = ${getWeekdayIndexFromDateKey(nextSessionDate)},
         is_checkup_done = ${patch.isCheckupDone ?? currentMaterial.is_checkup_done},
         updated_at = NOW()
       WHERE id = ${materialId}
-      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
+      RETURNING id, subject_id, week_number, session_date, weekday_index, material_type, container_id, order_index, file_name, drive_file_id, drive_mime_type, drive_web_view_link, is_checkup_done, created_at, updated_at
     ` as SubjectDayMaterialRow[]
 
     if (!rows[0]) {

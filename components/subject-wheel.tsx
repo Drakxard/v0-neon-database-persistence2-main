@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -50,6 +50,12 @@ import {
 } from "@/lib/socratic-review-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
+import {
+  createSubjectMaterialContainer,
+  fetchSubjectMaterialContainers,
+  removeSubjectMaterialContainer,
+  renameSubjectMaterialContainer,
+} from "@/lib/material-containers-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { isLocalStorageMode } from "@/lib/storage-mode"
@@ -64,6 +70,7 @@ import type {
   SubjectDayEntryLink,
   SubjectDayMaterial,
   SubjectMaterialSynthesisRecord,
+  SubjectMaterialContainer,
   SubjectDayMaterialType,
   SubjectShortcutKey,
   SubjectShortcuts,
@@ -177,6 +184,7 @@ type MaterialEditDraft = {
   sessionDate: string
   weekNumber: string
   isCheckupDone: boolean
+  containerId: string
 }
 
 type SynthesisViewMode = "overview" | "detail"
@@ -807,7 +815,13 @@ function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
 }
 
 function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcutKey) {
-  return shortcutKey === "e_fich" ? shortcuts.eFich : shortcuts.figma
+  return shortcutKey === "e_fich" ? shortcuts.eFich : shortcutKey === "figma" ? shortcuts.figma : shortcuts.nlm
+}
+
+function buildMaterialRegionPresentationHref(materialId: number, tagIds: number[]) {
+  const params = new URLSearchParams({ materialId: String(materialId) })
+  if (tagIds.length > 0) params.set("tagIds", tagIds.join(","))
+  return `/practice/presentation?${params.toString()}`
 }
 
 function isPdfFile(file: File) {
@@ -1629,7 +1643,18 @@ export function SubjectWheel({
     sessionDate: getTodayDateString(),
     weekNumber: "0",
     isCheckupDone: false,
+    containerId: "",
   })
+  const [subjectMaterialContainers, setSubjectMaterialContainers] = useState<SubjectMaterialContainer[]>([])
+  const [isCreateContainerOpen, setIsCreateContainerOpen] = useState(false)
+  const [containerNameDraft, setContainerNameDraft] = useState("")
+  const [containerError, setContainerError] = useState("")
+  const [isSavingContainer, setIsSavingContainer] = useState(false)
+  const [editingContainerId, setEditingContainerId] = useState<number | null>(null)
+  const [editingContainerName, setEditingContainerName] = useState("")
+  const [deleteContainerTarget, setDeleteContainerTarget] = useState<SubjectMaterialContainer | null>(null)
+  const containerLongPressTimerRef = useRef<number | null>(null)
+  const suppressContainerClickRef = useRef(false)
   const [isMaterialEditSaving, setIsMaterialEditSaving] = useState(false)
   const [materialEditError, setMaterialEditError] = useState("")
   const [entries, setEntries] = useState<SubjectDayEntry[]>([])
@@ -1688,11 +1713,11 @@ export function SubjectWheel({
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
   const [continueMode, setContinueMode] = useState<ContinueMode>("practice")
-  const [dragOverMaterialType, setDragOverMaterialType] = useState<ContinueMode | null>(null)
+  const [dragOverMaterialType, setDragOverMaterialType] = useState<string | null>(null)
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false)
   const [continuePayload, setContinuePayload] = useState<ContinuePayload | null>(null)
   const cronogramaFileInputRef = useRef<HTMLInputElement | null>(null)
-  const materialDropDepthRef = useRef<Record<ContinueMode, number>>({ theory: 0, practice: 0 })
+  const materialDropDepthRef = useRef<Record<string, number>>({ theory: 0, practice: 0 })
   const [cronogramaPdfName, setCronogramaPdfName] = useState("")
   const [cronogramaRecord, setCronogramaRecord] = useState<CronogramaRecord | null>(null)
   const [isCronogramaLoading, setIsCronogramaLoading] = useState(false)
@@ -1955,6 +1980,106 @@ export function SubjectWheel({
     subjectId: isDialogOpen ? currentSubject?.id : undefined,
     weekNumber: isDialogOpen ? dialogSelectedWeekNumber : undefined,
   })
+  const loadMaterialContainers = useCallback(async (subjectId: string) => {
+    try {
+      setContainerError("")
+      setSubjectMaterialContainers(await fetchSubjectMaterialContainers(subjectId))
+    } catch (error) {
+      setContainerError(error instanceof Error ? error.message : "No se pudieron cargar los contenedores.")
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isDialogOpen || !currentSubject) {
+      setSubjectMaterialContainers([])
+      return
+    }
+    void loadMaterialContainers(currentSubject.id)
+  }, [currentSubject, isDialogOpen, loadMaterialContainers])
+
+  useEffect(() => {
+    const onPlus = (event: KeyboardEvent) => {
+      if (!isDialogOpen || event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.key !== "+") return
+      const target = event.target as HTMLElement | null
+      const isTagSearch = Boolean(target?.closest("[data-material-tag-search='true']"))
+      const isEditable = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"))
+      if (isEditable && !isTagSearch) return
+      if (isCreateContainerOpen || isShortcutDialogOpen || editingMaterial) return
+      event.preventDefault()
+      event.stopPropagation()
+      setContainerNameDraft("")
+      setContainerError("")
+      setIsCreateContainerOpen(true)
+    }
+    window.addEventListener("keydown", onPlus, true)
+    return () => window.removeEventListener("keydown", onPlus, true)
+  }, [editingMaterial, isCreateContainerOpen, isDialogOpen, isShortcutDialogOpen])
+
+  const saveNewContainer = async () => {
+    if (!currentSubject || !containerNameDraft.trim()) return
+    setIsSavingContainer(true)
+    setContainerError("")
+    try {
+      await createSubjectMaterialContainer(currentSubject.id, containerNameDraft)
+      await loadMaterialContainers(currentSubject.id)
+      setIsCreateContainerOpen(false)
+      setContainerNameDraft("")
+    } catch (error) {
+      setContainerError(error instanceof Error ? error.message : "No se pudo crear el contenedor.")
+    } finally {
+      setIsSavingContainer(false)
+    }
+  }
+
+  const saveContainerRename = async (containerId: number) => {
+    if (!editingContainerName.trim()) return
+    setIsSavingContainer(true)
+    setContainerError("")
+    try {
+      await renameSubjectMaterialContainer(containerId, editingContainerName)
+      if (currentSubject) await loadMaterialContainers(currentSubject.id)
+      setEditingContainerId(null)
+    } catch (error) {
+      setContainerError(error instanceof Error ? error.message : "No se pudo renombrar el contenedor.")
+    } finally {
+      setIsSavingContainer(false)
+    }
+  }
+
+  const startContainerLongPress = (container: SubjectMaterialContainer) => {
+    if (container.kind !== "custom") return
+    if (containerLongPressTimerRef.current != null) window.clearTimeout(containerLongPressTimerRef.current)
+    suppressContainerClickRef.current = false
+    containerLongPressTimerRef.current = window.setTimeout(() => {
+      suppressContainerClickRef.current = true
+      setDeleteContainerTarget(container)
+      containerLongPressTimerRef.current = null
+    }, 700)
+  }
+
+  const cancelContainerLongPress = () => {
+    if (containerLongPressTimerRef.current != null) {
+      window.clearTimeout(containerLongPressTimerRef.current)
+      containerLongPressTimerRef.current = null
+    }
+  }
+
+  const confirmDeleteContainer = async () => {
+    if (!deleteContainerTarget || !currentSubject) return
+    setIsSavingContainer(true)
+    setContainerError("")
+    try {
+      await removeSubjectMaterialContainer(deleteContainerTarget.id)
+      await loadMaterialContainers(currentSubject.id)
+      setDeleteContainerTarget(null)
+    } catch (error) {
+      setDeleteContainerTarget(null)
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo eliminar el contenedor.")
+    } finally {
+      setIsSavingContainer(false)
+    }
+  }
   const currentSubjectOverviewLoad = useMobileReviewOverview({
     enabled: Boolean(isDialogOpen && currentSubject),
     weekNumber: dialogSelectedWeekNumber,
@@ -4433,7 +4558,11 @@ export function SubjectWheel({
     []
   )
 
-  const handleMaterialUpload = async (materialType: SubjectDayMaterialType, files: File[]) => {
+  const handleMaterialUpload = async (
+    materialType: SubjectDayMaterialType,
+    files: File[],
+    containerId?: number | null
+  ) => {
     if (!currentSubject || files.length === 0) return
 
     const validFiles = files.filter((file) => isPdfFile(file))
@@ -4458,11 +4587,13 @@ export function SubjectWheel({
       sessionDate,
       weekNumber,
       materialType,
+      containerId,
       files: validFiles,
       buildPendingMaterials: (uploadFiles) => {
         const baseOrderIndex =
-          (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length) +
-          pendingMaterials.filter((material) => material.material_type === materialType).length
+          containerId == null
+            ? (materialType === "theory" ? theoryMaterials.length : practiceMaterials.length)
+            : [...materials, ...pendingMaterials].filter((material) => material.container_id === containerId).length
 
         return uploadFiles.map((file, index) => {
           const tempId = -(Date.now() + index + 1)
@@ -4476,6 +4607,7 @@ export function SubjectWheel({
               session_date: sessionDate,
               weekday_index: weekdayIndex,
               material_type: materialType,
+              container_id: containerId ?? null,
               order_index: baseOrderIndex + index + 1,
               file_name: file.name,
               drive_file_id: "",
@@ -4500,6 +4632,7 @@ export function SubjectWheel({
     } else if (skippedFiles.length > 0) {
       setEntriesError("")
     }
+    if (currentSubject) void loadMaterialContainers(currentSubject.id)
 
     if (skippedFiles.length > 0) {
       toast({
@@ -4518,39 +4651,44 @@ export function SubjectWheel({
     return Array.from(dataTransfer.types).includes("Files")
   }
 
-  const handleMaterialDragEnter = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+  const handleMaterialDragEnter = (key: string, event: React.DragEvent<HTMLElement>) => {
     if (!dataTransferHasFiles(event.dataTransfer)) return
     event.preventDefault()
-    materialDropDepthRef.current[mode] += 1
-    setDragOverMaterialType(mode)
+    materialDropDepthRef.current[key] = (materialDropDepthRef.current[key] ?? 0) + 1
+    setDragOverMaterialType(key)
   }
 
-  const handleMaterialDragOver = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+  const handleMaterialDragOver = (key: string, event: React.DragEvent<HTMLElement>) => {
     if (!dataTransferHasFiles(event.dataTransfer)) return
     event.preventDefault()
     event.dataTransfer.dropEffect = "copy"
-    if (dragOverMaterialType !== mode) {
-      setDragOverMaterialType(mode)
+    if (dragOverMaterialType !== key) {
+      setDragOverMaterialType(key)
     }
   }
 
-  const handleMaterialDragLeave = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+  const handleMaterialDragLeave = (key: string, event: React.DragEvent<HTMLElement>) => {
     if (!dataTransferHasFiles(event.dataTransfer)) return
     event.preventDefault()
-    materialDropDepthRef.current[mode] = Math.max(0, materialDropDepthRef.current[mode] - 1)
-    if (materialDropDepthRef.current[mode] === 0 && dragOverMaterialType === mode) {
+    materialDropDepthRef.current[key] = Math.max(0, (materialDropDepthRef.current[key] ?? 0) - 1)
+    if (materialDropDepthRef.current[key] === 0 && dragOverMaterialType === key) {
       setDragOverMaterialType(null)
     }
   }
 
-  const handleMaterialDrop = (mode: ContinueMode, event: React.DragEvent<HTMLElement>) => {
+  const handleMaterialDrop = (
+    key: string,
+    materialType: ContinueMode,
+    containerId: number | null,
+    event: React.DragEvent<HTMLElement>
+  ) => {
     if (!dataTransferHasFiles(event.dataTransfer)) return
     event.preventDefault()
-    materialDropDepthRef.current[mode] = 0
+    materialDropDepthRef.current[key] = 0
     setDragOverMaterialType(null)
     const droppedFiles = Array.from(event.dataTransfer.files ?? [])
     if (droppedFiles.length === 0) return
-    void handleMaterialUpload(mode, droppedFiles)
+    void handleMaterialUpload(materialType, droppedFiles, containerId)
   }
 
   const loadContinuePayload = async (
@@ -4705,6 +4843,11 @@ export function SubjectWheel({
       sessionDate: material.session_date,
       weekNumber: String(material.week_number),
       isCheckupDone: material.is_checkup_done,
+      containerId: String(
+        material.container_id ??
+        subjectMaterialContainers.find((container) => container.kind === material.material_type)?.id ??
+        ""
+      ),
     })
     setMaterialEditError("")
   }
@@ -4721,6 +4864,11 @@ export function SubjectWheel({
     const fileName = materialEditDraft.fileName.trim()
     const sessionDate = materialEditDraft.sessionDate.trim()
     const weekNumber = Number.parseInt(materialEditDraft.weekNumber, 10)
+    const selectedContainer = subjectMaterialContainers.find(
+      (container) => container.id === Number(materialEditDraft.containerId)
+    )
+    const nextMaterialType: SubjectDayMaterialType =
+      selectedContainer?.kind === "theory" ? "theory" : "practice"
 
     if (!fileName) {
       setMaterialEditError("El nombre no puede estar vacio.")
@@ -4739,7 +4887,8 @@ export function SubjectWheel({
     const optimisticMaterial: SubjectDayMaterial = {
       ...previousMaterial,
       file_name: fileName,
-      material_type: materialEditDraft.materialType,
+      material_type: nextMaterialType,
+      container_id: selectedContainer?.id ?? previousMaterial.container_id,
       session_date: sessionDate,
       week_number: weekNumber,
       weekday_index: getWeekdayIndexFromDateKey(sessionDate),
@@ -4763,7 +4912,8 @@ export function SubjectWheel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fileName,
-          materialType: materialEditDraft.materialType,
+          materialType: nextMaterialType,
+          containerId: selectedContainer?.id ?? previousMaterial.container_id,
           sessionDate,
           weekNumber,
           isCheckupDone: materialEditDraft.isCheckupDone,
@@ -4787,6 +4937,7 @@ export function SubjectWheel({
         setSelectedPracticeMaterialId(null)
       }
       setEditingMaterial(null)
+      if (currentSubject) void loadMaterialContainers(currentSubject.id)
     } catch (error) {
       console.error("Failed to edit material:", error)
       setMaterials((previousMaterials) =>
@@ -4943,6 +5094,7 @@ export function SubjectWheel({
       } else if (selectedPracticeMaterialId === materialToDelete.id) {
         setSelectedPracticeMaterialId(null)
       }
+      if (currentSubject) void loadMaterialContainers(currentSubject.id)
     } catch (error) {
       console.error("Failed to delete material:", error)
       const message = error instanceof Error ? error.message : "No se pudo borrar el archivo."
@@ -5764,23 +5916,32 @@ export function SubjectWheel({
     () => getDisplaySubjectsForDate(dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects),
     [dialogSelectedDate, dialogShowAllSubjectsForDay, visibleSubjects]
   )
+  const theoryContainer = subjectMaterialContainers.find((container) => container.kind === "theory") ?? null
+  const practiceContainer = subjectMaterialContainers.find((container) => container.kind === "practice") ?? null
+  const customMaterialContainers = subjectMaterialContainers.filter((container) => container.kind === "custom")
   const theoryMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
         [...materials, ...pendingMaterials].filter((material) =>
-          material.material_type === "theory" && (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
+          (theoryContainer
+            ? material.container_id === theoryContainer.id || (material.container_id == null && material.material_type === "theory")
+            : material.material_type === "theory") &&
+          (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
         )
       ),
-    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials]
+    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials, theoryContainer]
   )
   const practiceMaterials = useMemo(
     () =>
       sortSubjectDayMaterials(
         [...materials, ...pendingMaterials].filter((material) =>
-          material.material_type === "practice" && (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
+          (practiceContainer
+            ? material.container_id === practiceContainer.id || (material.container_id == null && material.material_type === "practice")
+            : material.material_type === "practice") &&
+          (!isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber)
         )
       ),
-    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials]
+    [dialogSelectedWeekNumber, isWeeklyExercisesScope, materials, pendingMaterials, practiceContainer]
   )
   const activeDayEntries = useMemo(
     () =>
@@ -6053,9 +6214,19 @@ export function SubjectWheel({
     if (LOCAL_STORAGE_MODE) return localPracticeWeekOptions
     return Array.from({ length: currentCalendarWeek + 1 }, (_, index) => String(index))
   }, [currentCalendarWeek, localPracticeWeekOptions])
-  const renderMaterialManagerSection = (mode: ContinueMode) => {
+  const renderMaterialManagerSection = (
+    mode: ContinueMode,
+    container: SubjectMaterialContainer | null = null
+  ) => {
     const isTheorySection = mode === "theory"
-    const materialsForMode = isTheorySection ? theoryMaterials : practiceMaterials
+    const allVisibleMaterials = [...materials, ...pendingMaterials].filter(
+      (material) => !isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber
+    )
+    const materialsForMode = container?.kind === "custom"
+      ? sortSubjectDayMaterials(allVisibleMaterials.filter((material) => material.container_id === container.id))
+      : isTheorySection
+        ? theoryMaterials
+        : practiceMaterials
     const filteredMaterialsForMode = materialsForMode.filter((material) => {
       if ("is_pending_upload" in material) return true
       return materialMatchesTagFilter(
@@ -6064,18 +6235,19 @@ export function SubjectWheel({
         materialTags.filterMode
       )
     })
-    const title = isTheorySection ? "Teoria" : "Practica"
-    const isDropActive = dragOverMaterialType === mode
+    const title = container?.name ?? (isTheorySection ? "Teoria" : "Practica")
+    const dropKey = container ? String(container.id) : mode
+    const isDropActive = dragOverMaterialType === dropKey
     const emptyLabel = isWeeklyExercisesScope
       ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
 
     return (
       <section
-        onDragEnter={(event) => handleMaterialDragEnter(mode, event)}
-        onDragOver={(event) => handleMaterialDragOver(mode, event)}
-        onDragLeave={(event) => handleMaterialDragLeave(mode, event)}
-        onDrop={(event) => handleMaterialDrop(mode, event)}
+        onDragEnter={(event) => handleMaterialDragEnter(dropKey, event)}
+        onDragOver={(event) => handleMaterialDragOver(dropKey, event)}
+        onDragLeave={(event) => handleMaterialDragLeave(dropKey, event)}
+        onDrop={(event) => handleMaterialDrop(dropKey, mode, container?.id ?? null, event)}
         className={cn(
           "space-y-3 rounded-2xl border bg-muted/40 p-3 transition-colors sm:p-4",
           isDropActive ? "border-primary bg-primary/5" : "border-border"
@@ -6083,7 +6255,47 @@ export function SubjectWheel({
       >
         <div className="flex flex-col gap-2">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
+            {container?.kind === "custom" && editingContainerId === container.id ? (
+              <Input
+                value={editingContainerName}
+                onChange={(event) => setEditingContainerName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    void saveContainerRename(container.id)
+                  } else if (event.key === "Escape") {
+                    setEditingContainerId(null)
+                  }
+                }}
+                onBlur={() => void saveContainerRename(container.id)}
+                className="h-8 max-w-xs"
+                autoFocus
+              />
+            ) : (
+              <button
+                type="button"
+                className={cn(
+                  "text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground",
+                  container?.kind === "custom" && "cursor-text hover:text-foreground"
+                )}
+                onPointerDown={() => container && startContainerLongPress(container)}
+                onPointerUp={cancelContainerLongPress}
+                onPointerLeave={cancelContainerLongPress}
+                onPointerCancel={cancelContainerLongPress}
+                onClick={() => {
+                  if (!container || container.kind !== "custom") return
+                  if (suppressContainerClickRef.current) {
+                    suppressContainerClickRef.current = false
+                    return
+                  }
+                  setEditingContainerId(container.id)
+                  setEditingContainerName(container.name)
+                }}
+                title={container?.kind === "custom" ? "Clic para renombrar; mantén pulsado para eliminar" : undefined}
+              >
+                {title}
+              </button>
+            )}
           </div>
         </div>
 
@@ -6178,17 +6390,52 @@ export function SubjectWheel({
                           })}
                       </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void deleteMaterial(material)}
-                      disabled={isDeletingMaterialId === material.id}
-                      className="h-7 w-7 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      aria-label={`Borrar ${material.file_name}`}
-                    >
-                      {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {(() => {
+                        const counts = materialTags.workspace.regionCounts[String(material.id)] ?? {}
+                        const assignedIds = materialTags.workspace.assignments[String(material.id)] ?? []
+                        const availableIds = assignedIds.filter((tagId) => Number(counts[String(tagId)] ?? 0) > 0)
+                        const filteredIds = materialTags.selectedTagIds.length > 0
+                          ? availableIds.filter((tagId) => materialTags.selectedTagIds.includes(tagId))
+                          : availableIds
+                        const canPresent = filteredIds.length > 0
+                        return (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            disabled={!canPresent}
+                            onClick={() => window.open(buildMaterialRegionPresentationHref(material.id, filteredIds), "_blank", "noopener,noreferrer")}
+                            className="h-7 w-7 rounded-full text-muted-foreground"
+                            aria-label={`Presentar recortes de ${material.file_name}`}
+                            title={canPresent ? "Presentar recortes guardados" : "Este PDF no tiene recortes para los tags activos"}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                        )
+                      })()}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => openMaterialEditDialog(material)}
+                        className="h-7 w-7 rounded-full text-muted-foreground"
+                        aria-label={`Editar ${material.file_name}`}
+                      >
+                        <FilePenLine className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void deleteMaterial(material)}
+                        disabled={isDeletingMaterialId === material.id}
+                        className="h-7 w-7 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        aria-label={`Borrar ${material.file_name}`}
+                      >
+                        {isDeletingMaterialId === material.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -6932,6 +7179,65 @@ export function SubjectWheel({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={isCreateContainerOpen} onOpenChange={(open) => {
+        if (!isSavingContainer) setIsCreateContainerOpen(open)
+      }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Nuevo contenedor</DialogTitle>
+            <DialogDescription>Se agregará a esta materia para organizar PDFs y tags.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={containerNameDraft}
+            onChange={(event) => {
+              setContainerNameDraft(event.target.value)
+              setContainerError("")
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void saveNewContainer()
+              }
+            }}
+            placeholder="Nombre"
+            autoFocus
+          />
+          {containerError ? <p className="text-sm text-red-600">{containerError}</p> : null}
+          <DialogFooter>
+            <Button type="button" onClick={() => void saveNewContainer()} disabled={!containerNameDraft.trim() || isSavingContainer}>
+              {isSavingContainer ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Crear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteContainerTarget)} onOpenChange={(open) => {
+        if (!open && !isSavingContainer) setDeleteContainerTarget(null)
+      }}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>¿Eliminar contenedor?</DialogTitle>
+            <DialogDescription>
+              {deleteContainerTarget?.materialCount
+                ? `${deleteContainerTarget.name} contiene ${deleteContainerTarget.materialCount} PDF${deleteContainerTarget.materialCount === 1 ? "" : "s"} y no puede eliminarse.`
+                : `Se eliminará “${deleteContainerTarget?.name ?? ""}”.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild><Button type="button" variant="outline">Cancelar</Button></DialogClose>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={Boolean(deleteContainerTarget?.materialCount) || isSavingContainer}
+              onClick={() => void confirmDeleteContainer()}
+            >
+              Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={Boolean(workspaceNoticeMessage)} onOpenChange={(open) => (!open ? setWorkspaceNoticeMessage("") : undefined)}>
         <DialogContent className="max-w-xs">
           <DialogHeader>
@@ -6974,13 +7280,13 @@ export function SubjectWheel({
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Tipo</label>
+                <label className="text-sm font-medium text-foreground">Contenedor</label>
                 <Select
-                  value={materialEditDraft.materialType}
+                  value={materialEditDraft.containerId}
                   onValueChange={(value) =>
                     setMaterialEditDraft((previous) => ({
                       ...previous,
-                      materialType: value === "practice" ? "practice" : "theory",
+                      containerId: value,
                     }))
                   }
                   disabled={isMaterialEditSaving}
@@ -6989,8 +7295,11 @@ export function SubjectWheel({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="theory">Teoria</SelectItem>
-                    <SelectItem value="practice">Practica</SelectItem>
+                    {subjectMaterialContainers.map((container) => (
+                      <SelectItem key={container.id} value={String(container.id)}>
+                        {container.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -7286,7 +7595,7 @@ export function SubjectWheel({
 
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
                   {currentSubject && isCustomSubject(currentSubject) ? (
                     <DialogTitle asChild>
                       <button
@@ -7303,6 +7612,53 @@ export function SubjectWheel({
                       {getSubjectDisplayName(currentSubject)}
                     </DialogTitle>
                   )}
+                  {currentSubject ? (
+                    <div className="ml-auto flex shrink-0 items-center gap-1">
+                      {([
+                        { key: "e_fich" as const, label: "E-Fich" },
+                        { key: "figma" as const, label: "Figma" },
+                        { key: "nlm" as const, label: "nlm" },
+                      ]).map((shortcut) => {
+                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                        const commonProps = {
+                          onPointerDown: () => handleShortcutPointerDown(shortcut.key),
+                          onPointerUp: handleShortcutPointerUp,
+                          onPointerLeave: handleShortcutPointerCancel,
+                          onPointerCancel: handleShortcutPointerCancel,
+                        }
+                        return url && !isSavingShortcut && !isSubjectShortcutsLoading ? (
+                          <Button key={shortcut.key} asChild variant="outline" className="h-8 px-2 text-[0.68rem] sm:text-xs">
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              {...commonProps}
+                              onClick={(event) => {
+                                if (shouldSuppressShortcutClickRef.current) {
+                                  shouldSuppressShortcutClickRef.current = false
+                                  event.preventDefault()
+                                }
+                              }}
+                            >
+                              {shortcut.label}
+                            </a>
+                          </Button>
+                        ) : (
+                          <Button
+                            key={shortcut.key}
+                            type="button"
+                            variant="outline"
+                            disabled={isSavingShortcut || isSubjectShortcutsLoading}
+                            className="h-8 px-2 text-[0.68rem] text-muted-foreground sm:text-xs"
+                            onClick={() => handleShortcutClick(shortcut.key)}
+                            {...commonProps}
+                          >
+                            {shortcut.label}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => void closeSubjectDialogOrReturn()}
@@ -7333,69 +7689,6 @@ export function SubjectWheel({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {practiceSectionView === "exercises" && currentSubject
-                    ? ([
-                        { key: "e_fich" as const, label: "E-Fich" },
-                        { key: "figma" as const, label: "Figma" },
-                      ]).map((shortcut) => {
-                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
-                        const title = isSubjectShortcutsLoading
-                          ? `Cargando ${shortcut.label}`
-                          : url
-                            ? shortcut.label
-                            : `Agregar ${shortcut.label}`
-
-                        if (url && !isSavingShortcut && !isSubjectShortcutsLoading) {
-                          return (
-                            <Button
-                              key={shortcut.key}
-                              asChild
-                              variant="outline"
-                              className="h-9 border-border px-3 text-xs text-foreground sm:text-sm"
-                              aria-label={shortcut.label}
-                              title={title}
-                            >
-                              <a
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
-                                onPointerUp={handleShortcutPointerUp}
-                                onPointerLeave={handleShortcutPointerCancel}
-                                onPointerCancel={handleShortcutPointerCancel}
-                                onClick={(event) => {
-                                  if (shouldSuppressShortcutClickRef.current) {
-                                    shouldSuppressShortcutClickRef.current = false
-                                    event.preventDefault()
-                                  }
-                                }}
-                              >
-                                {shortcut.label}
-                              </a>
-                            </Button>
-                          )
-                        }
-
-                        return (
-                          <Button
-                            key={shortcut.key}
-                            type="button"
-                            variant="outline"
-                            onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
-                            onPointerUp={handleShortcutPointerUp}
-                            onPointerLeave={handleShortcutPointerCancel}
-                            onPointerCancel={handleShortcutPointerCancel}
-                            onClick={() => handleShortcutClick(shortcut.key)}
-                            disabled={isSavingShortcut || isSubjectShortcutsLoading}
-                            className="h-9 border-border px-3 text-xs text-muted-foreground sm:text-sm"
-                            aria-label={shortcut.label}
-                            title={title}
-                          >
-                            {shortcut.label}
-                          </Button>
-                        )
-                      })
-                    : null}
                   {practiceSectionView === "theory" ? (
                     <Button
                       type="button"
@@ -7451,8 +7744,13 @@ export function SubjectWheel({
               ) : null}
 
               <div className="mb-6 space-y-4">
-                {renderMaterialManagerSection("theory")}
-                {isTheoryContinueMode ? null : renderMaterialManagerSection("practice")}
+                {renderMaterialManagerSection("theory", theoryContainer)}
+                {isTheoryContinueMode ? null : renderMaterialManagerSection("practice", practiceContainer)}
+                {isTheoryContinueMode
+                  ? null
+                  : customMaterialContainers.map((container) => (
+                      <div key={container.id}>{renderMaterialManagerSection("practice", container)}</div>
+                    ))}
               </div>
 
               {shouldShowInitialSubjectDayLoading ? (

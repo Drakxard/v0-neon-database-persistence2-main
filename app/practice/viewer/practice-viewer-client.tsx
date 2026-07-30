@@ -89,6 +89,8 @@ type ViewerMessage =
   | { type: "viewerRequestMaterialTag"; name?: string }
   | { type: "viewerUpdateMaterialTag"; tagId?: number; name?: string; color?: string }
   | { type: "viewerSelectMaterialTag"; tagId?: number }
+  | { type: "viewerRequestMaterialTagRegions"; tagId?: number }
+  | { type: "viewerSaveMaterialTagRegions"; tagId?: number; regions?: unknown[] }
   | { type: "uploadPracticeFragment"; payload?: FragmentUploadPayload }
 
 type DeleteEntriesResponse = {
@@ -349,6 +351,7 @@ export function PracticeViewerClient({
       tags: viewerMaterialTags.workspace.tags
         .map((tag) => ({ id: tag.id, name: tag.name, color: tag.color })),
       assignedTagIds: Array.from(assignedTagIds),
+      regionCounts: viewerMaterialTags.workspace.regionCounts[String(resolvedMaterial.id)] ?? {},
     })
   }, [postToViewer, resolvedMaterial, viewerMaterialTags.workspace])
 
@@ -403,6 +406,50 @@ export function PracticeViewerClient({
       })
     }
   }, [postToViewer, publishViewerMaterialTags, viewerMaterialTags])
+
+  const loadViewerMaterialTagRegions = useCallback(async (tagId: number) => {
+    if (!resolvedMaterial || !Number.isInteger(tagId)) return
+    try {
+      const response = await fetch(`/api/subject-day-materials/${resolvedMaterial.id}/tags/${tagId}/regions`, {
+        cache: "no-store",
+      })
+      const regions = await requireOkJson<unknown[]>(response, "No se pudieron cargar las regiones.")
+      postToViewer({ type: "viewerMaterialTagRegions", ok: true, tagId, regions })
+    } catch (error) {
+      postToViewer({
+        type: "viewerMaterialTagRegions",
+        ok: false,
+        tagId,
+        error: error instanceof Error ? error.message : "No se pudieron cargar las regiones.",
+      })
+    }
+  }, [postToViewer, resolvedMaterial])
+
+  const saveViewerMaterialTagRegions = useCallback(async (tagId: number, regions: unknown[]) => {
+    if (!resolvedMaterial || !Number.isInteger(tagId)) return
+    try {
+      const response = await fetch(`/api/subject-day-materials/${resolvedMaterial.id}/tags/${tagId}/regions`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ regions: Array.isArray(regions) ? regions : [] }),
+      })
+      const saved = await requireOkJson<unknown[]>(response, "No se pudieron guardar las regiones.")
+      await viewerMaterialTags.load()
+      window.localStorage.setItem("material-tag-regions:refresh", JSON.stringify({
+        materialId: resolvedMaterial.id,
+        tagId,
+        timestamp: Date.now(),
+      }))
+      postToViewer({ type: "viewerMaterialTagRegionsSaved", ok: true, tagId, regions: saved })
+    } catch (error) {
+      postToViewer({
+        type: "viewerMaterialTagRegionsSaved",
+        ok: false,
+        tagId,
+        error: error instanceof Error ? error.message : "No se pudieron guardar las regiones.",
+      })
+    }
+  }, [postToViewer, resolvedMaterial, viewerMaterialTags])
 
   useEffect(() => {
     publishViewerMaterialTags()
@@ -856,6 +903,16 @@ export function PracticeViewerClient({
         if (Number.isInteger(tagId)) {
           viewerMaterialTags.toggleSelectedTag(tagId)
         }
+        return
+      }
+
+      if (event.data.type === "viewerRequestMaterialTagRegions") {
+        void loadViewerMaterialTagRegions(Number(event.data.tagId))
+        return
+      }
+
+      if (event.data.type === "viewerSaveMaterialTagRegions") {
+        void saveViewerMaterialTagRegions(Number(event.data.tagId), event.data.regions ?? [])
         return
       }
 

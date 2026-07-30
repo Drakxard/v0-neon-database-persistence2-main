@@ -11,6 +11,7 @@ type UploadParams = {
   sessionDate: string
   weekNumber: number
   materialType: SubjectDayMaterialType
+  containerId?: number | null
   files: File[]
   buildPendingMaterials: (files: File[]) => Array<{ tempId: number; pendingMaterial: PendingSubjectDayMaterial; file: File }>
   mergeMaterials: (previous: SubjectDayMaterial[], incoming: SubjectDayMaterial[]) => SubjectDayMaterial[]
@@ -41,6 +42,7 @@ export function useMaterialUploads() {
               sessionDate: params.sessionDate,
               weekNumber: params.weekNumber,
               materialType: params.materialType,
+              containerId: params.containerId,
             },
             item.file,
             item.file.name,

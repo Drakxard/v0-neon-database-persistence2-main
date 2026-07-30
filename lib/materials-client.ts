@@ -8,6 +8,7 @@ type SubjectMaterialUploadContext = {
   sessionDate: string
   weekNumber: number
   materialType: SubjectDayMaterialType
+  containerId?: number | null
 }
 
 export async function uploadSubjectDayMaterial(
@@ -39,6 +40,7 @@ export async function uploadSubjectDayMaterial(
       sessionDate: context.sessionDate,
       weekNumber: context.weekNumber,
       materialType: context.materialType,
+      containerId: context.containerId,
       driveFileId,
       fileName: fileName.trim(),
     }),

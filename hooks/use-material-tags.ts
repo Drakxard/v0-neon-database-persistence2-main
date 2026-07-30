@@ -6,7 +6,7 @@ import { requireOkJson } from "@/lib/client/api"
 import type { MaterialTagWorkspace, StudyTag } from "@/lib/study-types"
 import type { TagFilterMode } from "@/lib/tag-utils"
 
-const EMPTY_WORKSPACE: MaterialTagWorkspace = { tags: [], assignments: {} }
+const EMPTY_WORKSPACE: MaterialTagWorkspace = { tags: [], assignments: {}, regionCounts: {} }
 
 export function useMaterialTags(scope: {
   subjectId?: string
@@ -40,6 +40,7 @@ export function useMaterialTags(scope: {
       setWorkspace({
         tags: Array.isArray(payload.tags) ? payload.tags : [],
         assignments: payload.assignments && typeof payload.assignments === "object" ? payload.assignments : {},
+        regionCounts: payload.regionCounts && typeof payload.regionCounts === "object" ? payload.regionCounts : {},
       })
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "No se pudieron cargar los tags.")
@@ -50,6 +51,14 @@ export function useMaterialTags(scope: {
 
   useEffect(() => {
     void load()
+  }, [load])
+
+  useEffect(() => {
+    const refresh = (event: StorageEvent) => {
+      if (event.key === "material-tag-regions:refresh") void load()
+    }
+    window.addEventListener("storage", refresh)
+    return () => window.removeEventListener("storage", refresh)
   }, [load])
 
   useEffect(() => {

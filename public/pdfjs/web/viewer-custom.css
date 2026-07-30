@@ -214,7 +214,8 @@
   left: 8px;
   z-index: 1100;
   display: none;
-  align-items: center;
+  align-items: stretch;
+  flex-direction: column;
   gap: 6px;
   max-width: calc(100vw - 16px);
   padding: 6px;
@@ -230,24 +231,33 @@
 }
 
 .pdfjs-custom-tag-list {
-  display: flex;
-  max-width: min(300px, 42vw);
-  flex-wrap: wrap;
+  display: grid;
+  width: min(280px, 72vw);
+  max-height: min(45vh, 420px);
+  overflow-y: auto;
+  grid-template-columns: minmax(0, 1fr) 24px;
   gap: 4px;
 }
 
 .pdfjs-custom-tag-chip {
-  max-width: 130px;
+  width: 100%;
+  max-width: none;
   overflow: hidden;
   padding: 4px 6px;
   border: 1px solid #0f766e;
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   color: var(--main-color, #111827);
   cursor: pointer;
   font: 500 12px/1 system-ui, sans-serif;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+}
+
+.pdfjs-custom-tag-chip.is-active {
+  background: color-mix(in srgb, #0f766e 18%, transparent);
+  box-shadow: inset 3px 0 #0f766e;
 }
 
 .pdfjs-custom-tag-edit {
