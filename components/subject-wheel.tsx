@@ -4730,8 +4730,9 @@ export function SubjectWheel({
     container: SubjectMaterialContainer | null,
     event: React.DragEvent<HTMLElement>
   ) => {
-    const draggedMaterialId = Number(event.dataTransfer.getData("application/x-study-material-id"))
-    if (Number.isInteger(draggedMaterialId) && container) {
+    const draggedMaterialIdValue = event.dataTransfer.getData("application/x-study-material-id").trim()
+    const draggedMaterialId = Number(draggedMaterialIdValue)
+    if (draggedMaterialIdValue && Number.isInteger(draggedMaterialId) && draggedMaterialId > 0 && container) {
       event.preventDefault()
       materialDropDepthRef.current[key] = 0
       setDragOverMaterialType(null)
@@ -6488,8 +6489,9 @@ export function SubjectWheel({
                 }}
                 onDrop={(event) => {
                   if ("is_pending_upload" in material) return
-                  const tagId = Number(event.dataTransfer.getData("application/x-study-tag-id"))
-                  if (!Number.isInteger(tagId)) return
+                  const tagIdValue = event.dataTransfer.getData("application/x-study-tag-id").trim()
+                  const tagId = Number(tagIdValue)
+                  if (!tagIdValue || !Number.isInteger(tagId) || tagId <= 0) return
                   event.preventDefault()
                   event.stopPropagation()
                   setTagDropMaterialId(null)

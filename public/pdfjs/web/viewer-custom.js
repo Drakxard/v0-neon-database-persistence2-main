@@ -67,6 +67,15 @@
     presentationRegionsByTag: new Map(),
     presentationPendingTagIds: new Set(),
     presentationRenderToken: 0,
+    presentationScale: 1.5,
+    presentationScaleInitialized: false,
+    cutButton: null,
+    cutModal: null,
+    cutStartInput: null,
+    cutEndInput: null,
+    cutConfirm: null,
+    cutError: null,
+    isExportingPageRange: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -314,6 +323,36 @@
   }
 
   function ensureUi() {
+    if (!state.cutButton) {
+      const downloadButton = document.getElementById("downloadButton");
+      const toolbar = downloadButton?.parentElement || document.getElementById("toolbarViewerRight");
+      if (toolbar) {
+        const button = document.createElement("button");
+        button.id = "pdfjs-custom-cut-button";
+        button.className = "toolbarButton pdfjs-custom-cut-button";
+        button.type = "button";
+        button.tabIndex = 0;
+        button.title = "Recortar paginas";
+        button.setAttribute("aria-label", "Recortar paginas");
+        button.innerHTML = [
+          '<svg aria-hidden="true" viewBox="0 0 24 24">',
+          '<circle cx="6" cy="7" r="3"></circle>',
+          '<circle cx="6" cy="17" r="3"></circle>',
+          '<path d="m8.7 8.4 10.8 7.1"></path>',
+          '<path d="m8.7 15.6 10.8-7.1"></path>',
+          "</svg>",
+        ].join("");
+        button.addEventListener("click", () => openCutModal());
+        if (downloadButton) {
+          toolbar.insertBefore(button, downloadButton);
+        } else {
+          toolbar.appendChild(button);
+        }
+        state.cutButton = button;
+        refreshCutButton();
+      }
+    }
+
     if (!state.tagButton && !isPresentationMode()) {
       const toolbar = document.getElementById("toolbarViewerLeft") || document.getElementById("toolbarViewer");
       if (toolbar) {
@@ -424,6 +463,47 @@
           event.preventDefault();
           closeModal();
         }
+      });
+    }
+
+    if (!state.cutModal) {
+      const backdrop = document.createElement("div");
+      backdrop.className = "pdfjs-custom-modal-backdrop pdfjs-custom-cut-backdrop";
+      backdrop.innerHTML = [
+        '<div class="pdfjs-custom-modal pdfjs-custom-cut-modal" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-cut-title">',
+        '<h2 id="pdfjs-custom-cut-title" class="pdfjs-custom-sr-only">Recortar paginas del PDF</h2>',
+        '<div class="pdfjs-custom-cut-fields">',
+        '<label for="pdfjs-custom-cut-start">Inicio<input id="pdfjs-custom-cut-start" type="number" min="1" step="1" inputmode="numeric" /></label>',
+        '<label for="pdfjs-custom-cut-end">Final<input id="pdfjs-custom-cut-end" type="number" min="1" step="1" inputmode="numeric" /></label>',
+        "</div>",
+        '<p id="pdfjs-custom-cut-error" class="pdfjs-custom-cut-error" role="alert" hidden></p>',
+        '<div class="pdfjs-custom-modal-actions">',
+        '<button type="button" data-variant="primary" id="pdfjs-custom-cut-confirm">Confirmar</button>',
+        "</div>",
+        "</div>",
+      ].join("");
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) closeCutModal();
+      });
+      backdrop.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeCutModal();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void submitPageRangeExport();
+        }
+      });
+      document.body.appendChild(backdrop);
+      state.cutModal = backdrop;
+      state.cutStartInput = backdrop.querySelector("#pdfjs-custom-cut-start");
+      state.cutEndInput = backdrop.querySelector("#pdfjs-custom-cut-end");
+      state.cutConfirm = backdrop.querySelector("#pdfjs-custom-cut-confirm");
+      state.cutError = backdrop.querySelector("#pdfjs-custom-cut-error");
+      state.cutConfirm.addEventListener("click", () => {
+        void submitPageRangeExport();
       });
     }
 
@@ -566,6 +646,12 @@
     }
 
     refreshSyncButtons();
+    refreshCutButton();
+  }
+
+  function refreshCutButton() {
+    if (!(state.cutButton instanceof HTMLButtonElement)) return;
+    state.cutButton.disabled = !state.app?.pdfDocument || state.isExportingPageRange;
   }
 
   function setSyncButtonState(button) {
@@ -733,6 +819,198 @@
     return String(currentName).replace(/\.pdf$/i, "") || "fragmento";
   }
 
+  function getPresentationCurrentOriginalPage() {
+    if (!isPresentationMode()) return null;
+    const cards = Array.from(state.presentationContent?.querySelectorAll("[data-page-number]") || []);
+    if (!cards.length) return null;
+    const viewportCenter = window.innerHeight / 2;
+    let closestPage = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      const distance = Math.abs(rect.top + rect.height / 2 - viewportCenter);
+      const pageNumber = Number.parseInt(card.dataset.pageNumber || "", 10);
+      if (Number.isInteger(pageNumber) && distance < closestDistance) {
+        closestPage = pageNumber;
+        closestDistance = distance;
+      }
+    }
+    return closestPage;
+  }
+
+  function getDefaultCutPageNumber() {
+    const presentationPage = getPresentationCurrentOriginalPage();
+    if (Number.isInteger(presentationPage)) return presentationPage;
+    const currentPage = Number(state.app?.pdfViewer?.currentPageNumber);
+    return Number.isInteger(currentPage) && currentPage > 0 ? currentPage : 1;
+  }
+
+  function setCutError(message) {
+    if (!state.cutError) return;
+    state.cutError.textContent = message || "";
+    state.cutError.hidden = !message;
+  }
+
+  function openCutModal() {
+    if (!state.app?.pdfDocument) {
+      showToast("Primero carga un PDF.", "info");
+      return;
+    }
+    if (state.isExportingPageRange) return;
+    ensureUi();
+    const currentPage = getDefaultCutPageNumber();
+    const pageCount = state.app.pdfDocument.numPages || 1;
+    state.cutStartInput.value = String(Math.min(currentPage, pageCount));
+    state.cutEndInput.value = String(Math.min(currentPage, pageCount));
+    state.cutStartInput.max = String(pageCount);
+    state.cutEndInput.max = String(pageCount);
+    setCutError("");
+    state.cutModal.dataset.open = "true";
+    window.setTimeout(() => {
+      state.cutStartInput?.focus();
+      state.cutStartInput?.select();
+    }, 0);
+  }
+
+  function closeCutModal() {
+    if (state.isExportingPageRange) return;
+    if (state.cutModal) state.cutModal.dataset.open = "false";
+    setCutError("");
+  }
+
+  function parsePageRange() {
+    const startValue = state.cutStartInput?.value.trim() || "";
+    const endValue = state.cutEndInput?.value.trim() || "";
+    const startPage = Number(startValue);
+    const endPage = Number(endValue);
+    const pageCount = Number(state.app?.pdfDocument?.numPages || 0);
+    if (
+      !startValue ||
+      !endValue ||
+      !Number.isInteger(startPage) ||
+      !Number.isInteger(endPage)
+    ) {
+      throw new Error("Inicio y Final deben ser numeros de pagina enteros.");
+    }
+    if (startPage < 1 || endPage < 1 || startPage > endPage || endPage > pageCount) {
+      throw new Error(`Usa un rango entre 1 y ${pageCount}, con Inicio menor o igual que Final.`);
+    }
+    return { startPage, endPage };
+  }
+
+  function canvasToJpegBytes(canvas, quality = 0.84) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          reject(new Error("No se pudo convertir una pagina a imagen."));
+          return;
+        }
+        try {
+          resolve(new Uint8Array(await blob.arrayBuffer()));
+        } catch (error) {
+          reject(error);
+        }
+      }, "image/jpeg", quality);
+    });
+  }
+
+  async function buildRasterizedPageRangePdf(startPage, endPage) {
+    if (!window.PDFLib?.PDFDocument) {
+      throw new Error("pdf-lib no esta disponible en este visor.");
+    }
+    if (!state.app?.pdfDocument) {
+      throw new Error("No hay un PDF cargado.");
+    }
+
+    const outputDoc = await window.PDFLib.PDFDocument.create();
+    const totalPages = endPage - startPage + 1;
+    for (let pageNumber = startPage; pageNumber <= endPage; pageNumber += 1) {
+      updateBusy(`Procesando pagina ${pageNumber - startPage + 1} de ${totalPages}...`);
+      const sourcePage = await state.app.pdfDocument.getPage(pageNumber);
+      const pageViewport = sourcePage.getViewport({ scale: 1 });
+      const renderViewport = sourcePage.getViewport({ scale: 2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.ceil(renderViewport.width));
+      canvas.height = Math.max(1, Math.ceil(renderViewport.height));
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) {
+        throw new Error(`No se pudo preparar la pagina ${pageNumber}.`);
+      }
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      try {
+        await sourcePage.render({
+          canvas,
+          canvasContext: context,
+          viewport: renderViewport,
+          background: "#ffffff",
+        }).promise;
+        const jpegBytes = await canvasToJpegBytes(canvas);
+        const image = await outputDoc.embedJpg(jpegBytes);
+        const outputPage = outputDoc.addPage([pageViewport.width, pageViewport.height]);
+        outputPage.drawImage(image, {
+          x: 0,
+          y: 0,
+          width: pageViewport.width,
+          height: pageViewport.height,
+        });
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+    return outputDoc.save({ useObjectStreams: true });
+  }
+
+  function downloadPdfBytes(pdfBytes, fileName) {
+    const blob = new Blob([pdfBytes], { type: "application/pdf" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  async function submitPageRangeExport() {
+    if (state.isExportingPageRange) return;
+    let range;
+    try {
+      range = parsePageRange();
+    } catch (error) {
+      setCutError(error instanceof Error ? error.message : "El rango no es valido.");
+      return;
+    }
+
+    state.cutModal.dataset.open = "false";
+    state.isExportingPageRange = true;
+    refreshCutButton();
+    showBusy("Preparando paginas...");
+    try {
+      const pdfBytes = await buildRasterizedPageRangePdf(range.startPage, range.endPage);
+      const fileName = normalizePdfFileName(
+        `${getDefaultBaseName()}_paginas-${range.startPage}-${range.endPage}`
+      );
+      downloadPdfBytes(pdfBytes, fileName);
+      showToast(`PDF descargado: ${fileName}`, "success", 3200);
+    } catch (error) {
+      console.error("Custom PDF.js rasterized range export failed:", error);
+      showToast(
+        error instanceof Error ? error.message : "No se pudo crear el PDF recortado.",
+        "error",
+        4600
+      );
+    } finally {
+      state.isExportingPageRange = false;
+      refreshCutButton();
+      hideBusy();
+    }
+  }
+
   function canUseFragmentUpload() {
     const query = state.query;
     return Boolean(
@@ -777,6 +1055,8 @@
     if (!isPresentationMode() || state.presentationPendingTagIds.size > 0 || !state.presentationContent) return;
     const content = state.presentationContent;
     const renderToken = ++state.presentationRenderToken;
+    const outputScale = 2;
+    const presentationScale = Math.min(3, Math.max(0.5, Number(state.presentationScale) || 1.5));
     const regions = [];
     for (const tagId of state.query.presentationTagIds) {
       const tag = state.tagCatalog.find((candidate) => candidate.id === tagId) || {
@@ -810,17 +1090,18 @@
         if (renderToken !== state.presentationRenderToken) return;
         const pageNumber = Number(region.pageNumber);
         const rotation = Number(region.pageRotation || 0);
-        const cacheKey = `${pageNumber}:${rotation}`;
+        const cacheKey = `${pageNumber}:${rotation}:${presentationScale}`;
         let pageCanvas = pageCache.get(cacheKey);
         if (!pageCanvas) {
           const page = await state.app.pdfDocument.getPage(pageNumber);
-          const viewport = page.getViewport({ scale: 2, rotation });
+          const viewport = page.getViewport({ scale: presentationScale * outputScale, rotation });
           pageCanvas = document.createElement("canvas");
           pageCanvas.width = Math.ceil(viewport.width);
           pageCanvas.height = Math.ceil(viewport.height);
           const context = pageCanvas.getContext("2d");
           if (!context) throw new Error("El navegador no pudo preparar el recorte.");
           await page.render({ canvas: pageCanvas, canvasContext: context, viewport }).promise;
+          if (renderToken !== state.presentationRenderToken) return;
           pageCache.set(cacheKey, pageCanvas);
         }
 
@@ -835,14 +1116,15 @@
         const crop = document.createElement("canvas");
         crop.width = sourceWidth;
         crop.height = sourceHeight;
-        crop.style.width = `${sourceWidth / 2}px`;
-        crop.style.height = `${sourceHeight / 2}px`;
+        crop.style.width = `${sourceWidth / outputScale}px`;
+        crop.style.height = `${sourceHeight / outputScale}px`;
         const cropContext = crop.getContext("2d");
         if (!cropContext) continue;
         cropContext.drawImage(pageCanvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
 
         const card = document.createElement("article");
         card.className = "pdfjs-custom-presentation-card";
+        card.dataset.pageNumber = String(pageNumber);
         card.setAttribute("aria-label", `Region de #${region.tag.name}, pagina ${pageNumber}`);
         card.title = `#${region.tag.name} - pagina ${pageNumber}`;
         card.appendChild(crop);
@@ -1093,6 +1375,12 @@
 
   function handleViewerEscape(event) {
     if (event?.defaultPrevented) return;
+
+    if (state.cutModal?.dataset.open === "true") {
+      event?.preventDefault?.();
+      closeCutModal();
+      return;
+    }
 
     if (state.replacementBackdrop?.dataset.open === "true") {
       event?.preventDefault?.();
@@ -2805,6 +3093,7 @@
     updateDraftOverlay();
     applyEnhancedPdfReadability();
     refreshSyncButtons();
+    refreshCutButton();
     hideLoadingOverlay();
     postToParent({
       type: "viewerDocumentLoaded",
@@ -2816,6 +3105,28 @@
     if (isPresentationMode()) {
       requestPresentationRegions();
     }
+  }
+
+  function initializePresentationScale() {
+    if (!isPresentationMode() || state.presentationScaleInitialized || !state.app?.pdfViewer) return;
+    state.presentationScaleInitialized = true;
+    state.presentationScale = 1.5;
+    state.app.pdfViewer.currentScaleValue = "1.5";
+  }
+
+  function handleViewerScaleChanging(event) {
+    refreshLayers();
+    if (!isPresentationMode()) return;
+    const requestedScale = Number(event?.scale);
+    if (!Number.isFinite(requestedScale) || requestedScale <= 0) return;
+    const nextScale = Math.min(3, Math.max(0.5, requestedScale));
+    state.presentationScale = nextScale;
+    if (nextScale !== requestedScale && state.app?.pdfViewer) {
+      window.setTimeout(() => {
+        if (state.app?.pdfViewer) state.app.pdfViewer.currentScale = nextScale;
+      }, 0);
+    }
+    void renderPresentationRegions();
   }
 
   function handleKeyDown(event) {
@@ -2886,12 +3197,14 @@
       refreshSyncButtons();
     });
     eventBus.on("pagechanging", refreshLayers);
-    eventBus.on("scalechanging", refreshLayers);
+    eventBus.on("pagesinit", initializePresentationScale);
+    eventBus.on("scalechanging", handleViewerScaleChanging);
     eventBus.on("rotationchanging", refreshLayers);
     eventBus.on("documentloaded", onDocumentLoaded);
     eventBus.on("documenterror", () => {
       updateDraftOverlay();
       refreshSyncButtons();
+      refreshCutButton();
       hideLoadingOverlay();
       postToParent({
         type: "viewerDocumentError",

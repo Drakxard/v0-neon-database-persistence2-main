@@ -153,6 +153,42 @@
   font: inherit;
 }
 
+.pdfjs-custom-sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.pdfjs-custom-cut-modal {
+  width: min(340px, 100%);
+}
+
+.pdfjs-custom-cut-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pdfjs-custom-cut-fields label {
+  margin: 0;
+}
+
+.pdfjs-custom-cut-fields input {
+  margin-top: 8px;
+}
+
+.pdfjs-custom-cut-error {
+  margin: 12px 0 0 !important;
+  color: #fca5a5 !important;
+  font-size: 12px !important;
+}
+
 .pdfjs-custom-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -199,6 +235,25 @@
 }
 
 .pdfjs-custom-tag-button svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.pdfjs-custom-cut-button {
+  background-image: none !important;
+  color: var(--toolbar-icon-color, #374151);
+}
+
+.pdfjs-custom-cut-button::before {
+  display: none;
+}
+
+.pdfjs-custom-cut-button svg {
   width: 19px;
   height: 19px;
   fill: none;
