@@ -153,42 +153,6 @@
   font: inherit;
 }
 
-.pdfjs-custom-sr-only {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  padding: 0 !important;
-  margin: -1px !important;
-  overflow: hidden !important;
-  clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important;
-  border: 0 !important;
-}
-
-.pdfjs-custom-cut-modal {
-  width: min(340px, 100%);
-}
-
-.pdfjs-custom-cut-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.pdfjs-custom-cut-fields label {
-  margin: 0;
-}
-
-.pdfjs-custom-cut-fields input {
-  margin-top: 8px;
-}
-
-.pdfjs-custom-cut-error {
-  margin: 12px 0 0 !important;
-  color: #fca5a5 !important;
-  font-size: 12px !important;
-}
-
 .pdfjs-custom-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -261,6 +225,58 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
+}
+
+.pdfjs-custom-cut-button.is-active {
+  color: #f97316;
+  background-color: color-mix(in srgb, #f97316 18%, transparent);
+}
+
+#viewer .page[data-cut-boundary],
+.pdfjs-custom-presentation-card[data-cut-boundary] {
+  position: relative;
+  outline: 4px solid transparent;
+  outline-offset: 3px;
+}
+
+#viewer .page[data-cut-boundary]::after,
+.pdfjs-custom-presentation-card[data-cut-boundary]::after {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: block !important;
+  content: "";
+  pointer-events: none;
+}
+
+#viewer .page[data-cut-boundary="start"],
+.pdfjs-custom-presentation-card[data-cut-boundary="start"] {
+  outline-color: #f97316;
+}
+
+#viewer .page[data-cut-boundary="start"]::after,
+.pdfjs-custom-presentation-card[data-cut-boundary="start"]::after {
+  background: rgba(249, 115, 22, 0.12);
+}
+
+#viewer .page[data-cut-boundary="end"],
+.pdfjs-custom-presentation-card[data-cut-boundary="end"] {
+  outline-color: #0d9488;
+}
+
+#viewer .page[data-cut-boundary="end"]::after,
+.pdfjs-custom-presentation-card[data-cut-boundary="end"]::after {
+  background: rgba(13, 148, 136, 0.12);
+}
+
+#viewer .page[data-cut-boundary="both"],
+.pdfjs-custom-presentation-card[data-cut-boundary="both"] {
+  outline-color: #7c3aed;
+}
+
+#viewer .page[data-cut-boundary="both"]::after,
+.pdfjs-custom-presentation-card[data-cut-boundary="both"]::after {
+  background: rgba(124, 58, 237, 0.12);
 }
 
 .pdfjs-custom-tag-panel {

@@ -70,11 +70,9 @@
     presentationScale: 1.5,
     presentationScaleInitialized: false,
     cutButton: null,
-    cutModal: null,
-    cutStartInput: null,
-    cutEndInput: null,
-    cutConfirm: null,
-    cutError: null,
+    cutSelectionMode: false,
+    cutStartPage: null,
+    cutEndPage: null,
     isExportingPageRange: false,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
@@ -342,7 +340,7 @@
           '<path d="m8.7 15.6 10.8-7.1"></path>',
           "</svg>",
         ].join("");
-        button.addEventListener("click", () => openCutModal());
+        button.addEventListener("click", () => handleCutButtonClick());
         if (downloadButton) {
           toolbar.insertBefore(button, downloadButton);
         } else {
@@ -463,47 +461,6 @@
           event.preventDefault();
           closeModal();
         }
-      });
-    }
-
-    if (!state.cutModal) {
-      const backdrop = document.createElement("div");
-      backdrop.className = "pdfjs-custom-modal-backdrop pdfjs-custom-cut-backdrop";
-      backdrop.innerHTML = [
-        '<div class="pdfjs-custom-modal pdfjs-custom-cut-modal" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-cut-title">',
-        '<h2 id="pdfjs-custom-cut-title" class="pdfjs-custom-sr-only">Recortar paginas del PDF</h2>',
-        '<div class="pdfjs-custom-cut-fields">',
-        '<label for="pdfjs-custom-cut-start">Inicio<input id="pdfjs-custom-cut-start" type="number" min="1" step="1" inputmode="numeric" /></label>',
-        '<label for="pdfjs-custom-cut-end">Final<input id="pdfjs-custom-cut-end" type="number" min="1" step="1" inputmode="numeric" /></label>',
-        "</div>",
-        '<p id="pdfjs-custom-cut-error" class="pdfjs-custom-cut-error" role="alert" hidden></p>',
-        '<div class="pdfjs-custom-modal-actions">',
-        '<button type="button" data-variant="primary" id="pdfjs-custom-cut-confirm">Confirmar</button>',
-        "</div>",
-        "</div>",
-      ].join("");
-      backdrop.addEventListener("click", (event) => {
-        if (event.target === backdrop) closeCutModal();
-      });
-      backdrop.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          closeCutModal();
-          return;
-        }
-        if (event.key === "Enter") {
-          event.preventDefault();
-          void submitPageRangeExport();
-        }
-      });
-      document.body.appendChild(backdrop);
-      state.cutModal = backdrop;
-      state.cutStartInput = backdrop.querySelector("#pdfjs-custom-cut-start");
-      state.cutEndInput = backdrop.querySelector("#pdfjs-custom-cut-end");
-      state.cutConfirm = backdrop.querySelector("#pdfjs-custom-cut-confirm");
-      state.cutError = backdrop.querySelector("#pdfjs-custom-cut-error");
-      state.cutConfirm.addEventListener("click", () => {
-        void submitPageRangeExport();
       });
     }
 
@@ -652,6 +609,13 @@
   function refreshCutButton() {
     if (!(state.cutButton instanceof HTMLButtonElement)) return;
     state.cutButton.disabled = !state.app?.pdfDocument || state.isExportingPageRange;
+    state.cutButton.classList.toggle("is-active", state.cutSelectionMode);
+    state.cutButton.setAttribute("aria-pressed", state.cutSelectionMode ? "true" : "false");
+    state.cutButton.title = state.cutSelectionMode
+      ? state.cutStartPage == null
+        ? "Selecciona la pagina inicial"
+        : "Confirmar y descargar"
+      : "Recortar paginas";
   }
 
   function setSyncButtonState(button) {
@@ -819,83 +783,119 @@
     return String(currentName).replace(/\.pdf$/i, "") || "fragmento";
   }
 
-  function getPresentationCurrentOriginalPage() {
-    if (!isPresentationMode()) return null;
-    const cards = Array.from(state.presentationContent?.querySelectorAll("[data-page-number]") || []);
-    if (!cards.length) return null;
-    const viewportCenter = window.innerHeight / 2;
-    let closestPage = null;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    for (const card of cards) {
-      const rect = card.getBoundingClientRect();
-      const distance = Math.abs(rect.top + rect.height / 2 - viewportCenter);
-      const pageNumber = Number.parseInt(card.dataset.pageNumber || "", 10);
-      if (Number.isInteger(pageNumber) && distance < closestDistance) {
-        closestPage = pageNumber;
-        closestDistance = distance;
-      }
-    }
-    return closestPage;
-  }
-
-  function getDefaultCutPageNumber() {
-    const presentationPage = getPresentationCurrentOriginalPage();
-    if (Number.isInteger(presentationPage)) return presentationPage;
-    const currentPage = Number(state.app?.pdfViewer?.currentPageNumber);
-    return Number.isInteger(currentPage) && currentPage > 0 ? currentPage : 1;
-  }
-
-  function setCutError(message) {
-    if (!state.cutError) return;
-    state.cutError.textContent = message || "";
-    state.cutError.hidden = !message;
-  }
-
-  function openCutModal() {
+  function startCutSelection() {
     if (!state.app?.pdfDocument) {
       showToast("Primero carga un PDF.", "info");
       return;
     }
     if (state.isExportingPageRange) return;
-    ensureUi();
-    const currentPage = getDefaultCutPageNumber();
-    const pageCount = state.app.pdfDocument.numPages || 1;
-    state.cutStartInput.value = String(Math.min(currentPage, pageCount));
-    state.cutEndInput.value = String(Math.min(currentPage, pageCount));
-    state.cutStartInput.max = String(pageCount);
-    state.cutEndInput.max = String(pageCount);
-    setCutError("");
-    state.cutModal.dataset.open = "true";
-    window.setTimeout(() => {
-      state.cutStartInput?.focus();
-      state.cutStartInput?.select();
-    }, 0);
+    state.cutSelectionMode = true;
+    state.cutStartPage = null;
+    state.cutEndPage = null;
+    refreshCutButton();
+    refreshCutPageHighlights();
+    showToast("Toca la pagina inicial del recorte.", "info", 2600);
   }
 
-  function closeCutModal() {
+  function cancelCutSelection(message = "") {
+    state.cutSelectionMode = false;
+    state.cutStartPage = null;
+    state.cutEndPage = null;
+    refreshCutButton();
+    refreshCutPageHighlights();
+    if (message) showToast(message, "info", 1800);
+  }
+
+  function refreshCutPageHighlights() {
+    const pages = document.querySelectorAll(
+      "#viewer .page[data-page-number], .pdfjs-custom-presentation-card[data-page-number]"
+    );
+    pages.forEach((page) => {
+      page.removeAttribute("data-cut-boundary");
+      if (!state.cutSelectionMode) return;
+      const pageNumber = Number.parseInt(page.getAttribute("data-page-number") || "", 10);
+      const isStart = pageNumber === state.cutStartPage;
+      const isEnd = pageNumber === state.cutEndPage;
+      if (isStart && isEnd) {
+        page.setAttribute("data-cut-boundary", "both");
+      } else if (isStart) {
+        page.setAttribute("data-cut-boundary", "start");
+      } else if (isEnd) {
+        page.setAttribute("data-cut-boundary", "end");
+      }
+    });
+  }
+
+  function getClickedCutPage(event) {
+    if (!(event.target instanceof Element)) return null;
+    const page = event.target.closest(
+      ".pdfjs-custom-presentation-card[data-page-number], #viewer .page[data-page-number]"
+    );
+    if (!(page instanceof HTMLElement)) return null;
+    const pageNumber = Number.parseInt(page.dataset.pageNumber || "", 10);
+    return Number.isInteger(pageNumber) ? pageNumber : null;
+  }
+
+  function handleCutPageClick(event) {
+    if (!state.cutSelectionMode || state.isExportingPageRange) return;
+    const pageNumber = getClickedCutPage(event);
+    if (!Number.isInteger(pageNumber)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    if (state.cutStartPage == null) {
+      state.cutStartPage = pageNumber;
+      state.cutEndPage = null;
+      refreshCutButton();
+      refreshCutPageHighlights();
+      showToast(
+        `Pagina inicial: ${pageNumber}. Toca la pagina final o vuelve a tocar esta pagina.`,
+        "info",
+        3200
+      );
+      return;
+    }
+
+    if (state.cutEndPage == null) {
+      const firstPage = state.cutStartPage;
+      state.cutStartPage = Math.min(firstPage, pageNumber);
+      state.cutEndPage = Math.max(firstPage, pageNumber);
+      refreshCutButton();
+      refreshCutPageHighlights();
+      if (firstPage === pageNumber) {
+        void submitPageRangeExport(state.cutStartPage, state.cutEndPage);
+      } else {
+        showToast(
+          `Rango ${state.cutStartPage}-${state.cutEndPage}. Pulsa la tijera para descargar.`,
+          "info",
+          3200
+        );
+      }
+      return;
+    }
+
+    state.cutStartPage = pageNumber;
+    state.cutEndPage = null;
+    refreshCutButton();
+    refreshCutPageHighlights();
+    showToast(`Nueva pagina inicial: ${pageNumber}.`, "info", 2200);
+  }
+
+  function handleCutButtonClick() {
     if (state.isExportingPageRange) return;
-    if (state.cutModal) state.cutModal.dataset.open = "false";
-    setCutError("");
-  }
-
-  function parsePageRange() {
-    const startValue = state.cutStartInput?.value.trim() || "";
-    const endValue = state.cutEndInput?.value.trim() || "";
-    const startPage = Number(startValue);
-    const endPage = Number(endValue);
-    const pageCount = Number(state.app?.pdfDocument?.numPages || 0);
-    if (
-      !startValue ||
-      !endValue ||
-      !Number.isInteger(startPage) ||
-      !Number.isInteger(endPage)
-    ) {
-      throw new Error("Inicio y Final deben ser numeros de pagina enteros.");
+    if (!state.cutSelectionMode) {
+      startCutSelection();
+      return;
     }
-    if (startPage < 1 || endPage < 1 || startPage > endPage || endPage > pageCount) {
-      throw new Error(`Usa un rango entre 1 y ${pageCount}, con Inicio menor o igual que Final.`);
+    if (state.cutStartPage == null) {
+      showToast("Toca primero una pagina del PDF.", "info");
+      return;
     }
-    return { startPage, endPage };
+    void submitPageRangeExport(
+      state.cutStartPage,
+      state.cutEndPage == null ? state.cutStartPage : state.cutEndPage
+    );
   }
 
   function canvasToJpegBytes(canvas, quality = 0.84) {
@@ -976,24 +976,27 @@
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 
-  async function submitPageRangeExport() {
+  async function submitPageRangeExport(startPage, endPage) {
     if (state.isExportingPageRange) return;
-    let range;
-    try {
-      range = parsePageRange();
-    } catch (error) {
-      setCutError(error instanceof Error ? error.message : "El rango no es valido.");
+    const pageCount = Number(state.app?.pdfDocument?.numPages || 0);
+    if (
+      !Number.isInteger(startPage) ||
+      !Number.isInteger(endPage) ||
+      startPage < 1 ||
+      endPage < startPage ||
+      endPage > pageCount
+    ) {
+      showToast("No se pudo determinar un rango de paginas valido.", "error");
       return;
     }
 
-    state.cutModal.dataset.open = "false";
     state.isExportingPageRange = true;
     refreshCutButton();
     showBusy("Preparando paginas...");
     try {
-      const pdfBytes = await buildRasterizedPageRangePdf(range.startPage, range.endPage);
+      const pdfBytes = await buildRasterizedPageRangePdf(startPage, endPage);
       const fileName = normalizePdfFileName(
-        `${getDefaultBaseName()}_paginas-${range.startPage}-${range.endPage}`
+        `${getDefaultBaseName()}_paginas-${startPage}-${endPage}`
       );
       downloadPdfBytes(pdfBytes, fileName);
       showToast(`PDF descargado: ${fileName}`, "success", 3200);
@@ -1006,7 +1009,7 @@
       );
     } finally {
       state.isExportingPageRange = false;
-      refreshCutButton();
+      cancelCutSelection();
       hideBusy();
     }
   }
@@ -1056,7 +1059,7 @@
     const content = state.presentationContent;
     const renderToken = ++state.presentationRenderToken;
     const outputScale = 2;
-    const presentationScale = Math.min(3, Math.max(0.5, Number(state.presentationScale) || 1.5));
+    const presentationScale = Number(state.presentationScale) || 1.5;
     const regions = [];
     for (const tagId of state.query.presentationTagIds) {
       const tag = state.tagCatalog.find((candidate) => candidate.id === tagId) || {
@@ -1130,6 +1133,7 @@
         card.appendChild(crop);
         content.appendChild(card);
       }
+      refreshCutPageHighlights();
     } catch (error) {
       console.error("Custom PDF.js presentation failed:", error);
       content.replaceChildren();
@@ -1376,9 +1380,9 @@
   function handleViewerEscape(event) {
     if (event?.defaultPrevented) return;
 
-    if (state.cutModal?.dataset.open === "true") {
+    if (state.cutSelectionMode) {
       event?.preventDefault?.();
-      closeCutModal();
+      cancelCutSelection("Recorte cancelado.");
       return;
     }
 
@@ -1632,6 +1636,7 @@
         );
       }
     });
+    refreshCutPageHighlights();
   }
 
   async function ensureSourcePdfDoc() {
@@ -3087,6 +3092,7 @@
     clearSelections();
     state.activeRegionTagId = null;
     state.activeRegionTagName = "";
+    cancelCutSelection();
     clearPageTextModels();
     closeReplacementModal();
     leaveSelectionMode();
@@ -3119,13 +3125,7 @@
     if (!isPresentationMode()) return;
     const requestedScale = Number(event?.scale);
     if (!Number.isFinite(requestedScale) || requestedScale <= 0) return;
-    const nextScale = Math.min(3, Math.max(0.5, requestedScale));
-    state.presentationScale = nextScale;
-    if (nextScale !== requestedScale && state.app?.pdfViewer) {
-      window.setTimeout(() => {
-        if (state.app?.pdfViewer) state.app.pdfViewer.currentScale = nextScale;
-      }, 0);
-    }
+    state.presentationScale = requestedScale;
     void renderPresentationRegions();
   }
 
@@ -3213,6 +3213,7 @@
       });
     });
     document.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("click", handleCutPageClick, true);
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("message", handleParentMessage);
