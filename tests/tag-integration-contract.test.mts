@@ -84,6 +84,8 @@ test("el visor exporta rangos inclusivos copiando paginas PDF sin rasterizarlas"
   assert.match(pdfJs, /handleCutPageClick/)
   assert.match(pdfJs, /handleCutButtonClick/)
   assert.match(pdfJs, /firstPage === pageNumber/)
+  assert.doesNotMatch(pdfJs, /Toca la pagina inicial del recorte/)
+  assert.doesNotMatch(pdfJs, /Pulsa la tijera para descargar/)
   assert.match(pdfJs, /buildCopiedPageRangePdf/)
   assert.match(pdfJs, /outputDocument\.copyPages/)
   assert.match(pdfJs, /state\.app\.pdfDocument\.saveDocument/)

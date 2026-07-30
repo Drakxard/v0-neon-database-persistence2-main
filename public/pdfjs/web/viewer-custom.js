@@ -803,16 +803,14 @@
     state.cutEndPage = null;
     refreshCutButton();
     refreshCutPageHighlights();
-    showToast("Toca la pagina inicial del recorte.", "info", 2600);
   }
 
-  function cancelCutSelection(message = "") {
+  function cancelCutSelection() {
     state.cutSelectionMode = false;
     state.cutStartPage = null;
     state.cutEndPage = null;
     refreshCutButton();
     refreshCutPageHighlights();
-    if (message) showToast(message, "info", 1800);
   }
 
   function refreshCutPageHighlights() {
@@ -858,11 +856,6 @@
       state.cutEndPage = null;
       refreshCutButton();
       refreshCutPageHighlights();
-      showToast(
-        `Pagina inicial: ${pageNumber}. Toca la pagina final o vuelve a tocar esta pagina.`,
-        "info",
-        3200
-      );
       return;
     }
 
@@ -874,12 +867,6 @@
       refreshCutPageHighlights();
       if (firstPage === pageNumber) {
         void submitPageRangeExport(state.cutStartPage, state.cutEndPage);
-      } else {
-        showToast(
-          `Rango ${state.cutStartPage}-${state.cutEndPage}. Pulsa la tijera para descargar.`,
-          "info",
-          3200
-        );
       }
       return;
     }
@@ -888,7 +875,6 @@
     state.cutEndPage = null;
     refreshCutButton();
     refreshCutPageHighlights();
-    showToast(`Nueva pagina inicial: ${pageNumber}.`, "info", 2200);
   }
 
   function handleCutButtonClick() {
@@ -898,7 +884,6 @@
       return;
     }
     if (state.cutStartPage == null) {
-      showToast("Toca primero una pagina del PDF.", "info");
       return;
     }
     void submitPageRangeExport(
@@ -968,7 +953,6 @@
         `${getDefaultBaseName()}_paginas-${startPage}-${endPage}`
       );
       downloadPdfBytes(pdfBytes, fileName);
-      showToast(`PDF descargado: ${fileName}`, "success", 3200);
     } catch (error) {
       console.error("Custom PDF.js rasterized range export failed:", error);
       showToast(
@@ -1407,7 +1391,7 @@
 
     if (state.cutSelectionMode) {
       event?.preventDefault?.();
-      cancelCutSelection("Recorte cancelado.");
+      cancelCutSelection();
       return;
     }
 
