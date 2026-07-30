@@ -33,6 +33,11 @@ See https://github.com/adobe-type-tools/cmap-resources
 
     <link rel="stylesheet" href="viewer.css" />
     <link rel="stylesheet" href="viewer-custom.css" />
+    <script>
+      if (String(new URLSearchParams(window.location.search).get("presentationTagIds") || "").trim()) {
+        document.documentElement.classList.add("pdfjs-custom-presentation-preparing");
+      }
+    </script>
 
   <script src="viewer.mjs" type="module"></script>
   </head>

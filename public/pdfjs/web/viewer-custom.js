@@ -1,4 +1,11 @@
 (function () {
+  const hasInitialPresentationQuery = String(
+    new URLSearchParams(window.location.search).get("presentationTagIds") || ""
+  ).trim().length > 0;
+  if (hasInitialPresentationQuery) {
+    document.documentElement.classList.add("pdfjs-custom-presentation-preparing");
+  }
+
   const state = {
     app: null,
     query: null,
@@ -62,12 +69,10 @@
     activeRegionTagId: null,
     activeRegionTagName: "",
     editingTagId: null,
-    presentationOverlay: null,
-    presentationContent: null,
     presentationRegionsByTag: new Map(),
     presentationPendingTagIds: new Set(),
-    presentationRenderToken: 0,
-    presentationScale: 1.5,
+    presentationPhase: "idle",
+    presentationFileName: "",
     presentationScaleInitialized: false,
     cutButton: null,
     cutSelectionMode: false,
@@ -145,6 +150,9 @@
   }
 
   function canSyncCurrentDocument() {
+    if (isPresentationMode()) {
+      return false;
+    }
     if (isLocalWorkspaceMode()) {
       return Boolean(state.query?.workspaceFileId);
     }
@@ -152,6 +160,9 @@
   }
 
   function canReplaceMaterial() {
+    if (isPresentationMode()) {
+      return false;
+    }
     if (isLocalWorkspaceMode()) {
       return false;
     }
@@ -396,21 +407,6 @@
       }
     }
 
-    if (isPresentationMode() && !state.presentationOverlay) {
-      const overlay = document.createElement("section");
-      overlay.className = "pdfjs-custom-presentation";
-      overlay.setAttribute("aria-label", "Presentacion de recortes etiquetados");
-
-      const content = document.createElement("div");
-      content.className = "pdfjs-custom-presentation-content";
-      content.textContent = "Cargando recortes...";
-      overlay.appendChild(content);
-      document.body.appendChild(overlay);
-      document.body.classList.add("pdfjs-custom-presentation-mode");
-      state.presentationOverlay = overlay;
-      state.presentationContent = content;
-    }
-
     if (!state.toastStack) {
       state.toastStack = document.createElement("div");
       state.toastStack.className = "pdfjs-custom-toast-stack";
@@ -480,6 +476,12 @@
       document.body.appendChild(overlay);
       state.loadingOverlay = overlay;
       state.loadingText = overlay.querySelector("#pdfjs-custom-loading-text");
+    }
+
+    if (isPresentationMode() && state.presentationPhase !== "ready") {
+      document.documentElement.classList.add("pdfjs-custom-presentation-preparing");
+      state.loadingText.textContent = "Preparando presentacion...";
+      state.loadingOverlay.dataset.open = "true";
     }
 
     if (!state.draftOverlay) {
@@ -608,7 +610,10 @@
 
   function refreshCutButton() {
     if (!(state.cutButton instanceof HTMLButtonElement)) return;
-    state.cutButton.disabled = !state.app?.pdfDocument || state.isExportingPageRange;
+    state.cutButton.disabled =
+      !state.app?.pdfDocument ||
+      state.isExportingPageRange ||
+      (isPresentationMode() && state.presentationPhase !== "ready");
     state.cutButton.classList.toggle("is-active", state.cutSelectionMode);
     state.cutButton.setAttribute("aria-pressed", state.cutSelectionMode ? "true" : "false");
     state.cutButton.title = state.cutSelectionMode
@@ -779,7 +784,11 @@
   }
 
   function getDefaultBaseName() {
-    const currentName = state.query.fileName || state.app?._docFilename || "fragmento";
+    const currentName =
+      (isPresentationMode() && state.presentationFileName) ||
+      state.query.fileName ||
+      state.app?._docFilename ||
+      "fragmento";
     return String(currentName).replace(/\.pdf$/i, "") || "fragmento";
   }
 
@@ -808,7 +817,7 @@
 
   function refreshCutPageHighlights() {
     const pages = document.querySelectorAll(
-      "#viewer .page[data-page-number], .pdfjs-custom-presentation-card[data-page-number]"
+      "#viewer .page[data-page-number]"
     );
     pages.forEach((page) => {
       page.removeAttribute("data-cut-boundary");
@@ -829,7 +838,7 @@
   function getClickedCutPage(event) {
     if (!(event.target instanceof Element)) return null;
     const page = event.target.closest(
-      ".pdfjs-custom-presentation-card[data-page-number], #viewer .page[data-page-number]"
+      "#viewer .page[data-page-number]"
     );
     if (!(page instanceof HTMLElement)) return null;
     const pageNumber = Number.parseInt(page.dataset.pageNumber || "", 10);
@@ -898,23 +907,7 @@
     );
   }
 
-  function canvasToJpegBytes(canvas, quality = 0.84) {
-    return new Promise((resolve, reject) => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          reject(new Error("No se pudo convertir una pagina a imagen."));
-          return;
-        }
-        try {
-          resolve(new Uint8Array(await blob.arrayBuffer()));
-        } catch (error) {
-          reject(error);
-        }
-      }, "image/jpeg", quality);
-    });
-  }
-
-  async function buildRasterizedPageRangePdf(startPage, endPage) {
+  async function buildCopiedPageRangePdf(startPage, endPage) {
     if (!window.PDFLib?.PDFDocument) {
       throw new Error("pdf-lib no esta disponible en este visor.");
     }
@@ -922,45 +915,21 @@
       throw new Error("No hay un PDF cargado.");
     }
 
-    const outputDoc = await window.PDFLib.PDFDocument.create();
-    const totalPages = endPage - startPage + 1;
+    const currentBytes =
+      typeof state.app.pdfDocument.saveDocument === "function"
+        ? await state.app.pdfDocument.saveDocument()
+        : await state.app.pdfDocument.getData();
+    const sourceDocument = await window.PDFLib.PDFDocument.load(currentBytes);
+    const outputDocument = await window.PDFLib.PDFDocument.create();
+    const pageIndices = [];
     for (let pageNumber = startPage; pageNumber <= endPage; pageNumber += 1) {
-      updateBusy(`Procesando pagina ${pageNumber - startPage + 1} de ${totalPages}...`);
-      const sourcePage = await state.app.pdfDocument.getPage(pageNumber);
-      const pageViewport = sourcePage.getViewport({ scale: 1 });
-      const renderViewport = sourcePage.getViewport({ scale: 2 });
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.ceil(renderViewport.width));
-      canvas.height = Math.max(1, Math.ceil(renderViewport.height));
-      const context = canvas.getContext("2d", { alpha: false });
-      if (!context) {
-        throw new Error(`No se pudo preparar la pagina ${pageNumber}.`);
-      }
-
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      try {
-        await sourcePage.render({
-          canvas,
-          canvasContext: context,
-          viewport: renderViewport,
-          background: "#ffffff",
-        }).promise;
-        const jpegBytes = await canvasToJpegBytes(canvas);
-        const image = await outputDoc.embedJpg(jpegBytes);
-        const outputPage = outputDoc.addPage([pageViewport.width, pageViewport.height]);
-        outputPage.drawImage(image, {
-          x: 0,
-          y: 0,
-          width: pageViewport.width,
-          height: pageViewport.height,
-        });
-      } finally {
-        canvas.width = 0;
-        canvas.height = 0;
-      }
+      pageIndices.push(pageNumber - 1);
     }
-    return outputDoc.save({ useObjectStreams: true });
+    const copiedPages = await outputDocument.copyPages(sourceDocument, pageIndices);
+    for (const page of copiedPages) {
+      outputDocument.addPage(page);
+    }
+    return outputDocument.save({ useObjectStreams: true });
   }
 
   function downloadPdfBytes(pdfBytes, fileName) {
@@ -994,7 +963,7 @@
     refreshCutButton();
     showBusy("Preparando paginas...");
     try {
-      const pdfBytes = await buildRasterizedPageRangePdf(startPage, endPage);
+      const pdfBytes = await buildCopiedPageRangePdf(startPage, endPage);
       const fileName = normalizePdfFileName(
         `${getDefaultBaseName()}_paginas-${startPage}-${endPage}`
       );
@@ -1015,6 +984,9 @@
   }
 
   function canUseFragmentUpload() {
+    if (isPresentationMode()) {
+      return false;
+    }
     const query = state.query;
     return Boolean(
       query.subjectId &&
@@ -1042,33 +1014,27 @@
   }
 
   function requestPresentationRegions() {
-    if (!isPresentationMode() || !state.app?.pdfDocument) return;
+    if (
+      !isPresentationMode() ||
+      !state.app?.pdfDocument ||
+      state.presentationPhase !== "source"
+    ) {
+      return;
+    }
+    state.presentationPhase = "loading-regions";
     state.presentationRegionsByTag.clear();
     state.presentationPendingTagIds = new Set(state.query.presentationTagIds);
-    if (state.presentationContent) {
-      state.presentationContent.textContent = "Cargando recortes...";
-    }
-    postToParent({ type: "viewerRequestMaterialTags" });
+    showLoadingOverlay("Cargando regiones...");
     for (const tagId of state.query.presentationTagIds) {
       postToParent({ type: "viewerRequestMaterialTagRegions", tagId });
     }
   }
 
-  async function renderPresentationRegions() {
-    if (!isPresentationMode() || state.presentationPendingTagIds.size > 0 || !state.presentationContent) return;
-    const content = state.presentationContent;
-    const renderToken = ++state.presentationRenderToken;
-    const outputScale = 2;
-    const presentationScale = Number(state.presentationScale) || 1.5;
+  function collectPresentationRegions() {
     const regions = [];
     for (const tagId of state.query.presentationTagIds) {
-      const tag = state.tagCatalog.find((candidate) => candidate.id === tagId) || {
-        id: tagId,
-        name: `tag ${tagId}`,
-        color: "#0f766e",
-      };
       for (const region of state.presentationRegionsByTag.get(tagId) || []) {
-        regions.push({ ...region, tag });
+        regions.push({ ...region, tagId });
       }
     }
     regions.sort((left, right) =>
@@ -1077,70 +1043,129 @@
       Number(left.x1) - Number(right.x1) ||
       Number(left.orderIndex || 0) - Number(right.orderIndex || 0)
     );
+    return regions;
+  }
 
-    content.replaceChildren();
+  async function appendCroppedPdfPage(outputDocument, sourcePage, selection) {
+    const cropBox = sourcePage.getCropBox();
+    const cropLeft = cropBox.x || 0;
+    const cropBottom = cropBox.y || 0;
+    const cropWidth = cropBox.width || sourcePage.getWidth();
+    const cropHeight = cropBox.height || sourcePage.getHeight();
+    const normalizedBounds = getNormalizedBoundsForSelection(selection);
+    const left = cropLeft + normalizedBounds.left * cropWidth;
+    const right = cropLeft + normalizedBounds.right * cropWidth;
+    const top = cropBottom + cropHeight - normalizedBounds.top * cropHeight;
+    const bottom = cropBottom + cropHeight - normalizedBounds.bottom * cropHeight;
+    const width = Math.max(1, right - left);
+    const height = Math.max(1, top - bottom);
+    const pageRotation = typeof selection.pageRotation === "number" ? selection.pageRotation : 0;
+    const embeddedPage = await outputDocument.embedPage(sourcePage, {
+      left,
+      right,
+      bottom,
+      top,
+    });
+    const rotated = pageRotation === 90 || pageRotation === 270;
+    const outputPage = outputDocument.addPage(rotated ? [height, width] : [width, height]);
+
+    if (pageRotation === 90) {
+      outputPage.drawPage(embeddedPage, {
+        x: 0,
+        y: width,
+        width,
+        height,
+        rotate: window.PDFLib.degrees(270),
+      });
+    } else if (pageRotation === 180) {
+      outputPage.drawPage(embeddedPage, {
+        x: width,
+        y: height,
+        width,
+        height,
+        rotate: window.PDFLib.degrees(180),
+      });
+    } else if (pageRotation === 270) {
+      outputPage.drawPage(embeddedPage, {
+        x: height,
+        y: 0,
+        width,
+        height,
+        rotate: window.PDFLib.degrees(90),
+      });
+    } else {
+      outputPage.drawPage(embeddedPage, {
+        x: 0,
+        y: 0,
+        width,
+        height,
+      });
+    }
+  }
+
+  async function buildPresentationPdf(regions) {
     if (!regions.length) {
-      const empty = document.createElement("p");
-      empty.className = "pdfjs-custom-presentation-empty";
-      empty.textContent = "No hay regiones guardadas para las etiquetas activas.";
-      content.appendChild(empty);
+      throw new Error("No hay regiones guardadas para las etiquetas activas.");
+    }
+    if (!window.PDFLib?.PDFDocument) {
+      throw new Error("pdf-lib no esta disponible en este visor.");
+    }
+    const sourceDocument = await ensureSourcePdfDoc();
+    const outputDocument = await window.PDFLib.PDFDocument.create();
+    for (let index = 0; index < regions.length; index += 1) {
+      const region = regions[index];
+      if (state.presentationPhase !== "building") {
+        throw new Error("La generacion de la presentacion fue cancelada.");
+      }
+      if (state.loadingText) {
+        state.loadingText.textContent = `Preparando region ${index + 1} de ${regions.length}...`;
+      }
+      const pageNumber = Number(region.pageNumber);
+      const sourcePage = sourceDocument.getPage(pageNumber - 1);
+      if (!sourcePage) {
+        throw new Error(`No se pudo leer la pagina ${pageNumber}.`);
+      }
+      await appendCroppedPdfPage(outputDocument, sourcePage, {
+        pageNum: pageNumber,
+        pageRotation: Number(region.pageRotation || 0),
+        xp1: Number(region.x1),
+        yp1: Number(region.y1),
+        xp2: Number(region.x2),
+        yp2: Number(region.y2),
+      });
+    }
+    return outputDocument.save({ useObjectStreams: true });
+  }
+
+  async function openPresentationDocument() {
+    if (
+      !isPresentationMode() ||
+      state.presentationPendingTagIds.size > 0 ||
+      state.presentationPhase !== "loading-regions"
+    ) {
       return;
     }
 
-    const pageCache = new Map();
+    state.presentationPhase = "building";
+    showLoadingOverlay("Preparando presentacion...");
     try {
-      for (const region of regions) {
-        if (renderToken !== state.presentationRenderToken) return;
-        const pageNumber = Number(region.pageNumber);
-        const rotation = Number(region.pageRotation || 0);
-        const cacheKey = `${pageNumber}:${rotation}:${presentationScale}`;
-        let pageCanvas = pageCache.get(cacheKey);
-        if (!pageCanvas) {
-          const page = await state.app.pdfDocument.getPage(pageNumber);
-          const viewport = page.getViewport({ scale: presentationScale * outputScale, rotation });
-          pageCanvas = document.createElement("canvas");
-          pageCanvas.width = Math.ceil(viewport.width);
-          pageCanvas.height = Math.ceil(viewport.height);
-          const context = pageCanvas.getContext("2d");
-          if (!context) throw new Error("El navegador no pudo preparar el recorte.");
-          await page.render({ canvas: pageCanvas, canvasContext: context, viewport }).promise;
-          if (renderToken !== state.presentationRenderToken) return;
-          pageCache.set(cacheKey, pageCanvas);
-        }
-
-        const left = clamp01(Math.min(Number(region.x1), Number(region.x2)));
-        const top = clamp01(Math.min(Number(region.y1), Number(region.y2)));
-        const right = clamp01(Math.max(Number(region.x1), Number(region.x2)));
-        const bottom = clamp01(Math.max(Number(region.y1), Number(region.y2)));
-        const sourceX = Math.floor(left * pageCanvas.width);
-        const sourceY = Math.floor(top * pageCanvas.height);
-        const sourceWidth = Math.max(1, Math.ceil((right - left) * pageCanvas.width));
-        const sourceHeight = Math.max(1, Math.ceil((bottom - top) * pageCanvas.height));
-        const crop = document.createElement("canvas");
-        crop.width = sourceWidth;
-        crop.height = sourceHeight;
-        crop.style.width = `${sourceWidth / outputScale}px`;
-        crop.style.height = `${sourceHeight / outputScale}px`;
-        const cropContext = crop.getContext("2d");
-        if (!cropContext) continue;
-        cropContext.drawImage(pageCanvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
-
-        const card = document.createElement("article");
-        card.className = "pdfjs-custom-presentation-card";
-        card.dataset.pageNumber = String(pageNumber);
-        card.setAttribute("aria-label", `Region de #${region.tag.name}, pagina ${pageNumber}`);
-        card.title = `#${region.tag.name} - pagina ${pageNumber}`;
-        card.appendChild(crop);
-        content.appendChild(card);
-      }
-      refreshCutPageHighlights();
+      const regions = collectPresentationRegions();
+      const pdfBytes = await buildPresentationPdf(regions);
+      const fileName = normalizePdfFileName(`${getDefaultBaseName()}_presentacion`);
+      state.presentationFileName = fileName;
+      state.presentationScaleInitialized = false;
+      state.presentationPhase = "opening";
+      await state.app.open({
+        data: pdfBytes instanceof Uint8Array ? pdfBytes : new Uint8Array(pdfBytes),
+        filename: fileName,
+      });
     } catch (error) {
-      console.error("Custom PDF.js presentation failed:", error);
-      content.replaceChildren();
-      const failure = document.createElement("p");
-      failure.className = "pdfjs-custom-presentation-empty";
-      failure.textContent = error instanceof Error ? error.message : "No se pudieron preparar los recortes.";
-      content.appendChild(failure);
+      state.presentationPhase = "error";
+      console.error("Custom PDF.js presentation generation failed:", error);
+      document.documentElement.classList.add("pdfjs-custom-presentation-preparing");
+      showLoadingOverlay(
+        error instanceof Error ? error.message : "No se pudo preparar la presentacion."
+      );
     }
   }
 
@@ -2873,7 +2898,9 @@
             event.data.ok && Array.isArray(event.data.regions) ? event.data.regions : []
           );
           state.presentationPendingTagIds.delete(presentationTagId);
-          void renderPresentationRegions();
+          if (state.presentationPendingTagIds.size === 0) {
+            void openPresentationDocument();
+          }
         }
         return;
       }
@@ -2949,9 +2976,6 @@
         ? event.data.regionCounts
         : {};
       renderMaterialTags();
-      if (isPresentationMode() && state.presentationPendingTagIds.size === 0) {
-        void renderPresentationRegions();
-      }
       return;
     }
 
@@ -3087,6 +3111,12 @@
   }
 
   function onDocumentLoaded() {
+    const presentationWasOpening =
+      isPresentationMode() && state.presentationPhase === "opening";
+    if (presentationWasOpening) {
+      state.presentationPhase = "ready";
+      document.documentElement.classList.remove("pdfjs-custom-presentation-preparing");
+    }
     state.sourcePdfBytes = null;
     state.sourcePdfLibDoc = null;
     clearSelections();
@@ -3100,7 +3130,9 @@
     applyEnhancedPdfReadability();
     refreshSyncButtons();
     refreshCutButton();
-    hideLoadingOverlay();
+    if (!isPresentationMode() || presentationWasOpening) {
+      hideLoadingOverlay();
+    }
     postToParent({
       type: "viewerDocumentLoaded",
       materialId: state.query?.materialId,
@@ -3108,25 +3140,22 @@
       fingerprint: state.app?.pdfDocument?.fingerprints?.[0] || "",
       numPages: state.app?.pdfDocument?.numPages || 0,
     });
-    if (isPresentationMode()) {
+    if (isPresentationMode() && state.presentationPhase === "source") {
       requestPresentationRegions();
     }
   }
 
   function initializePresentationScale() {
-    if (!isPresentationMode() || state.presentationScaleInitialized || !state.app?.pdfViewer) return;
+    if (
+      !isPresentationMode() ||
+      !["opening", "ready"].includes(state.presentationPhase) ||
+      state.presentationScaleInitialized ||
+      !state.app?.pdfViewer
+    ) {
+      return;
+    }
     state.presentationScaleInitialized = true;
-    state.presentationScale = 1.5;
     state.app.pdfViewer.currentScaleValue = "1.5";
-  }
-
-  function handleViewerScaleChanging(event) {
-    refreshLayers();
-    if (!isPresentationMode()) return;
-    const requestedScale = Number(event?.scale);
-    if (!Number.isFinite(requestedScale) || requestedScale <= 0) return;
-    state.presentationScale = requestedScale;
-    void renderPresentationRegions();
   }
 
   function handleKeyDown(event) {
@@ -3148,6 +3177,10 @@
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && key === "i") {
       event.preventDefault();
+      if (isPresentationMode()) {
+        showToast("La presentacion solo admite herramientas nativas y descarga.", "info");
+        return;
+      }
       if (state.activeRegionTagId != null) {
         showToast("Guarda o cancela las regiones del tag activo.", "info");
         return;
@@ -3158,6 +3191,10 @@
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && key === "m") {
       event.preventDefault();
+      if (isPresentationMode()) {
+        showToast("La presentacion no se sube sobre el material original.", "info");
+        return;
+      }
       if (state.activeRegionTagId != null) {
         showToast("Guarda o cancela las regiones del tag activo.", "info");
         return;
@@ -3185,6 +3222,7 @@
     await app.initializedPromise;
     state.app = app;
     state.query = parseQuery();
+    state.presentationPhase = isPresentationMode() ? "source" : "idle";
     ensureUi();
     bindSyncButtons();
     refreshLayers();
@@ -3198,14 +3236,20 @@
     });
     eventBus.on("pagechanging", refreshLayers);
     eventBus.on("pagesinit", initializePresentationScale);
-    eventBus.on("scalechanging", handleViewerScaleChanging);
+    eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
     eventBus.on("documentloaded", onDocumentLoaded);
     eventBus.on("documenterror", () => {
       updateDraftOverlay();
       refreshSyncButtons();
       refreshCutButton();
-      hideLoadingOverlay();
+      if (isPresentationMode()) {
+        state.presentationPhase = "error";
+        document.documentElement.classList.add("pdfjs-custom-presentation-preparing");
+        showLoadingOverlay("No se pudo cargar la presentacion.");
+      } else {
+        hideLoadingOverlay();
+      }
       postToParent({
         type: "viewerDocumentError",
         materialId: state.query?.materialId,

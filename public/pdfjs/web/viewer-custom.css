@@ -232,15 +232,13 @@
   background-color: color-mix(in srgb, #f97316 18%, transparent);
 }
 
-#viewer .page[data-cut-boundary],
-.pdfjs-custom-presentation-card[data-cut-boundary] {
+#viewer .page[data-cut-boundary] {
   position: relative;
   outline: 4px solid transparent;
   outline-offset: 3px;
 }
 
-#viewer .page[data-cut-boundary]::after,
-.pdfjs-custom-presentation-card[data-cut-boundary]::after {
+#viewer .page[data-cut-boundary]::after {
   position: absolute;
   inset: 0;
   z-index: 45;
@@ -249,33 +247,27 @@
   pointer-events: none;
 }
 
-#viewer .page[data-cut-boundary="start"],
-.pdfjs-custom-presentation-card[data-cut-boundary="start"] {
+#viewer .page[data-cut-boundary="start"] {
   outline-color: #f97316;
 }
 
-#viewer .page[data-cut-boundary="start"]::after,
-.pdfjs-custom-presentation-card[data-cut-boundary="start"]::after {
+#viewer .page[data-cut-boundary="start"]::after {
   background: rgba(249, 115, 22, 0.12);
 }
 
-#viewer .page[data-cut-boundary="end"],
-.pdfjs-custom-presentation-card[data-cut-boundary="end"] {
+#viewer .page[data-cut-boundary="end"] {
   outline-color: #0d9488;
 }
 
-#viewer .page[data-cut-boundary="end"]::after,
-.pdfjs-custom-presentation-card[data-cut-boundary="end"]::after {
+#viewer .page[data-cut-boundary="end"]::after {
   background: rgba(13, 148, 136, 0.12);
 }
 
-#viewer .page[data-cut-boundary="both"],
-.pdfjs-custom-presentation-card[data-cut-boundary="both"] {
+#viewer .page[data-cut-boundary="both"] {
   outline-color: #7c3aed;
 }
 
-#viewer .page[data-cut-boundary="both"]::after,
-.pdfjs-custom-presentation-card[data-cut-boundary="both"]::after {
+#viewer .page[data-cut-boundary="both"]::after {
   background: rgba(124, 58, 237, 0.12);
 }
 
@@ -407,45 +399,8 @@
   background: color-mix(in srgb, var(--tag-color) 16%, transparent);
 }
 
-.pdfjs-custom-presentation {
-  position: fixed;
-  inset: 32px 0 0;
-  z-index: 900;
-  overflow: auto;
-  padding: 24px;
-  background: #e5e7eb;
-  color: #374151;
-  font-family: system-ui, sans-serif;
-}
-
-.pdfjs-custom-presentation-content {
-  display: flex;
-  min-width: max-content;
-  min-height: 100%;
-  flex-direction: column;
-  align-items: center;
-  gap: 18px;
-}
-
-.pdfjs-custom-presentation-card {
-  flex: none;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.22);
-}
-
-.pdfjs-custom-presentation-card canvas {
-  display: block;
-}
-
-.pdfjs-custom-presentation-empty {
-  margin: 18vh auto 0;
-  padding: 16px 18px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  background: #fff;
+html.pdfjs-custom-presentation-preparing #viewerContainer {
+  visibility: hidden;
 }
 
 .pdfjs-custom-loading-overlay {
