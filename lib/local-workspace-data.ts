@@ -24,6 +24,18 @@ import {
   wouldCreateTagCycle,
 } from "@/lib/tag-utils"
 import { loadWorkspaceHandle, queryWorkspacePermission } from "@/lib/local-workspace-client"
+import {
+  RECOVERED_WORKSPACE_TAB_ID,
+  allocateLocalSubjectStorageKey,
+  createEmptyLocalSubjectCatalog,
+  findCatalogSubjectByAnyId,
+  findCatalogSubjectByName,
+  mergeCatalogSubjects,
+  normalizeLocalSubjectCatalog,
+  normalizeLocalSubjectName,
+  type LocalSubjectCatalog,
+  type LocalSubjectCatalogEntry,
+} from "@/lib/local-subject-catalog"
 import { SUBJECTS } from "@/lib/subjects"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
@@ -97,6 +109,7 @@ export type LocalWorkspaceTabState = {
 
 export type LocalCustomSubjectState = {
   id: string
+  storageKey?: string
   name: string
   color: string
   tabId: string
@@ -126,9 +139,14 @@ const PRACTICE_DIR = "practica"
 const AUDIO_DIR = "audio"
 const ROOT_SUBDIRECTORIES = [CRONOGRAMA_DIR, THEORY_DIR, PRACTICE_DIR, AUDIO_DIR, MANIFESTS_DIR] as const
 const WORKSPACE_STATE_MANIFEST = [MANIFESTS_DIR, "workspace-state.json"]
+const WORKSPACE_STATE_BACKUP_MANIFEST = [MANIFESTS_DIR, "workspace-state.backup.json"]
+const WORKSPACE_STATE_PRE_RECONCILIATION_MANIFEST = [MANIFESTS_DIR, "workspace-state.pre-reconciliation.json"]
+const SUBJECT_CATALOG_MANIFEST = [MANIFESTS_DIR, "subject-catalog.json"]
 const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
 const MATERIAL_CONTAINERS_MANIFEST = [MANIFESTS_DIR, "material-containers.json"]
+const MATERIAL_CONTAINERS_BACKUP_MANIFEST = [MANIFESTS_DIR, "material-containers.backup.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
+const CURRENT_ALGEBRA_LEGACY_SOURCE_ID = "custom-1783994292371-hofqi6"
 
 function sanitizePathSegment(value: string) {
   return value
@@ -288,12 +306,29 @@ async function readJsonFile<T>(pathSegments: string[], fallback: T): Promise<T> 
   }
 }
 
+const jsonWriteQueues = new Map<string, Promise<unknown>>()
+
 async function writeJsonFile(pathSegments: string[], value: unknown) {
-  const rootHandle = await ensureWorkspaceRootHandle()
-  const fileHandle = await getFileHandleBySegments(rootHandle, pathSegments, true)
-  const writable = await fileHandle.createWritable()
-  await writable.write(JSON.stringify(value, null, 2))
-  await writable.close()
+  const queueKey = pathSegments.join("/")
+  const previous = jsonWriteQueues.get(queueKey) ?? Promise.resolve()
+  const write = previous.catch(() => undefined).then(async () => {
+    const rootHandle = await ensureWorkspaceRootHandle()
+    const fileHandle = await getFileHandleBySegments(rootHandle, pathSegments, true)
+    const writable = await fileHandle.createWritable()
+    try {
+      await writable.write(JSON.stringify(value, null, 2))
+      await writable.close()
+    } catch (error) {
+      await writable.abort().catch(() => {})
+      throw error
+    }
+  })
+  jsonWriteQueues.set(queueKey, write)
+  try {
+    await write
+  } finally {
+    if (jsonWriteQueues.get(queueKey) === write) jsonWriteQueues.delete(queueKey)
+  }
 }
 
 async function deleteJsonFile(pathSegments: string[]) {
@@ -447,6 +482,7 @@ function normalizeLocalCustomSubject(input: Partial<LocalCustomSubjectState> | n
 
   return {
     id: input.id,
+    storageKey: typeof input.storageKey === "string" && input.storageKey.trim() ? input.storageKey.trim() : input.id,
     name: input.name,
     color: input.color,
     tabId: input.tabId,
@@ -496,39 +532,371 @@ function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState
   }
 }
 
-export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
-  const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
-  if (!exists) {
-    logWorkspaceDataSource({
-      operation: "readLocalWorkspaceTabsState",
-      path: WORKSPACE_STATE_MANIFEST.join("/"),
-      exists: false,
-      count: 0,
-    })
-    return {
-      state: createEmptyWorkspaceTabsState(),
-      exists: false,
+async function workspaceFileExists(workspaceId: string) {
+  if (!isWorkspaceFileId(workspaceId)) return false
+  const rootHandle = await ensureWorkspaceRootHandle()
+  return Boolean(await getFileHandleBySegments(rootHandle, workspaceIdToSegments(workspaceId), false).catch(() => null))
+}
+
+async function removeDirectoryBySegments(pathSegments: string[]) {
+  if (pathSegments.length === 0) return
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const parent = await getDirectoryHandleBySegments(rootHandle, pathSegments.slice(0, -1), false).catch(() => null)
+  if (!parent) return
+  await parent.removeEntry(pathSegments[pathSegments.length - 1], { recursive: true }).catch(() => {})
+}
+
+async function countFilesBySegments(pathSegments: string[]) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const directory = await getDirectoryHandleBySegments(rootHandle, pathSegments, false).catch(() => null)
+  if (!directory) return 0
+  let count = 0
+  for await (const [, handle] of directory.entries()) {
+    if (handle.kind === "file") count += 1
+    else count += await countFilesInDirectory(handle as FileSystemDirectoryHandle)
+  }
+  return count
+}
+
+async function directoryExistsBySegments(pathSegments: string[]) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  return Boolean(await getDirectoryHandleBySegments(rootHandle, pathSegments, false).catch(() => null))
+}
+
+async function countFilesInDirectory(directory: FileSystemDirectoryHandle): Promise<number> {
+  let count = 0
+  for await (const [, handle] of directory.entries()) {
+    if (handle.kind === "file") count += 1
+    else count += await countFilesInDirectory(handle as FileSystemDirectoryHandle)
+  }
+  return count
+}
+
+async function listLocalDirectoryNames(pathSegments: string[]) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const directory = await getDirectoryHandleBySegments(rootHandle, pathSegments, false).catch(() => null)
+  if (!directory) return [] as string[]
+  const names: string[] = []
+  for await (const [name, handle] of directory.entries()) {
+    if (handle.kind === "directory") names.push(name)
+  }
+  return names
+}
+
+async function readLocalSubjectCatalog() {
+  const value = await readJsonFile<Partial<LocalSubjectCatalog> | null>(SUBJECT_CATALOG_MANIFEST, null)
+  return value ? normalizeLocalSubjectCatalog(value) : createEmptyLocalSubjectCatalog()
+}
+
+async function writeLocalSubjectCatalog(catalog: LocalSubjectCatalog) {
+  await writeJsonFile(SUBJECT_CATALOG_MANIFEST, normalizeLocalSubjectCatalog(catalog))
+}
+
+async function discoverLocalSubjectSourceIds(state: LocalWorkspaceTabsState, catalog: LocalSubjectCatalog) {
+  const [materialIds, entryIds, synthesisIds, theoryIds, practiceIds, audioIds, containerManifest] = await Promise.all([
+    listLocalDirectoryNames([MANIFESTS_DIR, MATERIALS_DIR]),
+    listLocalDirectoryNames([MANIFESTS_DIR, ENTRIES_DIR]),
+    listLocalDirectoryNames([MANIFESTS_DIR, "synthesis"]),
+    listLocalDirectoryNames([THEORY_DIR]),
+    listLocalDirectoryNames([PRACTICE_DIR]),
+    listLocalDirectoryNames([AUDIO_DIR]),
+    readJsonFile<Record<string, SubjectMaterialContainer[]>>(MATERIAL_CONTAINERS_MANIFEST, {}),
+  ])
+  return Array.from(new Set([
+    ...Object.keys(state.customSubjects),
+    ...Object.values(catalog.subjects).flatMap((subject) => subject.sourceIds),
+    ...Object.keys(containerManifest),
+    ...materialIds,
+    ...entryIds,
+    ...synthesisIds,
+    ...theoryIds,
+    ...practiceIds,
+    ...audioIds,
+  ].filter(Boolean)))
+}
+
+function stableRecoveredMaterialId(workspaceId: string) {
+  let left = 2166136261
+  let right = 5381
+  for (let index = 0; index < workspaceId.length; index += 1) {
+    const code = workspaceId.charCodeAt(index)
+    left = Math.imul(left ^ code, 16777619)
+    right = Math.imul(right * 33, 1) ^ code
+  }
+  return 1_000_000_000_000 + (left >>> 0) * 1_000_000 + ((right >>> 0) % 1_000_000)
+}
+
+async function reconstructLocalMaterialManifests() {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  for (const [baseDir, materialType] of [[THEORY_DIR, "theory"], [PRACTICE_DIR, "practice"]] as const) {
+    const baseHandle = await getDirectoryHandleBySegments(rootHandle, [baseDir], false).catch(() => null)
+    if (!baseHandle) continue
+    for await (const [subjectId, subjectHandle] of baseHandle.entries()) {
+      if (subjectHandle.kind !== "directory") continue
+      for await (const [weekName, weekHandle] of (subjectHandle as FileSystemDirectoryHandle).entries()) {
+        if (weekHandle.kind !== "directory") continue
+        const weekMatch = /^week-(\d+)$/i.exec(weekName)
+        if (!weekMatch) continue
+        const weekNumber = Number.parseInt(weekMatch[1], 10)
+        const manifest = await readMaterialManifest(subjectId, weekNumber)
+        const additions: SubjectDayMaterial[] = []
+        for await (const [sessionDate, dateHandle] of (weekHandle as FileSystemDirectoryHandle).entries()) {
+          if (dateHandle.kind !== "directory" || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) continue
+          for await (const [storedFileName, fileHandle] of (dateHandle as FileSystemDirectoryHandle).entries()) {
+            if (fileHandle.kind !== "file" || !storedFileName.toLowerCase().endsWith(".pdf")) continue
+            const workspaceId = joinWorkspaceId(baseDir, subjectId, weekName, sessionDate, storedFileName)
+            if (manifest.materials.some((material) => material.drive_file_id === workspaceId)) continue
+            const file = await (fileHandle as FileSystemFileHandle).getFile()
+            const timestamp = file.lastModified ? new Date(file.lastModified).toISOString() : nowIso()
+            const fileName = storedFileName.replace(/^\d{10,17}-/, "") || storedFileName
+            const siblings = [...manifest.materials, ...additions].filter(
+              (material) => material.session_date === sessionDate && material.material_type === materialType
+            )
+            additions.push({
+              id: stableRecoveredMaterialId(workspaceId),
+              subject_id: subjectId,
+              week_number: weekNumber,
+              session_date: sessionDate,
+              weekday_index: getWeekdayIndexFromDateKey(sessionDate),
+              material_type: materialType,
+              container_id: null,
+              order_index: siblings.length,
+              file_name: fileName,
+              drive_file_id: workspaceId,
+              drive_mime_type: file.type || "application/pdf",
+              drive_web_view_link: "",
+              is_checkup_done: false,
+              local_file_status: "recovered",
+              created_at: timestamp,
+              updated_at: timestamp,
+            })
+          }
+        }
+        if (additions.length > 0) {
+          await writeMaterialManifest(subjectId, weekNumber, [...manifest.materials, ...additions])
+        }
+      }
+    }
+  }
+}
+
+function replaceWorkspaceSubjectId(state: LocalWorkspaceTabsState, sourceId: string, targetId: string) {
+  if (sourceId === targetId) return state
+  const workspaceTabs = Object.fromEntries(
+    Object.entries(state.workspaceTabs).map(([tabId, tab]) => [
+      tabId,
+      {
+        ...tab,
+        subjectIds: Array.from(new Set(tab.subjectIds.map((id) => id === sourceId ? targetId : id))),
+      },
+    ])
+  )
+  const customSubjects = { ...state.customSubjects }
+  const source = customSubjects[sourceId]
+  if (source && !customSubjects[targetId]) {
+    customSubjects[targetId] = { ...source, id: targetId, storageKey: targetId }
+  }
+  delete customSubjects[sourceId]
+  return { ...state, workspaceTabs, customSubjects }
+}
+
+function reconcileLocalSubjectCatalogState(
+  inputState: LocalWorkspaceTabsState,
+  inputCatalog: LocalSubjectCatalog,
+  discoveredSourceIds: string[]
+) {
+  let state = normalizeLocalWorkspaceTabsState(inputState)
+  let catalog = normalizeLocalSubjectCatalog(inputCatalog)
+  const timestamp = new Date().toISOString()
+
+  for (const subject of Object.values(state.customSubjects)) {
+    const existing = findCatalogSubjectByAnyId(catalog, subject.id)
+    const normalizedName = normalizeLocalSubjectName(subject.name)
+    const storageKey = existing?.storageKey ?? subject.storageKey ?? subject.id
+    const sourceIds = Array.from(new Set([...(existing?.sourceIds ?? []), subject.storageKey ?? subject.id, subject.id]))
+    const changed = !existing || existing.name !== subject.name || existing.normalizedName !== normalizedName ||
+      existing.storageKey !== storageKey || sourceIds.length !== existing.sourceIds.length ||
+      sourceIds.some((sourceId) => !existing.sourceIds.includes(sourceId))
+    const entry: LocalSubjectCatalogEntry = {
+      id: existing?.id ?? subject.id,
+      name: subject.name,
+      normalizedName,
+      storageKey,
+      sourceIds,
+      createdAt: existing?.createdAt ?? subject.createdAt,
+      updatedAt: changed ? timestamp : existing.updatedAt,
+      recovered: existing?.recovered ?? false,
+    }
+    catalog.subjects[entry.id] = entry
+  }
+
+  for (const builtIn of SUBJECTS) {
+    if (!discoveredSourceIds.includes(builtIn.id)) continue
+    const existing = findCatalogSubjectByAnyId(catalog, builtIn.id)
+    if (!existing) {
+      catalog.subjects[builtIn.id] = {
+        id: builtIn.id,
+        name: builtIn.name.replace("\n", " "),
+        normalizedName: normalizeLocalSubjectName(builtIn.name),
+        storageKey: builtIn.id,
+        sourceIds: [builtIn.id],
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        recovered: true,
+      }
     }
   }
 
-  const state = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
-  const normalizedState = normalizeLocalWorkspaceTabsState(state)
+  // Known pre-catalog repair: the recreated Algebra 2 card is empty while these two
+  // storage sources contain the 22 preserved PDFs inspected in the workspace.
+  if (discoveredSourceIds.includes("algebra") && discoveredSourceIds.includes(CURRENT_ALGEBRA_LEGACY_SOURCE_ID)) {
+    const algebraCard = Object.values(state.customSubjects).find(
+      (subject) => normalizeLocalSubjectName(subject.name) === normalizeLocalSubjectName("Algebra 2")
+    )
+    const target = findCatalogSubjectByAnyId(catalog, "algebra")
+    if (target) {
+      catalog = mergeCatalogSubjects(catalog, target.id, [CURRENT_ALGEBRA_LEGACY_SOURCE_ID, algebraCard?.id ?? ""])
+      if (algebraCard && algebraCard.id !== target.id) {
+        state = replaceWorkspaceSubjectId(state, algebraCard.id, target.id)
+      }
+    }
+  }
+
+  for (const sourceId of discoveredSourceIds) {
+    if (findCatalogSubjectByAnyId(catalog, sourceId)) continue
+    catalog.subjects[sourceId] = {
+      id: sourceId,
+      name: `Recuperada · ${sourceId}`,
+      normalizedName: normalizeLocalSubjectName(`Recuperada ${sourceId}`),
+      storageKey: sourceId,
+      sourceIds: [sourceId],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      recovered: true,
+    }
+  }
+
+  const linkedIds = new Set(Object.values(state.workspaceTabs).flatMap((tab) => tab.subjectIds))
+  for (const subject of Object.values(state.customSubjects)) {
+    if (subject.tabId === MAIN_WORKSPACE_TAB_ID && state.isMainWorkspaceTabVisible) linkedIds.add(subject.id)
+  }
+  const recoveredEntries = Object.values(catalog.subjects).filter((subject) => !linkedIds.has(subject.id))
+  if (recoveredEntries.length > 0) {
+    const existingTab = state.workspaceTabs[RECOVERED_WORKSPACE_TAB_ID]
+    state.workspaceTabs[RECOVERED_WORKSPACE_TAB_ID] = {
+      id: RECOVERED_WORKSPACE_TAB_ID,
+      name: "Recuperadas",
+      color: "#92400e",
+      createdAt: existingTab?.createdAt ?? timestamp,
+      orderIndex: existingTab?.orderIndex ?? Object.keys(state.workspaceTabs).length,
+      subjectIds: Array.from(new Set([...(existingTab?.subjectIds ?? []), ...recoveredEntries.map((subject) => subject.id)])),
+    }
+  }
+
+  for (const entry of Object.values(catalog.subjects)) {
+    const existing = state.customSubjects[entry.id]
+    const owningTab = Object.values(state.workspaceTabs).find((tab) => tab.subjectIds.includes(entry.id))?.id
+    state.customSubjects[entry.id] = {
+      id: entry.id,
+      storageKey: entry.storageKey,
+      name: entry.name,
+      color: existing?.color ?? "#0f766e",
+      tabId: existing?.tabId ?? owningTab ?? RECOVERED_WORKSPACE_TAB_ID,
+      createdAt: existing?.createdAt ?? entry.createdAt,
+      targetWeekday: existing?.targetWeekday ?? 0,
+    }
+  }
+
+  const validIds = new Set(Object.keys(catalog.subjects))
+  state.workspaceTabs = Object.fromEntries(Object.entries(state.workspaceTabs).map(([tabId, tab]) => [
+    tabId,
+    { ...tab, subjectIds: Array.from(new Set(tab.subjectIds.filter((id) => validIds.has(id)))) },
+  ]))
+  return { state: normalizeLocalWorkspaceTabsState(state), catalog: normalizeLocalSubjectCatalog(catalog) }
+}
+
+let workspaceStateWriteQueue: Promise<unknown> = Promise.resolve()
+
+async function readWorkspaceStateWithBackup() {
+  try {
+    const primary = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+    if (primary) return { state: normalizeLocalWorkspaceTabsState(primary), usedBackup: false }
+  } catch (error) {
+    console.error("Invalid primary workspace state; trying backup:", error)
+  }
+  try {
+    const backup = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_BACKUP_MANIFEST, null)
+    return { state: normalizeLocalWorkspaceTabsState(backup), usedBackup: Boolean(backup) }
+  } catch (error) {
+    console.error("Invalid backup workspace state; rebuilding from disk:", error)
+    return { state: createEmptyWorkspaceTabsState(), usedBackup: false }
+  }
+}
+
+async function ensureLocalReconciliationBackups() {
+  const hasWorkspaceState = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
+  const needsRollingBackup = !(await jsonFileExists(WORKSPACE_STATE_BACKUP_MANIFEST))
+  const needsMigrationBackup = !(await jsonFileExists(WORKSPACE_STATE_PRE_RECONCILIATION_MANIFEST))
+  if (hasWorkspaceState && (needsRollingBackup || needsMigrationBackup)) {
+    try {
+      const current = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+      if (current) {
+        const normalized = normalizeLocalWorkspaceTabsState(current)
+        await Promise.all([
+          needsRollingBackup ? writeJsonFile(WORKSPACE_STATE_BACKUP_MANIFEST, normalized) : Promise.resolve(),
+          needsMigrationBackup ? writeJsonFile(WORKSPACE_STATE_PRE_RECONCILIATION_MANIFEST, normalized) : Promise.resolve(),
+        ])
+      }
+    } catch {}
+  }
+  if (await jsonFileExists(MATERIAL_CONTAINERS_MANIFEST) && !(await jsonFileExists(MATERIAL_CONTAINERS_BACKUP_MANIFEST))) {
+    const containers = await readJsonFile<Record<string, SubjectMaterialContainer[]>>(MATERIAL_CONTAINERS_MANIFEST, {})
+    await writeJsonFile(MATERIAL_CONTAINERS_BACKUP_MANIFEST, containers)
+  }
+}
+
+export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
+  const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
+  await ensureLocalReconciliationBackups()
+  const loaded = await readWorkspaceStateWithBackup()
+  const catalog = await readLocalSubjectCatalog()
+  await reconstructLocalMaterialManifests()
+  const discoveredSourceIds = await discoverLocalSubjectSourceIds(loaded.state, catalog)
+  const reconciled = reconcileLocalSubjectCatalogState(loaded.state, catalog, discoveredSourceIds)
+  const changed = JSON.stringify(reconciled.state) !== JSON.stringify(loaded.state) ||
+    JSON.stringify(reconciled.catalog) !== JSON.stringify(catalog)
+  if (changed || loaded.usedBackup || !exists) {
+    await Promise.all([
+      saveLocalWorkspaceTabsState(reconciled.state),
+      writeLocalSubjectCatalog(reconciled.catalog),
+    ])
+  }
+  await ensureLocalDefaultContainersForSubjects(Object.values(reconciled.catalog.subjects))
   logWorkspaceDataSource({
     operation: "readLocalWorkspaceTabsState",
     path: WORKSPACE_STATE_MANIFEST.join("/"),
-    exists: true,
-    workspaceTabs: Object.keys(normalizedState.workspaceTabs).length,
-    customSubjects: Object.keys(normalizedState.customSubjects).length,
+    exists,
+    workspaceTabs: Object.keys(reconciled.state.workspaceTabs).length,
+    customSubjects: Object.keys(reconciled.state.customSubjects).length,
   })
   return {
-    state: normalizedState,
-    exists: true,
+    state: reconciled.state,
+    exists: exists || changed,
   }
 }
 
 export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceTabsState>) {
   const normalizedState = normalizeLocalWorkspaceTabsState(state)
-  await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
+  const write = async () => {
+    try {
+      const current = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+      if (current) await writeJsonFile(WORKSPACE_STATE_BACKUP_MANIFEST, normalizeLocalWorkspaceTabsState(current))
+    } catch {}
+    await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
+  }
+  const pending = workspaceStateWriteQueue.then(write, write)
+  workspaceStateWriteQueue = pending.catch(() => undefined)
+  await pending
   logWorkspaceDataSource({
     operation: "saveLocalWorkspaceTabsState",
     path: WORKSPACE_STATE_MANIFEST.join("/"),
@@ -536,6 +904,171 @@ export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceT
     customSubjects: Object.keys(normalizedState.customSubjects).length,
   })
   return normalizedState
+}
+
+export async function ensureLocalSubjectForName(name: string) {
+  let catalog = await readLocalSubjectCatalog()
+  const existing = findCatalogSubjectByName(catalog, name)
+  if (existing) return existing
+  const storageKey = allocateLocalSubjectStorageKey(catalog, name)
+  const timestamp = new Date().toISOString()
+  const entry: LocalSubjectCatalogEntry = {
+    id: storageKey,
+    name: name.trim(),
+    normalizedName: normalizeLocalSubjectName(name),
+    storageKey,
+    sourceIds: [storageKey],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    recovered: false,
+  }
+  catalog = { ...catalog, subjects: { ...catalog.subjects, [entry.id]: entry } }
+  await writeLocalSubjectCatalog(catalog)
+  await ensureLocalDefaultContainersForSubjects([entry])
+  return entry
+}
+
+export async function renameLocalCatalogSubject(subjectId: string, name: string) {
+  const catalog = await readLocalSubjectCatalog()
+  const current = findCatalogSubjectByAnyId(catalog, subjectId)
+  if (!current) return null
+  const duplicate = findCatalogSubjectByName(catalog, name)
+  if (duplicate && duplicate.id !== current.id) {
+    const merged = mergeCatalogSubjects(catalog, duplicate.id, current.sourceIds)
+    await writeLocalSubjectCatalog(merged)
+    return merged.subjects[duplicate.id]
+  }
+  const updated = {
+    ...current,
+    name: name.trim(),
+    normalizedName: normalizeLocalSubjectName(name),
+    recovered: false,
+    updatedAt: new Date().toISOString(),
+  }
+  await writeLocalSubjectCatalog({ ...catalog, subjects: { ...catalog.subjects, [updated.id]: updated } })
+  return updated
+}
+
+async function resolveLocalSubjectCatalogEntry(subjectId: string) {
+  const catalog = await readLocalSubjectCatalog()
+  return findCatalogSubjectByAnyId(catalog, subjectId)
+}
+
+async function resolveLocalSubjectSourceIds(subjectId: string) {
+  const entry = await resolveLocalSubjectCatalogEntry(subjectId)
+  return entry?.sourceIds.length ? entry.sourceIds : [subjectId]
+}
+
+async function resolveLocalSubjectStorageKey(subjectId: string) {
+  const entry = await resolveLocalSubjectCatalogEntry(subjectId)
+  return entry?.storageKey ?? subjectId
+}
+
+async function resolveLocalLogicalSubjectId(subjectId: string) {
+  const entry = await resolveLocalSubjectCatalogEntry(subjectId)
+  return entry?.id ?? subjectId
+}
+
+export type LocalSubjectDeletionSummary = {
+  subjectId: string
+  name: string
+  sourceIds: string[]
+  materialCount: number
+  entryCount: number
+  fileCount: number
+  directoryCount: number
+}
+
+export async function getLocalSubjectDeletionSummary(subjectId: string): Promise<LocalSubjectDeletionSummary> {
+  const entry = await resolveLocalSubjectCatalogEntry(subjectId)
+  const sourceIds = entry?.sourceIds.length ? entry.sourceIds : [subjectId]
+  let materialCount = 0
+  let entryCount = 0
+  let fileCount = 0
+  let directoryCount = 0
+  for (const sourceId of sourceIds) {
+    for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId)) {
+      materialCount += (await readMaterialManifest(sourceId, weekNumber)).materials.length
+    }
+    for (const weekNumber of await listWeekNumbersForManifestKind(ENTRIES_DIR, sourceId)) {
+      entryCount += (await readEntryManifest(sourceId, weekNumber)).entries.length
+    }
+    for (const base of [[THEORY_DIR], [PRACTICE_DIR], [AUDIO_DIR]] as string[][]) {
+      const path = [...base, sanitizePathSegment(sourceId)]
+      if (await directoryExistsBySegments(path)) directoryCount += 1
+      fileCount += await countFilesBySegments(path)
+    }
+  }
+  return {
+    subjectId: entry?.id ?? subjectId,
+    name: entry?.name ?? subjectId,
+    sourceIds,
+    materialCount,
+    entryCount,
+    fileCount,
+    directoryCount,
+  }
+}
+
+export async function deleteLocalSubjectPermanently(subjectId: string) {
+  const summary = await getLocalSubjectDeletionSummary(subjectId)
+  const materialIds: number[] = []
+  for (const sourceId of summary.sourceIds) {
+    for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId)) {
+      materialIds.push(...(await readMaterialManifest(sourceId, weekNumber)).materials.map((material) => material.id))
+    }
+  }
+
+  for (const sourceId of summary.sourceIds) {
+    await Promise.all([
+      removeDirectoryBySegments([THEORY_DIR, sanitizePathSegment(sourceId)]),
+      removeDirectoryBySegments([PRACTICE_DIR, sanitizePathSegment(sourceId)]),
+      removeDirectoryBySegments([AUDIO_DIR, sanitizePathSegment(sourceId)]),
+      removeDirectoryBySegments([MANIFESTS_DIR, MATERIALS_DIR, sourceId]),
+      removeDirectoryBySegments([MANIFESTS_DIR, ENTRIES_DIR, sourceId]),
+      removeDirectoryBySegments([MANIFESTS_DIR, "synthesis", sourceId]),
+    ])
+  }
+
+  const [catalog, containers, tags, shortcuts, sessions, completions] = await Promise.all([
+    readLocalSubjectCatalog(),
+    readMaterialContainersManifest(),
+    readTagManifest(),
+    readShortcutsManifest(),
+    readSessionsManifest(),
+    readSubjectCompletionsManifest(),
+  ])
+  const subjects = { ...catalog.subjects }
+  const catalogEntry = findCatalogSubjectByAnyId(catalog, subjectId)
+  if (catalogEntry) delete subjects[catalogEntry.id]
+  for (const sourceId of summary.sourceIds) {
+    delete containers[sourceId]
+    delete shortcuts[sourceId]
+  }
+  const deletedMaterialIds = new Set(materialIds.map(String))
+  const deletedSourceIds = new Set([summary.subjectId, ...summary.sourceIds])
+  const remainingSessions = Object.fromEntries(Object.entries(sessions).map(([date, session]) => [
+    date,
+    {
+      ...session,
+      active_subject_ids: session.active_subject_ids.filter((id) => !deletedSourceIds.has(id)),
+      completed_subjects: Object.fromEntries(Object.entries(session.completed_subjects).filter(([id]) => !deletedSourceIds.has(id))),
+    },
+  ]))
+  const remainingCompletions = Object.fromEntries(Object.entries(completions).filter(([, completion]) => !deletedSourceIds.has(completion.subject_id)))
+  await Promise.all([
+    writeLocalSubjectCatalog({ version: 1, subjects }),
+    writeMaterialContainersManifest(containers),
+    writeShortcutsManifest(shortcuts),
+    writeSessionsManifest(remainingSessions),
+    writeSubjectCompletionsManifest(remainingCompletions),
+    writeTagManifest({
+      ...tags,
+      assignments: Object.fromEntries(Object.entries(tags.assignments).filter(([materialId]) => !deletedMaterialIds.has(materialId))),
+      regions: Object.fromEntries(Object.entries(tags.regions).filter(([key]) => !materialIds.some((id) => key.startsWith(`${id}:`)))),
+    }),
+  ])
+  return summary
 }
 
 function synthesisProgressPath(subjectId: string, weekNumber: number) {
@@ -569,11 +1102,7 @@ function coerceSynthesisProgressItems(
 
 async function readSynthesisProgressManifest(subjectId: string, weekNumber: number) {
   const payload = await readJsonFile<SubjectMaterialSynthesisRecord[] | null>(synthesisProgressPath(subjectId, weekNumber), null)
-  const items = Array.isArray(payload) ? normalizeSynthesisProgressItems(payload) : []
-  if (Array.isArray(payload) && items.length === 0) {
-    await deleteJsonFile(synthesisProgressPath(subjectId, weekNumber))
-  }
-  return items
+  return Array.isArray(payload) ? normalizeSynthesisProgressItems(payload) : []
 }
 
 async function writeSynthesisProgressManifest(
@@ -913,48 +1442,74 @@ async function writeMaterialContainersManifest(value: Record<string, SubjectMate
   await writeJsonFile(MATERIAL_CONTAINERS_MANIFEST, value)
 }
 
+function buildDefaultLocalSubjectContainers(storageKey: string, timestamp = nowIso()): SubjectMaterialContainer[] {
+  return [
+    {
+      id: stableRecoveredMaterialId(`container:${storageKey}:theory`),
+      subjectId: storageKey,
+      name: "Teoría",
+      normalizedName: "teoría",
+      kind: "theory",
+      orderIndex: 0,
+      materialCount: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    {
+      id: stableRecoveredMaterialId(`container:${storageKey}:practice`),
+      subjectId: storageKey,
+      name: "Práctica",
+      normalizedName: "práctica",
+      kind: "practice",
+      orderIndex: 1,
+      materialCount: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+  ]
+}
+
+async function ensureLocalDefaultContainersForSubjects(subjects: LocalSubjectCatalogEntry[]) {
+  const manifest = await readMaterialContainersManifest()
+  let changed = false
+  for (const subject of subjects) {
+    const current = manifest[subject.storageKey]
+    if (Array.isArray(current) && current.some((container) => container.kind === "theory") && current.some((container) => container.kind === "practice")) {
+      continue
+    }
+    const custom = Array.isArray(current) ? current.filter((container) => container.kind === "custom") : []
+    manifest[subject.storageKey] = [...buildDefaultLocalSubjectContainers(subject.storageKey), ...custom]
+    changed = true
+  }
+  if (changed) await writeMaterialContainersManifest(manifest)
+}
+
 export async function listLocalSubjectMaterialContainers(subjectId: string) {
   const manifest = await readMaterialContainersManifest()
-  let containers = manifest[subjectId]
+  const storageKey = await resolveLocalSubjectStorageKey(subjectId)
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  let containers = manifest[storageKey]
   if (!Array.isArray(containers) || !containers.some((container) => container.kind === "theory") || !containers.some((container) => container.kind === "practice")) {
-    const timestamp = nowIso()
     const existing = Array.isArray(containers) ? containers.filter((container) => container.kind === "custom") : []
-    containers = [
-      {
-        id: nextLocalId(),
-        subjectId,
-        name: "Teoría",
-        normalizedName: "teoría",
-        kind: "theory",
-        orderIndex: 0,
-        materialCount: 0,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-      {
-        id: nextLocalId(),
-        subjectId,
-        name: "Práctica",
-        normalizedName: "práctica",
-        kind: "practice",
-        orderIndex: 1,
-        materialCount: 0,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-      ...existing,
-    ]
-    manifest[subjectId] = containers
-    await writeMaterialContainersManifest(manifest)
+    containers = [...buildDefaultLocalSubjectContainers(storageKey), ...existing]
   }
+  const aliasCustomContainers = sourceIds
+    .filter((sourceId) => sourceId !== storageKey)
+    .flatMap((sourceId) => (manifest[sourceId] ?? []).filter((container) => container.kind === "custom"))
+  containers = [
+    ...containers,
+    ...aliasCustomContainers.filter((container) => !containers.some((current) => current.id === container.id)),
+  ]
   const counts = new Map<number, number>()
-  for (const weekNumber of await listLocalSubjectWeekNumbersWithContent(subjectId)) {
-    const materials = (await readMaterialManifest(subjectId, weekNumber)).materials
-    for (const material of materials) {
-      const container = material.container_id == null
-        ? containers.find((candidate) => candidate.kind === material.material_type)
-        : containers.find((candidate) => candidate.id === material.container_id)
-      if (container) counts.set(container.id, (counts.get(container.id) ?? 0) + 1)
+  for (const sourceId of sourceIds) {
+    for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId)) {
+      const materials = (await readMaterialManifest(sourceId, weekNumber)).materials
+      for (const material of materials) {
+        const container = material.container_id == null
+          ? containers.find((candidate) => candidate.kind === material.material_type)
+          : containers.find((candidate) => candidate.id === material.container_id)
+        if (container) counts.set(container.id, (counts.get(container.id) ?? 0) + 1)
+      }
     }
   }
   return containers
@@ -963,6 +1518,7 @@ export async function listLocalSubjectMaterialContainers(subjectId: string) {
 }
 
 export async function createLocalSubjectMaterialContainer(subjectId: string, rawName: string) {
+  const storageKey = await resolveLocalSubjectStorageKey(subjectId)
   const name = normalizeTagDisplayName(rawName)
   const normalizedName = normalizeTagName(rawName)
   if (!name || !normalizedName) throw new Error("El nombre es obligatorio.")
@@ -973,7 +1529,7 @@ export async function createLocalSubjectMaterialContainer(subjectId: string, raw
   const timestamp = nowIso()
   const container: SubjectMaterialContainer = {
     id: nextLocalId(),
-    subjectId,
+    subjectId: storageKey,
     name,
     normalizedName,
     kind: "custom",
@@ -983,7 +1539,8 @@ export async function createLocalSubjectMaterialContainer(subjectId: string, raw
     updatedAt: timestamp,
   }
   const manifest = await readMaterialContainersManifest()
-  manifest[subjectId] = [...containers, container].map((candidate) => ({ ...candidate, materialCount: 0 }))
+  manifest[storageKey] = [...containers.filter((candidate) => candidate.subjectId === storageKey), container]
+    .map((candidate) => ({ ...candidate, materialCount: 0 }))
   await writeMaterialContainersManifest(manifest)
   return container
 }
@@ -1095,11 +1652,6 @@ async function listWeekNumbersForManifestKind(kind: "materials" | "entries", sub
     const match = /^week-(\d+)\.json$/i.exec(name)
     if (match) {
       const weekNumber = Number.parseInt(match[1], 10)
-      const cleanup = await cleanupLocalSubjectWeekIfEmpty(subjectId, weekNumber)
-      if (!cleanup.hasContent) {
-        continue
-      }
-
       weekNumbers.push(weekNumber)
     }
   }
@@ -1116,13 +1668,7 @@ async function listSynthesisWeekNumbersForSubject(subjectId: string) {
     const match = /^week-(\d+)\.json$/i.exec(name)
     if (!match) continue
 
-    const weekNumber = Number.parseInt(match[1], 10)
-    const cleanup = await cleanupLocalSubjectWeekIfEmpty(subjectId, weekNumber)
-    if (!cleanup.hasContent) {
-      continue
-    }
-
-    weekNumbers.push(weekNumber)
+    weekNumbers.push(Number.parseInt(match[1], 10))
   }
 
   return weekNumbers
@@ -1223,7 +1769,9 @@ export async function saveLocalAiPrompt(prompt: string) {
 }
 
 export async function getLocalSynthesisProgress(subjectId: string, weekNumber: number) {
-  return readSynthesisProgressManifest(subjectId, weekNumber)
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  const groups = await Promise.all(sourceIds.map((sourceId) => readSynthesisProgressManifest(sourceId, weekNumber)))
+  return Array.from(new Map(groups.flat().map((item) => [item.subjectDayMaterialId, item])).values())
 }
 
 export async function saveLocalSynthesisProgress(
@@ -1231,8 +1779,9 @@ export async function saveLocalSynthesisProgress(
   weekNumber: number,
   items: Array<Omit<SubjectMaterialSynthesisRecord, "updatedAt"> & { updatedAt?: string | null }>
 ) {
+  const storageKey = await resolveLocalSubjectStorageKey(subjectId)
   const normalizedItems = coerceSynthesisProgressItems(items)
-  await writeSynthesisProgressManifest(subjectId, weekNumber, normalizedItems)
+  await writeSynthesisProgressManifest(storageKey, weekNumber, normalizedItems)
   return normalizedItems
 }
 
@@ -1290,18 +1839,32 @@ export async function findNearestWeekWithContent(subjectId: string, fromWeekNumb
 }
 
 export async function listLocalSubjectWeekNumbersWithContent(subjectId: string) {
-  const [materialWeeks, entryWeeks, synthesisWeeks] = await Promise.all([
-    listWeekNumbersForManifestKind(MATERIALS_DIR, subjectId),
-    listWeekNumbersForManifestKind(ENTRIES_DIR, subjectId),
-    listSynthesisWeekNumbersForSubject(subjectId),
-  ])
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  const groups = await Promise.all(sourceIds.map(async (sourceId) => {
+    const [materialWeeks, entryWeeks, synthesisWeeks] = await Promise.all([
+      listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId),
+      listWeekNumbersForManifestKind(ENTRIES_DIR, sourceId),
+      listSynthesisWeekNumbersForSubject(sourceId),
+    ])
+    return [...materialWeeks, ...entryWeeks, ...synthesisWeeks]
+  }))
 
-  return Array.from(new Set([...materialWeeks, ...entryWeeks, ...synthesisWeeks])).sort((left, right) => right - left)
+  return Array.from(new Set(groups.flat())).sort((left, right) => right - left)
 }
 
 export async function listLocalWeekNumbersWithContent(subjectIds: string[]) {
   const weeksBySubject = await Promise.all(subjectIds.map((subjectId) => listLocalSubjectWeekNumbersWithContent(subjectId)))
   return Array.from(new Set(weeksBySubject.flat())).sort((left, right) => right - left)
+}
+
+export async function getLatestLocalSubjectContentDate(subjectId: string, weekNumber: number) {
+  const [materials, entries] = await Promise.all([
+    listLocalSubjectDayMaterials({ subjectId, weekNumber }),
+    listLocalSubjectDayEntries({ subjectId, weekNumber }),
+  ])
+  return [...materials.map((material) => material.session_date), ...entries.map((entry) => entry.session_date)]
+    .filter(Boolean)
+    .sort((left, right) => right.localeCompare(left))[0] ?? null
 }
 
 export async function getLocalSocraticReviewSettings() {
@@ -1322,7 +1885,18 @@ export async function appendLocalSocraticReviewTurn(turn: SocraticReviewGenerate
 
 export async function getLocalDailySession(date: string) {
   const sessions = await readSessionsManifest()
-  return sessions[date] ?? null
+  const session = sessions[date]
+  if (!session) return null
+  const activeSubjectIds = await Promise.all(session.active_subject_ids.map(resolveLocalLogicalSubjectId))
+  const completedEntries = await Promise.all(Object.entries(session.completed_subjects).map(async ([subjectId, value]) => [
+    await resolveLocalLogicalSubjectId(subjectId),
+    value,
+  ] as const))
+  return {
+    ...session,
+    active_subject_ids: Array.from(new Set(activeSubjectIds)),
+    completed_subjects: Object.fromEntries(completedEntries),
+  }
 }
 
 export async function saveLocalDailySession(input: {
@@ -1347,18 +1921,20 @@ export async function saveLocalDailySession(input: {
 
 export async function getLocalSubjectCompletion(date: string, subjectId: string) {
   const manifest = await readSubjectCompletionsManifest()
-  return manifest[`${date}:${subjectId}`] ?? null
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  return [subjectId, ...sourceIds].map((id) => manifest[`${date}:${id}`]).find(Boolean) ?? null
 }
 
 export async function saveLocalSubjectCompletion(input: { date: string; subjectId: string; panorama: string }) {
+  const logicalSubjectId = await resolveLocalLogicalSubjectId(input.subjectId)
   const manifest = await readSubjectCompletionsManifest()
-  const key = `${input.date}:${input.subjectId}`
+  const key = `${input.date}:${logicalSubjectId}`
   const current = manifest[key]
   const timestamp = nowIso()
   const next: SubjectCompletionRecord = {
     id: current?.id ?? nextLocalId(),
     date: input.date,
-    subject_id: input.subjectId,
+    subject_id: logicalSubjectId,
     panorama: input.panorama || "",
     created_at: current?.created_at ?? timestamp,
     updated_at: timestamp,
@@ -1370,19 +1946,22 @@ export async function saveLocalSubjectCompletion(input: { date: string; subjectI
 
 export async function deleteLocalSubjectCompletion(date: string, subjectId: string) {
   const manifest = await readSubjectCompletionsManifest()
-  delete manifest[`${date}:${subjectId}`]
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  for (const id of new Set([subjectId, ...sourceIds])) delete manifest[`${date}:${id}`]
   await writeSubjectCompletionsManifest(manifest)
   return { ok: true as const }
 }
 
 export async function getLocalSubjectShortcuts(subjectId: string) {
   const shortcuts = await readShortcutsManifest()
-  return shortcuts[subjectId] ?? {
+  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+  const records = [subjectId, ...sourceIds].map((id) => shortcuts[id]).filter(Boolean)
+  return records.reduce<SubjectShortcuts>((merged, record) => ({
     subjectId,
-    eFich: null,
-    figma: null,
-    nlm: null,
-  }
+    eFich: merged.eFich ?? record.eFich,
+    figma: merged.figma ?? record.figma,
+    nlm: merged.nlm ?? record.nlm,
+  }), { subjectId, eFich: null, figma: null, nlm: null })
 }
 
 export async function saveLocalSubjectShortcut(input: {
@@ -1390,9 +1969,10 @@ export async function saveLocalSubjectShortcut(input: {
   shortcutKey: SubjectShortcutKey
   url: string
 }) {
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
   const shortcuts = await readShortcutsManifest()
-  const current = shortcuts[input.subjectId] ?? {
-    subjectId: input.subjectId,
+  const current = shortcuts[storageKey] ?? {
+    subjectId: storageKey,
     eFich: null,
     figma: null,
     nlm: null,
@@ -1402,7 +1982,7 @@ export async function saveLocalSubjectShortcut(input: {
     [input.shortcutKey === "e_fich" ? "eFich" : input.shortcutKey === "figma" ? "figma" : "nlm"]:
       input.url.trim() || null,
   } satisfies SubjectShortcuts
-  shortcuts[input.subjectId] = next
+  shortcuts[storageKey] = next
   await writeShortcutsManifest(shortcuts)
   return next
 }
@@ -1493,6 +2073,7 @@ export async function createLocalMaterialUploadSession(input: {
   fileName: string
   mimeType: string
 }) {
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
   const parsedDate = parseDateKey(input.sessionDate)
   const weekNumber =
     Number.isInteger(input.weekNumber) && input.weekNumber === getWeekNumberForDate(parsedDate)
@@ -1500,7 +2081,7 @@ export async function createLocalMaterialUploadSession(input: {
       : getWeekNumberForDate(parsedDate)
   const fileName = normalizePdfFileName(input.fileName || `${input.materialType}-${input.sessionDate}.pdf`)
   const objectKey = getMaterialRelativePath({
-    subjectId: input.subjectId,
+    subjectId: storageKey,
     weekNumber,
     sessionDate: input.sessionDate,
     materialType: input.materialType,
@@ -1513,7 +2094,7 @@ export async function createLocalMaterialUploadSession(input: {
     driveFileId: objectKey,
     mimeType: input.mimeType || "application/pdf",
     metadata: {
-      "subject-id": input.subjectId,
+      "subject-id": storageKey,
       "session-date": input.sessionDate,
       "week-number": String(weekNumber),
       "weekday-index": String(getWeekdayIndexFromDateKey(input.sessionDate)),
@@ -1533,13 +2114,14 @@ export async function completeLocalMaterialUpload(input: {
   driveFileId: string
   fileName: string
 }) {
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
   const parsedDate = parseDateKey(input.sessionDate)
   const weekNumber =
     Number.isInteger(input.weekNumber) && input.weekNumber === getWeekNumberForDate(parsedDate)
       ? input.weekNumber
       : getWeekNumberForDate(parsedDate)
   const weekdayIndex = getWeekdayIndexFromDateKey(input.sessionDate)
-  const manifest = await readMaterialManifest(input.subjectId, weekNumber)
+  const manifest = await readMaterialManifest(storageKey, weekNumber)
   const existing = manifest.materials.find((candidate) => candidate.drive_file_id === input.driveFileId)
   if (existing) return existing
 
@@ -1554,7 +2136,7 @@ export async function completeLocalMaterialUpload(input: {
   const timestamp = nowIso()
   const nextMaterial: SubjectDayMaterial = {
     id: nextLocalId(),
-    subject_id: input.subjectId,
+    subject_id: storageKey,
     week_number: weekNumber,
     session_date: input.sessionDate,
     weekday_index: weekdayIndex,
@@ -1569,8 +2151,53 @@ export async function completeLocalMaterialUpload(input: {
     created_at: timestamp,
     updated_at: timestamp,
   }
-  await writeMaterialManifest(input.subjectId, weekNumber, [...manifest.materials, nextMaterial])
+  await writeMaterialManifest(storageKey, weekNumber, [...manifest.materials, nextMaterial])
   return nextMaterial
+}
+
+const LOCAL_WEEK_MATERIAL_CACHE_MS = 1_500
+const localWeekMaterialReads = new Map<string, { promise: Promise<SubjectDayMaterial[]>; expiresAt: number }>()
+
+async function readLocalSubjectWeekMaterials(subjectId: string, weekNumber: number) {
+  const cacheKey = `${subjectId}:${weekNumber}`
+  const existing = localWeekMaterialReads.get(cacheKey)
+  if (existing && existing.expiresAt > Date.now()) return existing.promise
+  const pending = (async () => {
+    const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
+    const [manifests, containers, tagManifest] = await Promise.all([
+      Promise.all(sourceIds.map((sourceId) => readMaterialManifest(sourceId, weekNumber))),
+      listLocalSubjectMaterialContainers(subjectId),
+      readTagManifest(),
+    ])
+    const tagsWithCounts = withLocalTagUsageCounts(tagManifest)
+    const byId = new Map<number, SubjectDayMaterial>()
+    const materialsWithStatus = await Promise.all(manifests.flatMap((manifest) => manifest.materials).map(async (material) => ({
+      material,
+      exists: await workspaceFileExists(material.drive_file_id),
+    })))
+    for (const { material, exists } of materialsWithStatus) {
+      const assigned = new Set(tagManifest.assignments[String(material.id)] ?? [])
+      byId.set(material.id, {
+        ...material,
+        local_file_status: exists ? material.local_file_status ?? "available" : "missing",
+        container_id: material.container_id ?? containers.find((container) => container.kind === material.material_type)?.id ?? null,
+        tags: tagsWithCounts.filter((tag) => assigned.has(tag.id)),
+      })
+    }
+    return sortMaterials(Array.from(byId.values()))
+  })()
+  const cacheEntry = { promise: pending, expiresAt: Date.now() + LOCAL_WEEK_MATERIAL_CACHE_MS }
+  localWeekMaterialReads.set(cacheKey, cacheEntry)
+  try {
+    const result = await pending
+    window.setTimeout(() => {
+      if (localWeekMaterialReads.get(cacheKey) === cacheEntry) localWeekMaterialReads.delete(cacheKey)
+    }, LOCAL_WEEK_MATERIAL_CACHE_MS)
+    return result
+  } catch (error) {
+    if (localWeekMaterialReads.get(cacheKey) === cacheEntry) localWeekMaterialReads.delete(cacheKey)
+    throw error
+  }
 }
 
 export async function listLocalSubjectDayMaterials(scope: {
@@ -1579,21 +2206,10 @@ export async function listLocalSubjectDayMaterials(scope: {
   sessionDate?: string
   materialType?: SubjectDayMaterialType | null
 }) {
-  const manifest = await readMaterialManifest(scope.subjectId, scope.weekNumber)
-  const containers = await listLocalSubjectMaterialContainers(scope.subjectId)
-  const tagManifest = await readTagManifest()
-  const tagsWithCounts = withLocalTagUsageCounts(tagManifest)
-  const materials = manifest.materials.filter((material) => {
+  const materials = (await readLocalSubjectWeekMaterials(scope.subjectId, scope.weekNumber)).filter((material) => {
     if (scope.sessionDate && material.session_date !== scope.sessionDate) return false
     if (scope.materialType && material.material_type !== scope.materialType) return false
     return true
-  }).map((material) => {
-    const assigned = new Set(tagManifest.assignments[String(material.id)] ?? [])
-    return {
-      ...material,
-      container_id: material.container_id ?? containers.find((container) => container.kind === material.material_type)?.id ?? null,
-      tags: tagsWithCounts.filter((tag) => assigned.has(tag.id)),
-    }
   })
   logWorkspaceDataSource({
     operation: "listLocalSubjectDayMaterials",
@@ -1685,6 +2301,7 @@ export async function createLocalEntryUploadSession(input: {
   mimeType: string
   subjectName?: string
 }) {
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
   const parsedDate = parseDateKey(input.sessionDate)
   const weekNumber =
     Number.isInteger(input.weekNumber) && input.weekNumber === getWeekNumberForDate(parsedDate)
@@ -1695,7 +2312,7 @@ export async function createLocalEntryUploadSession(input: {
     input.mimeType
   )
   const objectKey = getAudioRelativePath({
-    subjectId: input.subjectId,
+    subjectId: storageKey,
     weekNumber,
     sessionDate: input.sessionDate,
     fileName,
@@ -1707,7 +2324,7 @@ export async function createLocalEntryUploadSession(input: {
     driveFileId: objectKey,
     mimeType: input.mimeType || "audio/webm",
     metadata: {
-      "subject-id": input.subjectId,
+      "subject-id": storageKey,
       "session-date": input.sessionDate,
       "week-number": String(weekNumber),
       "weekday-index": String(getWeekdayIndexFromDateKey(input.sessionDate)),
@@ -1726,7 +2343,8 @@ export async function createLocalTextEntry(input: {
   transcriptText: string
   answerText?: string
 }) {
-  const manifest = await readEntryManifest(input.subjectId, input.weekNumber)
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
+  const manifest = await readEntryManifest(storageKey, input.weekNumber)
   const orderIndex = manifest.entries.filter(
     (entry) =>
       entry.session_date === input.sessionDate &&
@@ -1736,7 +2354,7 @@ export async function createLocalTextEntry(input: {
   const entry: SubjectDayEntry = withEntryDefaults({
     id: nextLocalId(),
     subject_day_material_id: input.materialId,
-    subject_id: input.subjectId,
+    subject_id: storageKey,
     week_number: input.weekNumber,
     session_date: input.sessionDate,
     weekday_index: input.weekdayIndex,
@@ -1757,7 +2375,7 @@ export async function createLocalTextEntry(input: {
     created_at: timestamp,
     updated_at: timestamp,
   })
-  await writeEntryManifest(input.subjectId, input.weekNumber, [...manifest.entries, entry])
+  await writeEntryManifest(storageKey, input.weekNumber, [...manifest.entries, entry])
   return entry
 }
 
@@ -1771,13 +2389,14 @@ export async function completeLocalAudioEntryUpload(input: {
   pairId: string | null
   pairRole: "question" | "answer" | null
 }) {
+  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
   const parsedDate = parseDateKey(input.sessionDate)
   const weekNumber =
     Number.isInteger(input.weekNumber) && input.weekNumber === getWeekNumberForDate(parsedDate)
       ? input.weekNumber
       : getWeekNumberForDate(parsedDate)
   const weekdayIndex = getWeekdayIndexFromDateKey(input.sessionDate)
-  const manifest = await readEntryManifest(input.subjectId, weekNumber)
+  const manifest = await readEntryManifest(storageKey, weekNumber)
   const orderIndex = manifest.entries.filter(
     (entry) =>
       entry.session_date === input.sessionDate &&
@@ -1788,7 +2407,7 @@ export async function completeLocalAudioEntryUpload(input: {
   const entry: SubjectDayEntry = withEntryDefaults({
     id: nextLocalId(),
     subject_day_material_id: input.materialId,
-    subject_id: input.subjectId,
+    subject_id: storageKey,
     week_number: weekNumber,
     session_date: input.sessionDate,
     weekday_index: weekdayIndex,
@@ -1809,7 +2428,7 @@ export async function completeLocalAudioEntryUpload(input: {
     created_at: timestamp,
     updated_at: timestamp,
   })
-  await writeEntryManifest(input.subjectId, weekNumber, [...manifest.entries, entry])
+  await writeEntryManifest(storageKey, weekNumber, [...manifest.entries, entry])
   return entry
 }
 
@@ -1819,24 +2438,25 @@ export async function listLocalSubjectDayEntries(scope: {
   sessionDate?: string
   materialId?: number | null
 }) {
-  const weekNumbers =
-    typeof scope.weekNumber === "number"
-      ? [scope.weekNumber]
-      : await listWeekNumbersForManifestKind(ENTRIES_DIR, scope.subjectId)
-
+  const sourceIds = await resolveLocalSubjectSourceIds(scope.subjectId)
   const entries: SubjectDayEntry[] = []
-  for (const weekNumber of weekNumbers) {
-    const manifest = await readEntryManifest(scope.subjectId, weekNumber)
-    entries.push(
-      ...manifest.entries.filter((entry) => {
-        if (scope.sessionDate && entry.session_date !== scope.sessionDate) return false
-        if (scope.materialId != null && entry.subject_day_material_id !== scope.materialId) return false
-        return true
-      })
-    )
+  for (const sourceId of sourceIds) {
+    const weekNumbers = typeof scope.weekNumber === "number"
+      ? [scope.weekNumber]
+      : await listWeekNumbersForManifestKind(ENTRIES_DIR, sourceId)
+    for (const weekNumber of weekNumbers) {
+      const manifest = await readEntryManifest(sourceId, weekNumber)
+      entries.push(
+        ...manifest.entries.filter((entry) => {
+          if (scope.sessionDate && entry.session_date !== scope.sessionDate) return false
+          if (scope.materialId != null && entry.subject_day_material_id !== scope.materialId) return false
+          return true
+        })
+      )
+    }
   }
 
-  const sortedEntries = sortEntries(entries).map(withEntryDefaults)
+  const sortedEntries = sortEntries(Array.from(new Map(entries.map((entry) => [entry.id, entry])).values())).map(withEntryDefaults)
   logWorkspaceDataSource({
     operation: "listLocalSubjectDayEntries",
     subjectId: scope.subjectId,

@@ -46,6 +46,7 @@ export type WorkspaceTabState = {
 
 export type CustomSubjectState = {
   id: string
+  storageKey?: string
   name: string
   color: string
   tabId: string

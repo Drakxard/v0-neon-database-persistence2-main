@@ -49,6 +49,7 @@ function normalizeCustomSubjects(input: Partial<WorkspaceState>["customSubjects"
 
     accumulator[subjectId] = {
       id: subject.id,
+      storageKey: typeof subject.storageKey === "string" && subject.storageKey.trim() ? subject.storageKey.trim() : subject.id,
       name: subject.name,
       color: subject.color,
       tabId: subject.tabId,

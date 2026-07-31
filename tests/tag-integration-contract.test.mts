@@ -77,6 +77,17 @@ test("el visor PDF.js captura y persiste varias regiones por tag", () => {
   assert.doesNotMatch(viewer, /RegionPresentationClient/)
 })
 
+test("Escape sale de presentacion sin cerrar el visor PDF.js", () => {
+  const pdfJs = source("public/pdfjs/web/viewer-custom.js")
+  const escapeHandler = pdfJs.match(
+    /function handleViewerEscape\(event\) \{([\s\S]*?)\n  \}\n\n  function showLoadingOverlay/
+  )?.[1]
+
+  assert.ok(escapeHandler, "debe existir el manejador de Escape del visor")
+  assert.match(escapeHandler, /event\?\.preventDefault\?\.\(\)/)
+  assert.doesNotMatch(escapeHandler, /navigateBackToApp|viewerRequestClose|location\.assign/)
+})
+
 test("el visor exporta rangos inclusivos copiando paginas PDF sin rasterizarlas", () => {
   const pdfJs = source("public/pdfjs/web/viewer-custom.js")
   const css = source("public/pdfjs/web/viewer-custom.css")

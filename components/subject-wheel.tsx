@@ -31,12 +31,18 @@ import { getHomeSubjectCountdown } from "@/lib/home-schedule"
 import {
   cleanupLocalSubjectWeekIfEmpty,
   createObjectUrlForWorkspaceFile,
+  ensureLocalSubjectForName,
+  deleteLocalSubjectPermanently,
+  getLocalSubjectDeletionSummary,
   getLocalCronograma,
+  getLatestLocalSubjectContentDate,
   isWorkspaceFileId,
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
   readLocalWorkspaceTabsState,
+  renameLocalCatalogSubject,
   saveLocalWorkspaceTabsState,
+  type LocalSubjectDeletionSummary,
 } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
 import { cn } from "@/lib/utils"
@@ -99,6 +105,7 @@ type WorkspaceTab = {
 }
 
 type CustomSubject = Subject & {
+  storageKey?: string
   tabId: string
   createdAt: string
   targetWeekday: number
@@ -126,8 +133,26 @@ const NIGHT_SUBJECT_COLORS: Record<string, string> = {
 
 const LOCAL_STORAGE_MODE = isLocalStorageMode()
 const MAIN_WORKSPACE_TAB_ID = "main"
+const RECOVERED_WORKSPACE_TAB_ID = "tab-recovered"
 const WORKSPACE_TABS_STORAGE_KEY = "subject-wheel:workspace-tabs:v1"
+const LOCAL_REQUEST_TIMEOUT_MS = 15_000
 const CUSTOM_SUBJECT_PALETTE = ["#0098C8", "#2563eb", "#ea580c", "#dc2626", "#16a34a", "#a855f7", "#0f766e", "#4f46e5"] as const
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 const CUSTOM_SUBJECT_WEEKDAYS = [
   { label: "Lunes", value: 0 },
   { label: "Martes", value: 1 },
@@ -531,6 +556,7 @@ function normalizeCustomSubject(subject: CustomSubject | (Subject & Partial<Cust
 
   return {
     id: subject.id,
+    storageKey: typeof subject.storageKey === "string" && subject.storageKey.trim() ? subject.storageKey.trim() : subject.id,
     name: subject.name,
     color: subject.color,
     tabId: typeof subject.tabId === "string" && subject.tabId.trim() ? subject.tabId : "",
@@ -1213,6 +1239,9 @@ export function SubjectWheel({
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
   const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
   const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<DeleteConfirmationTarget | null>(null)
+  const [permanentDeleteSummary, setPermanentDeleteSummary] = useState<LocalSubjectDeletionSummary | null>(null)
+  const [isPreparingPermanentDelete, setIsPreparingPermanentDelete] = useState(false)
+  const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false)
   const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
@@ -1430,7 +1459,7 @@ export function SubjectWheel({
     setIsCreateCustomSubjectOpen(true)
   }, [])
 
-  const saveCustomSubject = useCallback(() => {
+  const saveCustomSubject = useCallback(async () => {
     const name = customSubjectNameDraft.trim()
     if (!name || (!LOCAL_STORAGE_MODE && activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID)) return
     if (workspaceTabList.length === 0) {
@@ -1442,39 +1471,69 @@ export function SubjectWheel({
       const existingSubject = customSubjects[editingCustomSubjectId]
       if (!existingSubject) return
 
+      const catalogSubject = await renameLocalCatalogSubject(editingCustomSubjectId, name).catch((error) => {
+        setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo actualizar el catalogo de la materia.")
+        return null
+      })
+      if (!catalogSubject) {
+        setWorkspaceNoticeMessage("No se pudo actualizar el catalogo de la materia.")
+        return
+      }
       hasUserChangedWorkspaceStateRef.current = true
       const nextSubject: CustomSubject = {
         ...existingSubject,
-        name,
+        id: catalogSubject.id,
+        storageKey: catalogSubject.storageKey,
+        name: catalogSubject.name,
         color: customSubjectColorDraft,
         targetWeekday: customSubjectWeekdayDraft,
       }
-      setCustomSubjects((previous) => ({
-        ...previous,
-        [editingCustomSubjectId]: nextSubject,
-      }))
-      setActiveSubjects((previous) => previous.map((subject) => (subject.id === nextSubject.id ? nextSubject : subject)))
-      setCompletedSubjects((previous) => previous.map((subject) => (subject.id === nextSubject.id ? nextSubject : subject)))
-      setCurrentSubject((previous) => (previous?.id === nextSubject.id ? nextSubject : previous))
+      setCustomSubjects((previous) => {
+        const next = { ...previous }
+        delete next[editingCustomSubjectId]
+        const targetSubject = next[catalogSubject.id]
+        next[catalogSubject.id] = targetSubject
+          ? { ...targetSubject, name: catalogSubject.name, storageKey: catalogSubject.storageKey }
+          : nextSubject
+        return next
+      })
+      if (catalogSubject.id !== editingCustomSubjectId) {
+        setWorkspaceTabs((previous) => Object.fromEntries(Object.entries(previous).map(([tabId, tab]) => [
+          tabId,
+          { ...tab, subjectIds: Array.from(new Set(tab.subjectIds.map((id) => id === editingCustomSubjectId ? catalogSubject.id : id))) },
+        ])))
+      }
+      setActiveSubjects((previous) => previous.map((subject) => (subject.id === editingCustomSubjectId ? nextSubject : subject)))
+      setCompletedSubjects((previous) => previous.map((subject) => (subject.id === editingCustomSubjectId ? nextSubject : subject)))
+      setCurrentSubject((previous) => (previous?.id === editingCustomSubjectId ? nextSubject : previous))
       resetCustomSubjectDraft()
       setIsCreateCustomSubjectOpen(false)
       return
     }
 
-    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const catalogSubject = await ensureLocalSubjectForName(name).catch((error) => {
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo crear la materia.")
+      return null
+    })
+    if (!catalogSubject) return
+    const id = catalogSubject.id
+    const existingSubject = customSubjects[id]
     const nextSubject: CustomSubject = {
       id,
-      name,
-      color: customSubjectColorDraft,
+      storageKey: catalogSubject.storageKey,
+      name: catalogSubject.name,
+      color: existingSubject?.color ?? customSubjectColorDraft,
       tabId: activeWorkspaceTabId,
-      createdAt: new Date().toISOString(),
-      targetWeekday: customSubjectWeekdayDraft,
+      createdAt: existingSubject?.createdAt ?? catalogSubject.createdAt,
+      targetWeekday: existingSubject?.targetWeekday ?? customSubjectWeekdayDraft,
     }
 
     hasUserChangedWorkspaceStateRef.current = true
     setCustomSubjects((previous) => ({
       ...previous,
-      [id]: nextSubject,
+      [id]: previous[id]
+        ? { ...previous[id], ...(activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID ? { tabId: MAIN_WORKSPACE_TAB_ID } : {}) }
+        : nextSubject,
     }))
     setWorkspaceTabs((previous) => {
       if (activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return previous
@@ -1486,7 +1545,7 @@ export function SubjectWheel({
         ...previous,
         [activeWorkspaceTabId]: {
           ...currentTab,
-          subjectIds: [...currentTab.subjectIds, id],
+          subjectIds: Array.from(new Set([...currentTab.subjectIds, id])),
         },
       }
     })
@@ -1494,7 +1553,6 @@ export function SubjectWheel({
     setIsCreateCustomSubjectOpen(false)
   }, [
     activeWorkspaceTabId,
-    completedSubjects,
     customSubjectColorDraft,
     customSubjectNameDraft,
     customSubjectWeekdayDraft,
@@ -1590,58 +1648,115 @@ export function SubjectWheel({
       return
     }
 
+    if (deleteConfirmationTarget.type === "tab" && deleteConfirmationTarget.id === RECOVERED_WORKSPACE_TAB_ID) {
+      setDeleteConfirmationTarget(null)
+      setWorkspaceNoticeMessage("La pestaña Recuperadas es el espejo de los datos sin vincular y no se puede borrar.")
+      return
+    }
+
+    if (deleteConfirmationTarget.type === "subject" && activeWorkspaceTabId === RECOVERED_WORKSPACE_TAB_ID) {
+      setDeleteConfirmationTarget(null)
+      setWorkspaceNoticeMessage("Esta materia sigue existiendo en el disco. Renombrala, agregala a otra pestaña o usa Eliminar de verdad.")
+      return
+    }
+
     hasUserChangedWorkspaceStateRef.current = true
+
+    const timestamp = new Date().toISOString()
+    const nextTabs = { ...workspaceTabs }
+    let nextMainVisible = isMainWorkspaceTabVisible
+    const affectedSubjectIds = new Set<string>()
 
     if (deleteConfirmationTarget.type === "subject") {
       const subjectId = deleteConfirmationTarget.id
-      setCustomSubjects((previous) => {
-        const next = { ...previous }
-        delete next[subjectId]
-        return next
-      })
-      setWorkspaceTabs((previous) => {
-        const nextTabs = { ...previous }
-        for (const [tabId, tab] of Object.entries(nextTabs)) {
-          if (!tab.subjectIds.includes(subjectId)) continue
-          nextTabs[tabId] = {
-            ...tab,
-            subjectIds: tab.subjectIds.filter((currentSubjectId) => currentSubjectId !== subjectId),
-          }
+      affectedSubjectIds.add(subjectId)
+      if (activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID && nextTabs[activeWorkspaceTabId]) {
+        nextTabs[activeWorkspaceTabId] = {
+          ...nextTabs[activeWorkspaceTabId],
+          subjectIds: nextTabs[activeWorkspaceTabId].subjectIds.filter((id) => id !== subjectId),
         }
-        return nextTabs
-      })
+      }
     } else {
       const isMainTabTarget = deleteConfirmationTarget.id === MAIN_WORKSPACE_TAB_ID
-      const tabToDelete = isMainTabTarget ? getMainWorkspaceTab() : workspaceTabs[deleteConfirmationTarget.id]
-      const deletedSubjectIds = new Set(
-        isMainTabTarget
-          ? Object.values(customSubjects)
-              .filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID)
-              .map((subject) => subject.id)
-          : tabToDelete?.subjectIds ?? []
-      )
-
-      if (isMainTabTarget) {
-        setIsMainWorkspaceTabVisible(false)
-      } else {
-        setWorkspaceTabs((previous) => {
-          const next = { ...previous }
-          delete next[deleteConfirmationTarget.id]
-          return next
-        })
+      const tabToDelete = isMainTabTarget ? getMainWorkspaceTab() : nextTabs[deleteConfirmationTarget.id]
+      for (const subjectId of isMainTabTarget
+        ? Object.values(customSubjects).filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID).map((subject) => subject.id)
+        : tabToDelete?.subjectIds ?? []) {
+        affectedSubjectIds.add(subjectId)
       }
-      setCustomSubjects((previous) =>
-        Object.fromEntries(Object.entries(previous).filter(([subjectId]) => !deletedSubjectIds.has(subjectId)))
-      )
+      if (isMainTabTarget) nextMainVisible = false
+      else delete nextTabs[deleteConfirmationTarget.id]
+    }
 
-      if (activeWorkspaceTabId === deleteConfirmationTarget.id) {
-        const nextTab = workspaceTabList.find((tab) => tab.id !== deleteConfirmationTarget.id)
-        setActiveWorkspaceTabId(nextTab?.id ?? MAIN_WORKSPACE_TAB_ID)
+    const linkedIds = new Set(Object.values(nextTabs).flatMap((tab) => tab.subjectIds))
+    const orphanedIds = Array.from(affectedSubjectIds).filter((subjectId) => !linkedIds.has(subjectId))
+    if (orphanedIds.length > 0) {
+      const recoveredTab = nextTabs[RECOVERED_WORKSPACE_TAB_ID]
+      nextTabs[RECOVERED_WORKSPACE_TAB_ID] = {
+        id: RECOVERED_WORKSPACE_TAB_ID,
+        name: "Recuperadas",
+        color: "#92400e",
+        createdAt: recoveredTab?.createdAt ?? timestamp,
+        orderIndex: recoveredTab?.orderIndex ?? Object.keys(nextTabs).length,
+        subjectIds: Array.from(new Set([...(recoveredTab?.subjectIds ?? []), ...orphanedIds])),
       }
     }
 
+    const nextSubjects = Object.fromEntries(Object.entries(customSubjects).map(([subjectId, subject]) => {
+      if (!orphanedIds.includes(subjectId)) return [subjectId, subject]
+      return [subjectId, { ...subject, tabId: RECOVERED_WORKSPACE_TAB_ID }]
+    }))
+    setWorkspaceTabs(nextTabs)
+    setCustomSubjects(nextSubjects)
+    setIsMainWorkspaceTabVisible(nextMainVisible)
+
+    if (deleteConfirmationTarget.type === "tab" && activeWorkspaceTabId === deleteConfirmationTarget.id) {
+      const nextTab = getWorkspaceTabList(nextTabs, nextMainVisible).find((tab) => tab.id !== deleteConfirmationTarget.id)
+      setActiveWorkspaceTabId(nextTab?.id ?? RECOVERED_WORKSPACE_TAB_ID)
+    }
+
     setDeleteConfirmationTarget(null)
-  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, workspaceTabList, workspaceTabs])
+  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, isMainWorkspaceTabVisible, workspaceTabList, workspaceTabs])
+
+  const preparePermanentSubjectDelete = useCallback(async () => {
+    if (!deleteConfirmationTarget || deleteConfirmationTarget.type !== "subject") return
+    setIsPreparingPermanentDelete(true)
+    try {
+      setPermanentDeleteSummary(await getLocalSubjectDeletionSummary(deleteConfirmationTarget.id))
+    } catch (error) {
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo inspeccionar la materia.")
+    } finally {
+      setIsPreparingPermanentDelete(false)
+    }
+  }, [deleteConfirmationTarget])
+
+  const confirmPermanentSubjectDelete = useCallback(async () => {
+    if (!permanentDeleteSummary) return
+    setIsPermanentlyDeleting(true)
+    try {
+      await deleteLocalSubjectPermanently(permanentDeleteSummary.subjectId)
+      hasUserChangedWorkspaceStateRef.current = true
+      setCustomSubjects((previous) => Object.fromEntries(
+        Object.entries(previous).filter(([subjectId]) => subjectId !== permanentDeleteSummary.subjectId)
+      ))
+      setWorkspaceTabs((previous) => Object.fromEntries(Object.entries(previous).map(([tabId, tab]) => [
+        tabId,
+        { ...tab, subjectIds: tab.subjectIds.filter((subjectId) => subjectId !== permanentDeleteSummary.subjectId) },
+      ])))
+      setActiveSubjects((previous) => previous.filter((subject) => subject.id !== permanentDeleteSummary.subjectId))
+      setCompletedSubjects((previous) => previous.filter((subject) => subject.id !== permanentDeleteSummary.subjectId))
+      setDeleteConfirmationTarget(null)
+      setPermanentDeleteSummary(null)
+      toast({
+        title: "Materia eliminada definitivamente",
+        description: `Se eliminaron ${permanentDeleteSummary.fileCount} archivos de ${permanentDeleteSummary.name}.`,
+      })
+    } catch (error) {
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo eliminar la materia.")
+    } finally {
+      setIsPermanentlyDeleting(false)
+    }
+  }, [permanentDeleteSummary])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -2605,20 +2720,11 @@ export function SubjectWheel({
 
       const materialRequestUrls =
         isWeeklyExercisesScope
-          ? [
-              `/api/subject-day-materials?${new URLSearchParams({
-                subjectId: currentSubject.id,
-                weekNumber: String(dialogSelectedWeekNumber),
-                scope: "week",
-                materialType: "theory",
-              }).toString()}`,
-              `/api/subject-day-materials?${new URLSearchParams({
-                subjectId: currentSubject.id,
-                weekNumber: String(dialogSelectedWeekNumber),
-                scope: "week",
-                materialType: "practice",
-              }).toString()}`,
-            ]
+          ? [`/api/subject-day-materials?${new URLSearchParams({
+              subjectId: currentSubject.id,
+              weekNumber: String(dialogSelectedWeekNumber),
+              scope: "week",
+            }).toString()}`]
           : [`/api/subject-day-materials?${new URLSearchParams({
               subjectId: currentSubject.id,
               weekNumber: String(dialogSelectedWeekNumber),
@@ -2626,7 +2732,7 @@ export function SubjectWheel({
             }).toString()}`]
 
       const [entriesResult, ...materialResults] = await Promise.all([
-        fetch(`/api/subject-day-entries?${entriesParams.toString()}`)
+        withTimeout(fetch(`/api/subject-day-entries?${entriesParams.toString()}`), LOCAL_REQUEST_TIMEOUT_MS, "La lectura de dudas tardo demasiado. Podes reintentar.")
           .then(async (response) => {
             const payload = await parseJsonResponse(response)
             return {
@@ -2641,7 +2747,7 @@ export function SubjectWheel({
             error: error instanceof Error ? error.message : "No se pudieron cargar las dudas del dia.",
           })),
         ...materialRequestUrls.map((url) =>
-          fetch(url)
+          withTimeout(fetch(url), LOCAL_REQUEST_TIMEOUT_MS, "La lectura de materiales tardo demasiado. Podes reintentar.")
             .then(async (response) => {
               const payload = await parseJsonResponse(response)
               return {
@@ -3021,11 +3127,25 @@ export function SubjectWheel({
   }
 
   const handleSubjectClick = async (subject: Subject) => {
-    const weekNumbers = await loadCurrentSubjectWeekState(subject.id)
+    let weekNumbers: number[] = []
+    try {
+      weekNumbers = await withTimeout(
+        loadCurrentSubjectWeekState(subject.id),
+        LOCAL_REQUEST_TIMEOUT_MS,
+        "La exploracion de la materia tardo demasiado."
+      )
+    } catch (error) {
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo explorar la materia.")
+    }
     setCurrentSubject(subject)
     if (LOCAL_STORAGE_MODE && weekNumbers.length > 0) {
+      const latestContentDate = await withTimeout(
+        getLatestLocalSubjectContentDate(subject.id, weekNumbers[0]),
+        LOCAL_REQUEST_TIMEOUT_MS,
+        "La busqueda del ultimo material tardo demasiado."
+      ).catch(() => null)
       const latestWeekStart = getWeekDates(weekNumbers[0])[0]
-      setDialogDateKey(latestWeekStart ? formatDateKey(latestWeekStart) : currentDateKey)
+      setDialogDateKey(latestContentDate ?? (latestWeekStart ? formatDateKey(latestWeekStart) : currentDateKey))
     } else {
       setDialogDateKey(currentDateKey)
     }
@@ -6518,15 +6638,22 @@ export function SubjectWheel({
                 ) : (
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <a
-                        href={buildMaterialViewerHref(material)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        draggable={false}
-                        className="block min-w-0 truncate text-sm text-foreground hover:underline"
-                      >
-                        {material.file_name}
-                      </a>
+                      {material.local_file_status === "missing" ? (
+                        <div>
+                          <span className="block min-w-0 truncate text-sm text-red-700">{material.file_name}</span>
+                          <span className="text-xs text-red-600">El manifiesto existe, pero falta el archivo. No se elimino la referencia.</span>
+                        </div>
+                      ) : (
+                        <a
+                          href={buildMaterialViewerHref(material)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          draggable={false}
+                          className="block min-w-0 truncate text-sm text-foreground hover:underline"
+                        >
+                          {material.file_name}
+                        </a>
+                      )}
                       <div className="mt-2 flex flex-wrap gap-1">
                         {materialTags.workspace.tags
                           .filter((tag) => (materialTags.workspace.assignments[String(material.id)] ?? []).includes(tag.id))
@@ -7311,30 +7438,57 @@ export function SubjectWheel({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(deleteConfirmationTarget)} onOpenChange={(open) => (!open ? setDeleteConfirmationTarget(null) : undefined)}>
+      <Dialog open={Boolean(deleteConfirmationTarget)} onOpenChange={(open) => {
+        if (!open && !isPermanentlyDeleting) {
+          setDeleteConfirmationTarget(null)
+          setPermanentDeleteSummary(null)
+        }
+      }}>
         <DialogContent
-          className="max-w-xs"
+          className="max-w-sm"
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !permanentDeleteSummary) {
               event.preventDefault()
               confirmDeleteTarget()
             }
           }}
         >
           <DialogHeader>
-            <DialogTitle>Borrar?</DialogTitle>
-            <DialogDescription>{deleteConfirmationTarget?.label ?? ""}</DialogDescription>
+            <DialogTitle>{permanentDeleteSummary ? "Eliminar definitivamente?" : "Borrar?"}</DialogTitle>
+            <DialogDescription>
+              {permanentDeleteSummary
+                ? `${permanentDeleteSummary.name}: ${permanentDeleteSummary.fileCount} archivos, ${permanentDeleteSummary.materialCount} materiales y ${permanentDeleteSummary.entryCount} entradas. Esta accion no se puede deshacer.`
+                : deleteConfirmationTarget?.label ?? ""}
+            </DialogDescription>
           </DialogHeader>
 
           <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline">
-                Cancelar
-              </Button>
-            </DialogClose>
-            <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
-              Borrar
-            </Button>
+            {permanentDeleteSummary ? (
+              <>
+                <Button type="button" variant="outline" onClick={() => setPermanentDeleteSummary(null)} disabled={isPermanentlyDeleting}>
+                  Volver
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => void confirmPermanentSubjectDelete()} disabled={isPermanentlyDeleting}>
+                  {isPermanentlyDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Eliminar archivos
+                </Button>
+              </>
+            ) : (
+              <>
+                <DialogClose asChild>
+                  <Button type="button" variant="outline">Cancelar</Button>
+                </DialogClose>
+                {LOCAL_STORAGE_MODE && deleteConfirmationTarget?.type === "subject" ? (
+                  <Button type="button" variant="outline" onClick={() => void preparePermanentSubjectDelete()} disabled={isPreparingPermanentDelete} className="text-red-700">
+                    {isPreparingPermanentDelete ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Eliminar de verdad
+                  </Button>
+                ) : null}
+                <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
+                  Desvincular
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -7927,7 +8081,12 @@ export function SubjectWheel({
 
             <div className="flex-1 overflow-y-auto py-4 sm:py-6 sm:pl-14 sm:pr-14">
               {entriesError ? (
-                <div className="mb-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{entriesError}</div>
+                <div className="mb-3 flex items-center justify-between gap-3 border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <span>{entriesError}</span>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void loadSubjectDayData()}>
+                    Reintentar
+                  </Button>
+                </div>
               ) : null}
 
               {isSubjectDayRefreshing ? (

@@ -1424,8 +1424,9 @@
       return;
     }
 
+    // Escape belongs to PDF.js (notably to leave presentation/fullscreen mode).
+    // Closing the viewer is an explicit navigation action, never an Escape side effect.
     event?.preventDefault?.();
-    void navigateBackToApp();
   }
 
   function showLoadingOverlay(message) {

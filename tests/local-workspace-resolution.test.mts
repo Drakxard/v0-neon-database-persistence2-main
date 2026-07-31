@@ -37,3 +37,15 @@ test("resuelve materiales y entradas usando todas las materias locales conocidas
   assert.match(entryResolver, /readEntryManifest\(subjectId, weekNumber\)/)
   assert.doesNotMatch(entryResolver, /for \(const subject of SUBJECTS\)/)
 })
+
+test("las lecturas normales no limpian manifiestos y el estado usa catalogo y respaldo", () => {
+  const weekListStart = localWorkspaceSource.indexOf("async function listWeekNumbersForManifestKind")
+  const synthesisListStart = localWorkspaceSource.indexOf("async function listSynthesisWeekNumbersForSubject")
+  const weekList = localWorkspaceSource.slice(weekListStart, synthesisListStart)
+
+  assert.ok(weekListStart >= 0)
+  assert.doesNotMatch(weekList, /cleanupLocalSubjectWeekIfEmpty/)
+  assert.match(localWorkspaceSource, /subject-catalog\.json/)
+  assert.match(localWorkspaceSource, /workspace-state\.backup\.json/)
+  assert.match(localWorkspaceSource, /reconstructLocalMaterialManifests\(\)/)
+})

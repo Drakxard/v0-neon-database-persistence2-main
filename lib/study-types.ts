@@ -92,6 +92,7 @@ export type SubjectDayMaterial = {
   drive_web_view_link: string
   is_checkup_done: boolean
   tags?: StudyTag[]
+  local_file_status?: "available" | "missing" | "recovered"
   created_at: string
   updated_at: string
 }
