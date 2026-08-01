@@ -1033,7 +1033,13 @@ export function PracticeViewerClient({
   }, [material])
 
   useEffect(() => {
-    if (!isLocalMode || material || !Number.isInteger(materialId)) return
+    if (!isLocalMode || !rootHandle) return
+    postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
+    postToViewer({ type: "viewerWorkspaceMode", mode: "local" })
+  }, [isLocalMode, postToViewer, rootHandle])
+
+  useEffect(() => {
+    if (!isLocalMode || material || !Number.isInteger(materialId) || !rootHandle) return
 
     let cancelled = false
     const resolvedMaterialId = materialId as number
@@ -1069,7 +1075,7 @@ export function PracticeViewerClient({
     return () => {
       cancelled = true
     }
-  }, [isLocalMode, material, materialId])
+  }, [isLocalMode, material, materialId, rootHandle])
 
   useEffect(() => {
     void loadPositions()
@@ -1146,7 +1152,7 @@ export function PracticeViewerClient({
   }, [discardRecording, disposePairDraft, stopMediaTracks, stopPreviewPlayback])
 
   return (
-    <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 text-white">
+    <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-[#d4d4d7] text-white">
       {canRenderViewer ? (
         <iframe
           key={viewerIdentity}

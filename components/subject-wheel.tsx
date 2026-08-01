@@ -245,8 +245,23 @@ type SynthesisSubjectState = {
   error: string
 }
 
-function buildMaterialViewerHref(material: SubjectDayMaterial) {
-  return `/practice/viewer?${new URLSearchParams({ materialId: String(material.id) }).toString()}`
+function appendMaterialViewerParams(params: URLSearchParams, material: SubjectDayMaterial, subjectName: string) {
+  params.set("materialId", String(material.id))
+  params.set("subjectId", material.subject_id)
+  params.set("subjectName", subjectName || material.subject_id)
+  params.set("sessionDate", material.session_date)
+  params.set("weekNumber", String(material.week_number))
+  params.set("weekdayIndex", String(material.weekday_index))
+  params.set("materialType", material.material_type)
+  params.set("fileName", material.file_name)
+  params.set("workspaceFileId", material.drive_file_id)
+  params.set("sourceRevision", `${material.drive_file_id}:${material.updated_at}`)
+}
+
+function buildMaterialViewerHref(material: SubjectDayMaterial, subjectName: string) {
+  const params = new URLSearchParams()
+  appendMaterialViewerParams(params, material, subjectName)
+  return `/practice/viewer?${params.toString()}`
 }
 
 const VIEWER_RETURN_STORAGE_PREFIX = "subject-wheel:return:"
@@ -857,8 +872,9 @@ function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcu
   return shortcutKey === "e_fich" ? shortcuts.eFich : shortcutKey === "figma" ? shortcuts.figma : shortcuts.nlm
 }
 
-function buildMaterialRegionPresentationHref(materialId: number, tagIds: number[]) {
-  const params = new URLSearchParams({ materialId: String(materialId) })
+function buildMaterialRegionPresentationHref(material: SubjectDayMaterial, subjectName: string, tagIds: number[]) {
+  const params = new URLSearchParams()
+  appendMaterialViewerParams(params, material, subjectName)
   params.set("presentationTagIds", tagIds.join(","))
   return `/practice/viewer?${params.toString()}`
 }
@@ -6685,7 +6701,7 @@ export function SubjectWheel({
                         </div>
                       ) : (
                         <a
-                          href={buildMaterialViewerHref(material)}
+                          href={buildMaterialViewerHref(material, getSubjectDisplayName(currentSubject))}
                           target="_blank"
                           rel="noopener noreferrer"
                           draggable={false}
@@ -6742,7 +6758,7 @@ export function SubjectWheel({
                             type="button"
                             variant="ghost"
                             size="icon"
-                            onClick={() => window.open(buildMaterialRegionPresentationHref(material.id, filteredIds), "_blank", "noopener,noreferrer")}
+                            onClick={() => window.open(buildMaterialRegionPresentationHref(material, getSubjectDisplayName(currentSubject), filteredIds), "_blank", "noopener,noreferrer")}
                             className="h-7 w-7 rounded-full text-muted-foreground"
                             aria-label={`Presentar recortes de ${material.file_name}`}
                             title="Presentar recortes de los tags activos"
@@ -8508,7 +8524,7 @@ export function SubjectWheel({
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                           <a
-                            href={buildMaterialViewerHref(currentContinueMaterial)}
+                            href={buildMaterialViewerHref(currentContinueMaterial, getSubjectDisplayName(currentSubject))}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-medium underline-offset-2 hover:underline"

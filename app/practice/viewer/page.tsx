@@ -30,6 +30,9 @@ type ViewerPageProps = {
     weekNumber?: string
     weekdayIndex?: string
     materialType?: string
+    fileName?: string
+    workspaceFileId?: string
+    sourceRevision?: string
     returnToken?: string
     presentationTagIds?: string
   }>
@@ -52,7 +55,10 @@ type MaterialContext = {
   sessionDate: string
   weekNumber: number
   weekdayIndex: number
+  materialType?: "practice" | "theory"
   fileName: string
+  workspaceFileId?: string | null
+  sourceRevision?: string
   returnToken?: string
 }
 
@@ -104,6 +110,9 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const weekNumber = Number.parseInt(params.weekNumber || "", 10)
   const weekdayIndex = Number.parseInt(params.weekdayIndex || "", 10)
   const returnToken = (params.returnToken || "").trim()
+  const fileName = (params.fileName || "").trim()
+  const workspaceFileId = (params.workspaceFileId || "").trim()
+  const sourceRevision = (params.sourceRevision || "").trim()
   const presentationTagIds = Array.from(new Set(
     String(params.presentationTagIds || "")
       .split(",")
@@ -175,9 +184,37 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   }
 
   if (isLocalStorageMode()) {
+    const hasImmediateLocalMaterialContext =
+      Boolean(subjectId) &&
+      Boolean(resolvedSubjectName) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(sessionDate) &&
+      !Number.isNaN(parsedSessionDate.getTime()) &&
+      Number.isInteger(weekNumber) &&
+      Number.isInteger(weekdayIndex) &&
+      Boolean(materialType) &&
+      Boolean(fileName) &&
+      workspaceFileId.startsWith("workspace://")
+
     return (
       <PracticeViewerClient
-        materialId={materialId}
+        material={
+          hasImmediateLocalMaterialContext
+            ? {
+                id: materialId,
+                subjectId,
+                subjectName: resolvedSubjectName,
+                sessionDate,
+                weekNumber,
+                weekdayIndex,
+                materialType: materialType as "practice" | "theory",
+                fileName,
+                workspaceFileId,
+                sourceRevision: sourceRevision || `${workspaceFileId}:current`,
+                returnToken,
+              }
+            : undefined
+        }
+        materialId={hasImmediateLocalMaterialContext ? undefined : materialId}
         mode="standalone"
         returnToken={returnToken}
         presentationTagIds={presentationTagIds}

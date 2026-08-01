@@ -1,9 +1,9 @@
 "use client"
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
+import { usePathname } from "next/navigation"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
-import { WorkspaceStartupScreen } from "@/components/workspace-startup-screen"
 import {
   ensureWorkspaceSubdirectories,
   loadWorkspaceHandle,
@@ -104,6 +104,7 @@ export function LocalWorkspaceProvider({
   enabled: boolean
   children: React.ReactNode
 }) {
+  const pathname = usePathname()
   const [bootState, setBootState] = useState<LocalWorkspaceBootState>(enabled ? "checking" : "ready")
   const [rootHandle, setRootHandle] = useState<FileSystemDirectoryHandle | null>(null)
   const [storedHandle, setStoredHandle] = useState<FileSystemDirectoryHandle | null>(null)
@@ -112,6 +113,7 @@ export function LocalWorkspaceProvider({
   )
   const [error, setError] = useState("")
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
+  const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
   useEffect(() => {
     if (!enabled) {
@@ -273,8 +275,7 @@ export function LocalWorkspaceProvider({
   return (
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
-      {!enabled || isReady ? children : null}
-      {enabled && !isReady ? <WorkspaceStartupScreen /> : null}
+      {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState !== "ready" && bootState !== "checking" ? (
         <WorkspaceModal
           bootState={bootState}

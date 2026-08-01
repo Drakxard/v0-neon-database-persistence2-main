@@ -1,14 +1,13 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import test from "node:test"
 
 function source(path: string) {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
 }
 
-test("la ruta inicial usa un loader liviano y nunca deja el workspace en blanco", () => {
+test("la ruta inicial carga la rueda sin una vista previa transitoria", () => {
   const page = source("app/page.tsx")
-  const routeLoading = source("app/loading.tsx")
   const loader = source("components/subject-wheel-loader.tsx")
   const provider = source("components/local-workspace-provider.tsx")
 
@@ -16,14 +15,14 @@ test("la ruta inicial usa un loader liviano y nunca deja el workspace en blanco"
   assert.doesNotMatch(page, /from "@\/components\/subject-wheel"/)
   assert.match(loader, /dynamic\(/)
   assert.match(loader, /ssr: false/)
-  assert.match(loader, /WorkspaceStartupScreen/)
-  assert.match(provider, /enabled && !isReady \? <WorkspaceStartupScreen \/>/)
-  assert.match(routeLoading, /WorkspaceStartupScreen/)
+  assert.doesNotMatch(loader, /WorkspaceStartupScreen/)
+  assert.doesNotMatch(provider, /WorkspaceStartupScreen/)
+  assert.equal(existsSync(new URL("../app/loading.tsx", import.meta.url)), false)
+  assert.equal(existsSync(new URL("../components/workspace-startup-screen.tsx", import.meta.url)), false)
 })
 
-test("la última pestaña se usa como cache descartable mientras llega el manifiesto", () => {
+test("la rueda real usa la última pestaña como cache descartable mientras llega el manifiesto", () => {
   const wheel = source("components/subject-wheel.tsx")
-  const startup = source("components/workspace-startup-screen.tsx")
   const saveStart = wheel.indexOf("function saveWorkspaceTabsState")
   const saveEnd = wheel.indexOf("function hasWorkspaceTabsStateContent")
   const saveFunction = wheel.slice(saveStart, saveEnd)
@@ -31,9 +30,32 @@ test("la última pestaña se usa como cache descartable mientras llega el manifi
   assert.match(wheel, /\(\) => loadWorkspaceTabsState\(\)/)
   assert.doesNotMatch(saveFunction, /if \(LOCAL_STORAGE_MODE\) return/)
   assert.match(wheel, /hasCachedWorkspaceStateRef/)
-  assert.match(wheel, /pointer-events-none/)
-  assert.match(startup, /subject-wheel:workspace-tabs:v1/)
-  assert.match(startup, /activeWorkspaceTabId/)
+  assert.match(wheel, /isRefreshingCachedHome/)
+  assert.match(wheel, /Actualizando datos locales/)
+})
+
+test("el visor local monta PDF.js con el contexto conocido y sin una espera negra", () => {
+  const wheel = source("components/subject-wheel.tsx")
+  const page = source("app/practice/viewer/page.tsx")
+  const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
+  const provider = source("components/local-workspace-provider.tsx")
+  const pdfJs = source("public/pdfjs/web/viewer-custom.js")
+
+  assert.match(wheel, /function appendMaterialViewerParams/)
+  assert.match(wheel, /params\.set\("workspaceFileId", material\.drive_file_id\)/)
+  assert.match(wheel, /params\.set\("sourceRevision"/)
+  assert.match(wheel, /appendMaterialViewerParams\(params, material, subjectName\)[\s\S]*presentationTagIds/)
+  assert.match(page, /hasImmediateLocalMaterialContext/)
+  assert.match(page, /materialId=\{hasImmediateLocalMaterialContext \? undefined : materialId\}/)
+  assert.match(viewer, /bg-\[#d4d4d7\]/)
+  assert.match(viewer, /if \(!isLocalMode \|\| !rootHandle\) return/)
+  assert.match(viewer, /getLocalMaterialById\(resolvedMaterialId\)/)
+  assert.match(viewer, /!Number\.isInteger\(materialId\) \|\| !rootHandle/)
+  assert.match(viewer, /\[isLocalMode, material, materialId, rootHandle\]/)
+  assert.match(provider, /pathname === "\/practice\/viewer"/)
+  assert.match(provider, /isReady \|\| canRenderBeforeWorkspaceReady/)
+  assert.match(pdfJs, /isOpeningLocalWorkspaceDocument/)
+  assert.match(pdfJs, /Custom PDF\.js local workspace retry failed/)
 })
 
 test("el bootstrap rápido queda separado de la reconciliación en segundo plano", () => {

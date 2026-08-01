@@ -56,6 +56,7 @@
     workspaceMode: "remote",
     workspaceRootHandle: null,
     localWorkspaceObjectUrl: "",
+    isOpeningLocalWorkspaceDocument: false,
     tagButton: null,
     tagPanel: null,
     tagInput: null,
@@ -316,18 +317,35 @@
     if (!isLocalWorkspaceMode() || !state.query?.workspaceFileId || !state.app?.open) {
       return false;
     }
+    if (state.isOpeningLocalWorkspaceDocument) {
+      return false;
+    }
+    if (state.localWorkspaceObjectUrl && state.app?.pdfDocument) {
+      return true;
+    }
 
+    state.isOpeningLocalWorkspaceDocument = true;
     cleanupLocalWorkspaceObjectUrl();
-    const objectUrl = await createLocalWorkspaceObjectUrl();
-    state.localWorkspaceObjectUrl = objectUrl;
+    let objectUrl = "";
 
-    await state.app.open({
-      url: objectUrl,
-      originalUrl: objectUrl,
-      filename: state.query.fileName || "material.pdf",
-    });
-    refreshDocumentViewerMetadata();
-    return true;
+    try {
+      objectUrl = await createLocalWorkspaceObjectUrl();
+      state.localWorkspaceObjectUrl = objectUrl;
+      await state.app.open({
+        url: objectUrl,
+        originalUrl: objectUrl,
+        filename: state.query.fileName || "material.pdf",
+      });
+      refreshDocumentViewerMetadata();
+      return true;
+    } catch (error) {
+      if (objectUrl && state.localWorkspaceObjectUrl === objectUrl) {
+        cleanupLocalWorkspaceObjectUrl();
+      }
+      throw error;
+    } finally {
+      state.isOpeningLocalWorkspaceDocument = false;
+    }
   }
 
   function ensureUi() {
@@ -2864,6 +2882,17 @@
 
     if (event.data.type === "viewerWorkspaceRootHandle" && event.data.handle) {
       state.workspaceRootHandle = event.data.handle;
+      if (
+        isLocalWorkspaceMode() &&
+        state.query?.workspaceFileId &&
+        !state.localWorkspaceObjectUrl &&
+        !state.isOpeningLocalWorkspaceDocument
+      ) {
+        void openLocalWorkspaceDocumentInViewer().catch((error) => {
+          console.error("Custom PDF.js local workspace retry failed:", error);
+          showToast(error instanceof Error ? error.message : "No se pudo abrir el PDF local.", "error", 5000);
+        });
+      }
       return;
     }
 
