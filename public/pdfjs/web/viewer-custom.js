@@ -270,8 +270,7 @@
     return String(workspaceId)
       .slice("workspace://".length)
       .split("/")
-      .map((segment) => segment.trim())
-      .filter(Boolean);
+      .filter((segment) => segment.length > 0);
   }
 
   async function getWorkspaceFileHandle(workspaceId) {
@@ -284,10 +283,10 @@
 
     let directoryHandle = rootHandle;
     for (const segment of segments) {
-      directoryHandle = await directoryHandle.getDirectoryHandle(segment, { create: true });
+      directoryHandle = await directoryHandle.getDirectoryHandle(segment, { create: false });
     }
 
-    return directoryHandle.getFileHandle(fileName, { create: true });
+    return directoryHandle.getFileHandle(fileName, { create: false });
   }
 
   async function syncAnnotatedPdfToLocalWorkspace(pdfBytes, fileName) {
@@ -3224,7 +3223,7 @@
     eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
     eventBus.on("documentloaded", onDocumentLoaded);
-    eventBus.on("documenterror", () => {
+    eventBus.on("documenterror", ({ message, reason } = {}) => {
       updateDraftOverlay();
       refreshSyncButtons();
       refreshCutButton();
@@ -3234,11 +3233,13 @@
         showLoadingOverlay("No se pudo cargar la presentacion.");
       } else {
         hideLoadingOverlay();
+        showToast(reason || message || "No se pudo abrir el PDF.", "error", 5000);
       }
       postToParent({
         type: "viewerDocumentError",
         materialId: state.query?.materialId,
         fileName: state.query?.fileName || "",
+        error: reason || message || "No se pudo abrir el PDF.",
       });
     });
     document.addEventListener("keydown", handleKeyDown, true);
@@ -3258,6 +3259,7 @@
           type: "viewerDocumentError",
           materialId: state.query?.materialId,
           fileName: state.query?.fileName || "",
+          error: error instanceof Error ? error.message : "No se pudo abrir el PDF local.",
         });
       }
     }

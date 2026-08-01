@@ -135,15 +135,17 @@ test("un tag del objeto materia filtra; su x separada es la que lo quita del PDF
   assert.match(subjectWheel, /materialTags\.unassignTag\(material\.id, tag\.id\)/)
 })
 
-test("el visor local valida una sola fuente y el remoto versiona su cache", () => {
+test("el visor abre la fuente real sin prevalidarla ni crear rutas inexistentes", () => {
   const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
-  const cache = source("app/practice/viewer/pdf-memory-cache.ts")
+  const page = source("app/practice/viewer/page.tsx")
   const pdfJs = source("public/pdfjs/web/viewer-custom.js")
-  assert.match(viewer, /validateWorkspaceMaterialIdentity/)
-  assert.match(viewer, /getWorkspaceFile\(resolvedMaterial\.workspaceFileId!\)/)
   assert.match(viewer, /localWorkspaceMode\s*\?\s*""/)
+  assert.match(viewer, /`\/api\/subject-day-materials\/\$\{material\.id\}\/file`/)
   assert.match(viewer, /key=\{viewerIdentity\}/)
-  assert.match(cache, /buildPracticePdfCacheKey/)
-  assert.match(cache, /cache: "no-store"/)
+  assert.doesNotMatch(viewer, /validateWorkspaceMaterialIdentity|preloadPracticePdf|%PDF-/)
+  assert.doesNotMatch(page, /drive_mime_type\s*\|\|.*includes\("pdf"\)/)
+  assert.match(pdfJs, /getDirectoryHandle\(segment, \{ create: false \}\)/)
+  assert.match(pdfJs, /getFileHandle\(fileName, \{ create: false \}\)/)
+  assert.match(pdfJs, /eventBus\.on\("documentloaded", onDocumentLoaded\)/)
   assert.match(pdfJs, /fingerprint: state\.app\?\.pdfDocument\?\.fingerprints/)
 })

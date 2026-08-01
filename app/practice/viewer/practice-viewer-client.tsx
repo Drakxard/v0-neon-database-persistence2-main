@@ -5,14 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { useMaterialTags } from "@/hooks/use-material-tags"
 import { readResponsePayload, requireOkJson, getErrorMessage } from "@/lib/client/api"
-import { createObjectUrlForWorkspaceFile, getLocalMaterialById, getWorkspaceFile } from "@/lib/local-workspace-data"
+import { createObjectUrlForWorkspaceFile, getLocalMaterialById } from "@/lib/local-workspace-data"
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getSubjectById } from "@/lib/subjects"
 import { normalizeTagName } from "@/lib/tag-utils"
-import { validateWorkspaceMaterialIdentity } from "@/lib/workspace-material-identity"
-import { buildPracticePdfCacheKey, preloadPracticePdf, releasePracticePdf } from "./pdf-memory-cache"
 
 type MaterialContext = {
   id: number
@@ -85,7 +83,7 @@ type ViewerMessage =
   | { type: "viewerRequestClose" }
   | { type: "viewerReady" }
   | { type: "viewerDocumentLoaded"; materialId?: number; fileName?: string; fingerprint?: string; numPages?: number }
-  | { type: "viewerDocumentError"; materialId?: number; fileName?: string }
+  | { type: "viewerDocumentError"; materialId?: number; fileName?: string; error?: string }
   | { type: "viewerRequestMaterialTags" }
   | { type: "viewerRequestMaterialTag"; name?: string }
   | { type: "viewerUpdateMaterialTag"; tagId?: number; name?: string; color?: string }
@@ -147,7 +145,6 @@ function buildPairAnchors(anchor: PendingAnchor) {
 function buildViewerSrc({
   material,
   draftContext,
-  fileUrl,
   localWorkspaceMode,
   pendingMaterialId,
   mode,
@@ -156,7 +153,6 @@ function buildViewerSrc({
 }: {
   material?: MaterialContext
   draftContext?: DraftViewerContext
-  fileUrl?: string | null
   localWorkspaceMode?: boolean
   pendingMaterialId?: number
   mode?: "inline" | "standalone"
@@ -170,7 +166,7 @@ function buildViewerSrc({
       "file",
       localWorkspaceMode
         ? ""
-        : fileUrl || `/api/subject-day-materials/${material.id}/file`
+        : `/api/subject-day-materials/${material.id}/file`
     )
     params.set("fileName", material.fileName)
     params.set("key", `subject-day-material-${material.id}:${material.sourceRevision || material.workspaceFileId || "current"}`)
@@ -254,8 +250,6 @@ export function PracticeViewerClient({
   const recordingChunksRef = useRef<Blob[]>([])
   const pairDraftRef = useRef<PairDraft | null>(null)
   const recordingRoleRef = useRef<PairRole | null>(null)
-  const activeCachedPdfKeysRef = useRef<Set<string>>(new Set())
-  const sourceRequestRef = useRef(0)
 
   const [positions, setPositions] = useState<AudioPosition[]>([])
   const [positionsError, setPositionsError] = useState("")
@@ -269,9 +263,7 @@ export function PracticeViewerClient({
   const [draggedRole, setDraggedRole] = useState<PairRole | null>(null)
   const [uploadFeedback, setUploadFeedback] = useState("")
   const [resolvedMaterial, setResolvedMaterial] = useState<MaterialContext | undefined>(material)
-  const [materialFileUrl, setMaterialFileUrl] = useState<string | null>(null)
   const [viewerSourceError, setViewerSourceError] = useState("")
-  const [isViewerSourceReady, setIsViewerSourceReady] = useState(Boolean(draftContext))
   const { rootHandle } = useLocalWorkspace()
   const playbackUrlCacheRef = useRef(new Map<string, string>())
   const isLocalMode = isLocalStorageMode()
@@ -285,14 +277,13 @@ export function PracticeViewerClient({
       buildViewerSrc({
         material: resolvedMaterial,
         draftContext,
-        fileUrl: materialFileUrl,
         localWorkspaceMode: isLocalMode,
         pendingMaterialId: Number.isInteger(materialId) ? materialId : undefined,
         mode,
         returnToken: resolvedMaterial?.returnToken || draftContext?.returnToken || returnToken,
         presentationTagIds,
       }),
-    [draftContext, isLocalMode, materialFileUrl, materialId, mode, presentationTagIds, resolvedMaterial, returnToken]
+    [draftContext, isLocalMode, materialId, mode, presentationTagIds, resolvedMaterial, returnToken]
   )
   const viewerIdentity = useMemo(() => {
     if (draftContext) return `draft:${draftContext.subjectId}:${draftContext.sessionDate}`
@@ -305,10 +296,9 @@ export function PracticeViewerClient({
   const canRenderViewer = Boolean(
     draftContext ||
     (
-      isViewerSourceReady &&
       resolvedMaterial &&
       !viewerSourceError &&
-      (isLocalMode ? resolvedMaterial.workspaceFileId : materialFileUrl)
+      (!isLocalMode || resolvedMaterial.workspaceFileId)
     )
   )
   const activeContext = resolvedMaterial ?? draftContext
@@ -813,23 +803,6 @@ export function PracticeViewerClient({
       }
 
       if (event.data.type === "viewerDocumentLoaded") {
-        const reportedMaterialId = Number(event.data.materialId)
-        if (
-          resolvedMaterial &&
-          Number.isInteger(reportedMaterialId) &&
-          reportedMaterialId !== resolvedMaterial.id
-        ) {
-          const message = `El visor cargó el material ${reportedMaterialId}, pero se esperaba ${resolvedMaterial.id}.`
-          console.error("[practice-pdf] identity mismatch", {
-            expectedMaterialId: resolvedMaterial.id,
-            reportedMaterialId,
-            expectedFileName: resolvedMaterial.fileName,
-            reportedFileName: event.data.fileName,
-            fingerprint: event.data.fingerprint,
-          })
-          setViewerSourceError(message)
-          return
-        }
         console.info("[practice-pdf] document loaded", {
           materialId: resolvedMaterial?.id ?? null,
           fileName: resolvedMaterial?.fileName || event.data.fileName || "",
@@ -847,6 +820,7 @@ export function PracticeViewerClient({
           fileName: resolvedMaterial?.fileName || event.data.fileName || "",
           sourceRevision: resolvedMaterial?.sourceRevision || "",
           workspaceFileId: resolvedMaterial?.workspaceFileId || "",
+          error: event.data.error || "",
         })
         return
       }
@@ -1054,12 +1028,9 @@ export function PracticeViewerClient({
   )
 
   useEffect(() => {
-    sourceRequestRef.current += 1
     setViewerSourceError("")
-    setMaterialFileUrl(null)
-    setIsViewerSourceReady(Boolean(draftContext))
     setResolvedMaterial(material)
-  }, [draftContext, material])
+  }, [material])
 
   useEffect(() => {
     if (!isLocalMode || material || !Number.isInteger(materialId)) return
@@ -1067,7 +1038,6 @@ export function PracticeViewerClient({
     let cancelled = false
     const resolvedMaterialId = materialId as number
     setViewerSourceError("")
-    setIsViewerSourceReady(false)
 
     void (async () => {
       const localMaterial = await getLocalMaterialById(resolvedMaterialId)
@@ -1100,109 +1070,6 @@ export function PracticeViewerClient({
       cancelled = true
     }
   }, [isLocalMode, material, materialId])
-
-  useEffect(() => {
-    if (!isLocalMode || !resolvedMaterial?.id) return
-
-    let cancelled = false
-    const requestId = ++sourceRequestRef.current
-    const identityError = validateWorkspaceMaterialIdentity(resolvedMaterial)
-    setMaterialFileUrl(null)
-    setIsViewerSourceReady(false)
-    setViewerSourceError(identityError)
-    if (identityError) {
-      console.error("[practice-pdf] workspace identity rejected", {
-        materialId: resolvedMaterial.id,
-        fileName: resolvedMaterial.fileName,
-        workspaceFileId: resolvedMaterial.workspaceFileId,
-        error: identityError,
-      })
-      return
-    }
-
-    void (async () => {
-      const file = await getWorkspaceFile(resolvedMaterial.workspaceFileId!)
-      if (cancelled || sourceRequestRef.current !== requestId) return
-      if (file.size <= 0) {
-        throw new Error(`El archivo local de ${resolvedMaterial.fileName} está vacío.`)
-      }
-      const header = await file.slice(0, 1024).text()
-      if (!header.includes("%PDF-")) {
-        throw new Error(`El archivo local asociado a ${resolvedMaterial.id} no contiene una cabecera PDF válida.`)
-      }
-      console.info("[practice-pdf] local source resolved", {
-        materialId: resolvedMaterial.id,
-        fileName: resolvedMaterial.fileName,
-        workspaceFileId: resolvedMaterial.workspaceFileId,
-        sourceRevision: resolvedMaterial.sourceRevision,
-        size: file.size,
-        lastModified: file.lastModified,
-      })
-      setViewerSourceError("")
-      setIsViewerSourceReady(true)
-    })().catch((error) => {
-      if (cancelled || sourceRequestRef.current !== requestId) return
-      const message = error instanceof Error ? error.message : `No se pudo abrir ${resolvedMaterial.fileName}.`
-      console.error("[practice-pdf] local source failed", {
-        materialId: resolvedMaterial.id,
-        fileName: resolvedMaterial.fileName,
-        workspaceFileId: resolvedMaterial.workspaceFileId,
-        error,
-      })
-      setViewerSourceError(message)
-      setIsViewerSourceReady(false)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [isLocalMode, resolvedMaterial])
-
-  useEffect(() => {
-    if (isLocalMode || !resolvedMaterial?.id) return
-
-    let cancelled = false
-    const requestId = ++sourceRequestRef.current
-    const currentMaterialId = resolvedMaterial.id
-    const currentFileName = resolvedMaterial.fileName
-    const currentSourceRevision = resolvedMaterial.sourceRevision || ""
-    const cacheKey = buildPracticePdfCacheKey(currentMaterialId, currentSourceRevision)
-    setMaterialFileUrl(null)
-    setViewerSourceError("")
-    setIsViewerSourceReady(false)
-
-    void preloadPracticePdf(currentMaterialId, currentFileName, currentSourceRevision)
-      .then((cachedPdf) => {
-        if (cancelled || sourceRequestRef.current !== requestId) return
-        activeCachedPdfKeysRef.current.add(cacheKey)
-        console.info("[practice-pdf] remote source resolved", {
-          materialId: currentMaterialId,
-          fileName: currentFileName,
-          sourceRevision: currentSourceRevision,
-          cacheKey,
-          size: cachedPdf.size,
-          contentType: cachedPdf.contentType,
-        })
-        setMaterialFileUrl(cachedPdf.blobUrl)
-        setIsViewerSourceReady(true)
-      })
-      .catch((error) => {
-        if (cancelled || sourceRequestRef.current !== requestId) return
-        console.error("[practice-pdf] remote source failed", {
-          materialId: currentMaterialId,
-          fileName: currentFileName,
-          sourceRevision: currentSourceRevision,
-          error,
-        })
-        setMaterialFileUrl(null)
-        setIsViewerSourceReady(false)
-        setViewerSourceError(error instanceof Error ? error.message : `No se pudo abrir ${currentFileName}.`)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [isLocalMode, resolvedMaterial])
 
   useEffect(() => {
     void loadPositions()
@@ -1277,14 +1144,6 @@ export function PracticeViewerClient({
       playbackUrlCacheRef.current.clear()
     }
   }, [discardRecording, disposePairDraft, stopMediaTracks, stopPreviewPlayback])
-
-  useEffect(() => {
-    const activeCachedPdfKeys = activeCachedPdfKeysRef.current
-    return () => {
-      activeCachedPdfKeys.forEach((cacheKey) => releasePracticePdf(cacheKey))
-      activeCachedPdfKeys.clear()
-    }
-  }, [])
 
   return (
     <main className="flex h-[100dvh] w-full flex-col overflow-hidden bg-slate-950 text-white">

@@ -67,7 +67,7 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
 async function getMaterial(materialId: number) {
   if (!sql) return undefined
   const rows = await sql`
-    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, file_name, drive_file_id, drive_mime_type, updated_at
+    SELECT id, subject_id, week_number, session_date, weekday_index, material_type, file_name, drive_file_id, updated_at
     FROM subject_day_materials
     WHERE id = ${materialId}
     LIMIT 1
@@ -83,7 +83,6 @@ async function getMaterial(materialId: number) {
         material_type: "practice" | "theory"
         file_name: string
         drive_file_id: string
-        drive_mime_type: string
         updated_at: string
       }
     | undefined
@@ -214,29 +213,6 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
             <Link href="/" className="mt-6 inline-flex text-sm text-sky-300 underline-offset-4 hover:underline">
               Volver al inicio
             </Link>
-          </div>
-        </main>
-      )
-    }
-
-    const isPdf = (material.drive_mime_type || "").toLowerCase().includes("pdf")
-
-    if (!isPdf) {
-      return (
-        <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-white">
-          <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 p-6">
-            <h2 className="text-xl font-semibold">El archivo no es un PDF</h2>
-            <p className="mt-3 text-sm text-slate-300">
-              Este visor solo se usa para PDFs. El endpoint interno del archivo sigue disponible, pero esta vista no lo renderiza.
-            </p>
-            <a
-              href={`/api/subject-day-materials/${material.id}/file`}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-6 inline-flex text-sm text-sky-300 underline-offset-4 hover:underline"
-            >
-              Abrir archivo igualmente
-            </a>
           </div>
         </main>
       )
