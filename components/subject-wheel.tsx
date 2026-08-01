@@ -133,7 +133,6 @@ const NIGHT_SUBJECT_COLORS: Record<string, string> = {
 
 const LOCAL_STORAGE_MODE = isLocalStorageMode()
 const MAIN_WORKSPACE_TAB_ID = "main"
-const RECOVERED_WORKSPACE_TAB_ID = "tab-recovered"
 const WORKSPACE_TABS_STORAGE_KEY = "subject-wheel:workspace-tabs:v1"
 const LOCAL_REQUEST_TIMEOUT_MS = 15_000
 const CUSTOM_SUBJECT_PALETTE = ["#0098C8", "#2563eb", "#ea580c", "#dc2626", "#16a34a", "#a855f7", "#0f766e", "#4f46e5"] as const
@@ -1239,7 +1238,7 @@ export function SubjectWheel({
   const [customSubjectColorDraft, setCustomSubjectColorDraft] = useState<string>(CUSTOM_SUBJECT_PALETTE[0])
   const [customSubjectWeekdayDraft, setCustomSubjectWeekdayDraft] = useState<number>(0)
   const [deleteConfirmationTarget, setDeleteConfirmationTarget] = useState<DeleteConfirmationTarget | null>(null)
-  const [permanentDeleteSummary, setPermanentDeleteSummary] = useState<LocalSubjectDeletionSummary | null>(null)
+  const [deleteSummaries, setDeleteSummaries] = useState<LocalSubjectDeletionSummary[]>([])
   const [isPreparingPermanentDelete, setIsPreparingPermanentDelete] = useState(false)
   const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false)
   const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
@@ -1615,16 +1614,6 @@ export function SubjectWheel({
     }, LONG_PRESS_DELETE_MS)
   }, [clearLongPressDeleteTimer])
 
-  const startLongPressNotice = useCallback((message: string) => {
-    clearLongPressDeleteTimer()
-    shouldSuppressLongPressClickRef.current = false
-    longPressDeleteTimerRef.current = window.setTimeout(() => {
-      longPressDeleteTimerRef.current = null
-      shouldSuppressLongPressClickRef.current = true
-      setWorkspaceNoticeMessage(message)
-    }, LONG_PRESS_DELETE_MS)
-  }, [clearLongPressDeleteTimer])
-
   const consumeLongPressClick = useCallback(() => {
     if (!shouldSuppressLongPressClickRef.current) return false
     shouldSuppressLongPressClickRef.current = false
@@ -1639,124 +1628,115 @@ export function SubjectWheel({
     return () => clearLongPressDeleteTimer()
   }, [clearLongPressDeleteTimer])
 
-  const confirmDeleteTarget = useCallback(() => {
-    if (!deleteConfirmationTarget) return
+  const getDeleteTargetSubjectIds = useCallback((target: DeleteConfirmationTarget) => {
+    if (target.type === "subject") return [target.id]
+    if (target.id === MAIN_WORKSPACE_TAB_ID) {
+      return Object.values(customSubjects)
+        .filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID)
+        .map((subject) => subject.id)
+    }
+    return workspaceTabs[target.id]?.subjectIds ?? []
+  }, [customSubjects, workspaceTabs])
 
-    if (deleteConfirmationTarget.type === "tab" && workspaceTabList.length <= 1) {
-      setDeleteConfirmationTarget(null)
-      setWorkspaceNoticeMessage("Se necesita al menos una pestaña para crear materias y objetos.")
+  useEffect(() => {
+    if (!deleteConfirmationTarget || !LOCAL_STORAGE_MODE) {
+      setDeleteSummaries([])
       return
     }
-
-    if (deleteConfirmationTarget.type === "tab" && deleteConfirmationTarget.id === RECOVERED_WORKSPACE_TAB_ID) {
-      setDeleteConfirmationTarget(null)
-      setWorkspaceNoticeMessage("La pestaña Recuperadas es el espejo de los datos sin vincular y no se puede borrar.")
-      return
-    }
-
-    if (deleteConfirmationTarget.type === "subject" && activeWorkspaceTabId === RECOVERED_WORKSPACE_TAB_ID) {
-      setDeleteConfirmationTarget(null)
-      setWorkspaceNoticeMessage("Esta materia sigue existiendo en el disco. Renombrala, agregala a otra pestaña o usa Eliminar de verdad.")
-      return
-    }
-
-    hasUserChangedWorkspaceStateRef.current = true
-
-    const timestamp = new Date().toISOString()
-    const nextTabs = { ...workspaceTabs }
-    let nextMainVisible = isMainWorkspaceTabVisible
-    const affectedSubjectIds = new Set<string>()
-
-    if (deleteConfirmationTarget.type === "subject") {
-      const subjectId = deleteConfirmationTarget.id
-      affectedSubjectIds.add(subjectId)
-      if (activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID && nextTabs[activeWorkspaceTabId]) {
-        nextTabs[activeWorkspaceTabId] = {
-          ...nextTabs[activeWorkspaceTabId],
-          subjectIds: nextTabs[activeWorkspaceTabId].subjectIds.filter((id) => id !== subjectId),
-        }
-      }
-    } else {
-      const isMainTabTarget = deleteConfirmationTarget.id === MAIN_WORKSPACE_TAB_ID
-      const tabToDelete = isMainTabTarget ? getMainWorkspaceTab() : nextTabs[deleteConfirmationTarget.id]
-      for (const subjectId of isMainTabTarget
-        ? Object.values(customSubjects).filter((subject) => subject.tabId === MAIN_WORKSPACE_TAB_ID).map((subject) => subject.id)
-        : tabToDelete?.subjectIds ?? []) {
-        affectedSubjectIds.add(subjectId)
-      }
-      if (isMainTabTarget) nextMainVisible = false
-      else delete nextTabs[deleteConfirmationTarget.id]
-    }
-
-    const linkedIds = new Set(Object.values(nextTabs).flatMap((tab) => tab.subjectIds))
-    const orphanedIds = Array.from(affectedSubjectIds).filter((subjectId) => !linkedIds.has(subjectId))
-    if (orphanedIds.length > 0) {
-      const recoveredTab = nextTabs[RECOVERED_WORKSPACE_TAB_ID]
-      nextTabs[RECOVERED_WORKSPACE_TAB_ID] = {
-        id: RECOVERED_WORKSPACE_TAB_ID,
-        name: "Recuperadas",
-        color: "#92400e",
-        createdAt: recoveredTab?.createdAt ?? timestamp,
-        orderIndex: recoveredTab?.orderIndex ?? Object.keys(nextTabs).length,
-        subjectIds: Array.from(new Set([...(recoveredTab?.subjectIds ?? []), ...orphanedIds])),
-      }
-    }
-
-    const nextSubjects = Object.fromEntries(Object.entries(customSubjects).map(([subjectId, subject]) => {
-      if (!orphanedIds.includes(subjectId)) return [subjectId, subject]
-      return [subjectId, { ...subject, tabId: RECOVERED_WORKSPACE_TAB_ID }]
-    }))
-    setWorkspaceTabs(nextTabs)
-    setCustomSubjects(nextSubjects)
-    setIsMainWorkspaceTabVisible(nextMainVisible)
-
-    if (deleteConfirmationTarget.type === "tab" && activeWorkspaceTabId === deleteConfirmationTarget.id) {
-      const nextTab = getWorkspaceTabList(nextTabs, nextMainVisible).find((tab) => tab.id !== deleteConfirmationTarget.id)
-      setActiveWorkspaceTabId(nextTab?.id ?? RECOVERED_WORKSPACE_TAB_ID)
-    }
-
-    setDeleteConfirmationTarget(null)
-  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, isMainWorkspaceTabVisible, workspaceTabList, workspaceTabs])
-
-  const preparePermanentSubjectDelete = useCallback(async () => {
-    if (!deleteConfirmationTarget || deleteConfirmationTarget.type !== "subject") return
+    let cancelled = false
     setIsPreparingPermanentDelete(true)
-    try {
-      setPermanentDeleteSummary(await getLocalSubjectDeletionSummary(deleteConfirmationTarget.id))
-    } catch (error) {
-      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo inspeccionar la materia.")
-    } finally {
-      setIsPreparingPermanentDelete(false)
+    void Promise.all(getDeleteTargetSubjectIds(deleteConfirmationTarget).map(getLocalSubjectDeletionSummary))
+      .then((summaries) => {
+        if (!cancelled) setDeleteSummaries(summaries)
+      })
+      .catch((error) => {
+        if (!cancelled) setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo inspeccionar el contenido local.")
+      })
+      .finally(() => {
+        if (!cancelled) setIsPreparingPermanentDelete(false)
+      })
+    return () => {
+      cancelled = true
     }
-  }, [deleteConfirmationTarget])
+  }, [deleteConfirmationTarget, getDeleteTargetSubjectIds])
+
+  const moveDeleteTarget = useCallback((destinationTabId: string) => {
+    if (!deleteConfirmationTarget || destinationTabId === deleteConfirmationTarget.id) return
+    const subjectIds = getDeleteTargetSubjectIds(deleteConfirmationTarget)
+    const subjectIdSet = new Set(subjectIds)
+    const nextTabs = Object.fromEntries(Object.entries(workspaceTabs)
+      .filter(([tabId]) => deleteConfirmationTarget.type !== "tab" || tabId !== deleteConfirmationTarget.id)
+      .map(([tabId, tab]) => [tabId, {
+        ...tab,
+        subjectIds: tab.subjectIds.filter((subjectId) => !subjectIdSet.has(subjectId)),
+      }]))
+    if (destinationTabId !== MAIN_WORKSPACE_TAB_ID && nextTabs[destinationTabId]) {
+      nextTabs[destinationTabId] = {
+        ...nextTabs[destinationTabId],
+        subjectIds: Array.from(new Set([...nextTabs[destinationTabId].subjectIds, ...subjectIds])),
+      }
+    }
+    setWorkspaceTabs(nextTabs)
+    setCustomSubjects((previous) => Object.fromEntries(Object.entries(previous).map(([subjectId, subject]) => [
+      subjectId,
+      subjectIdSet.has(subjectId) ? { ...subject, tabId: destinationTabId } : subject,
+    ])))
+    if (destinationTabId === MAIN_WORKSPACE_TAB_ID) setIsMainWorkspaceTabVisible(true)
+    if (deleteConfirmationTarget.type === "tab" && deleteConfirmationTarget.id === MAIN_WORKSPACE_TAB_ID) {
+      setIsMainWorkspaceTabVisible(false)
+    }
+    hasUserChangedWorkspaceStateRef.current = true
+    setActiveWorkspaceTabId(destinationTabId)
+    setDeleteConfirmationTarget(null)
+    setDeleteSummaries([])
+  }, [deleteConfirmationTarget, getDeleteTargetSubjectIds, workspaceTabs])
 
   const confirmPermanentSubjectDelete = useCallback(async () => {
-    if (!permanentDeleteSummary) return
+    if (!deleteConfirmationTarget || isPreparingPermanentDelete) return
+    const subjectIds = getDeleteTargetSubjectIds(deleteConfirmationTarget)
     setIsPermanentlyDeleting(true)
     try {
-      await deleteLocalSubjectPermanently(permanentDeleteSummary.subjectId)
+      const summaries: LocalSubjectDeletionSummary[] = []
+      for (const subjectId of subjectIds) summaries.push(await deleteLocalSubjectPermanently(subjectId))
       hasUserChangedWorkspaceStateRef.current = true
       setCustomSubjects((previous) => Object.fromEntries(
-        Object.entries(previous).filter(([subjectId]) => subjectId !== permanentDeleteSummary.subjectId)
+        Object.entries(previous).filter(([subjectId]) => !subjectIds.includes(subjectId))
       ))
-      setWorkspaceTabs((previous) => Object.fromEntries(Object.entries(previous).map(([tabId, tab]) => [
-        tabId,
-        { ...tab, subjectIds: tab.subjectIds.filter((subjectId) => subjectId !== permanentDeleteSummary.subjectId) },
-      ])))
-      setActiveSubjects((previous) => previous.filter((subject) => subject.id !== permanentDeleteSummary.subjectId))
-      setCompletedSubjects((previous) => previous.filter((subject) => subject.id !== permanentDeleteSummary.subjectId))
+      setWorkspaceTabs((previous) => Object.fromEntries(Object.entries(previous)
+        .filter(([tabId]) => deleteConfirmationTarget.type !== "tab" || tabId !== deleteConfirmationTarget.id)
+        .map(([tabId, tab]) => [
+          tabId,
+          { ...tab, subjectIds: tab.subjectIds.filter((subjectId) => !subjectIds.includes(subjectId)) },
+        ])))
+      if (deleteConfirmationTarget.type === "tab" && deleteConfirmationTarget.id === MAIN_WORKSPACE_TAB_ID) {
+        setIsMainWorkspaceTabVisible(false)
+      }
+      setActiveSubjects((previous) => previous.filter((subject) => !subjectIds.includes(subject.id)))
+      setCompletedSubjects((previous) => previous.filter((subject) => !subjectIds.includes(subject.id)))
+      if (deleteConfirmationTarget.type === "tab" && activeWorkspaceTabId === deleteConfirmationTarget.id) {
+        const nextTab = workspaceTabList.find((tab) => tab.id !== deleteConfirmationTarget.id)
+        setActiveWorkspaceTabId(nextTab?.id ?? MAIN_WORKSPACE_TAB_ID)
+      }
       setDeleteConfirmationTarget(null)
-      setPermanentDeleteSummary(null)
+      setDeleteSummaries([])
       toast({
-        title: "Materia eliminada definitivamente",
-        description: `Se eliminaron ${permanentDeleteSummary.fileCount} archivos de ${permanentDeleteSummary.name}.`,
+        title: subjectIds.length === 1 ? "Materia eliminada" : "Materias eliminadas",
+        description: `Se eliminaron ${summaries.reduce((total, summary) => total + summary.fileCount, 0)} archivos locales.`,
       })
     } catch (error) {
       setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo eliminar la materia.")
     } finally {
       setIsPermanentlyDeleting(false)
     }
-  }, [permanentDeleteSummary])
+  }, [activeWorkspaceTabId, deleteConfirmationTarget, getDeleteTargetSubjectIds, isPreparingPermanentDelete, workspaceTabList])
+
+  const deleteMoveDestinationTabs = useMemo(() => {
+    if (!deleteConfirmationTarget) return []
+    const sourceTabId = deleteConfirmationTarget.type === "tab"
+      ? deleteConfirmationTarget.id
+      : customSubjects[deleteConfirmationTarget.id]?.tabId ?? activeWorkspaceTabId
+    return workspaceTabList.filter((tab) => tab.id !== sourceTabId)
+  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, workspaceTabList])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -7006,7 +6986,6 @@ export function SubjectWheel({
             <div className="pointer-events-auto flex max-h-[calc(100dvh-8rem)] min-w-0 flex-col items-start gap-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {workspaceTabList.map((tab) => {
                 const isActive = tab.id === activeWorkspaceTab.id
-                const canDeleteTab = workspaceTabList.length > 1
                 const canDragTab = tab.id !== MAIN_WORKSPACE_TAB_ID
 
                 return (
@@ -7018,10 +6997,6 @@ export function SubjectWheel({
                       selectWorkspaceTab(tab.id)
                     }}
                     onPointerDown={() => {
-                      if (!canDeleteTab) {
-                        startLongPressNotice("Se necesita al menos una pestaña para crear materias y objetos.")
-                        return
-                      }
                       startLongPressDelete({ type: "tab", id: tab.id, label: tab.name })
                     }}
                     onPointerUp={cancelLongPressDelete}
@@ -7441,54 +7416,48 @@ export function SubjectWheel({
       <Dialog open={Boolean(deleteConfirmationTarget)} onOpenChange={(open) => {
         if (!open && !isPermanentlyDeleting) {
           setDeleteConfirmationTarget(null)
-          setPermanentDeleteSummary(null)
+          setDeleteSummaries([])
         }
       }}>
-        <DialogContent
-          className="max-w-sm"
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !permanentDeleteSummary) {
-              event.preventDefault()
-              confirmDeleteTarget()
-            }
-          }}
-        >
+        <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>{permanentDeleteSummary ? "Eliminar definitivamente?" : "Borrar?"}</DialogTitle>
+            <DialogTitle>{deleteConfirmationTarget?.type === "tab" ? "¿Borrar pestaña?" : "¿Borrar materia?"}</DialogTitle>
             <DialogDescription>
-              {permanentDeleteSummary
-                ? `${permanentDeleteSummary.name}: ${permanentDeleteSummary.fileCount} archivos, ${permanentDeleteSummary.materialCount} materiales y ${permanentDeleteSummary.entryCount} entradas. Esta accion no se puede deshacer.`
-                : deleteConfirmationTarget?.label ?? ""}
+              {isPreparingPermanentDelete
+                ? `Revisando ${deleteConfirmationTarget?.label ?? ""}...`
+                : `${deleteConfirmationTarget?.label ?? ""}: ${deleteSummaries.reduce((total, summary) => total + summary.fileCount, 0)} archivos y ${deleteSummaries.reduce((total, summary) => total + summary.materialCount, 0)} materiales locales.`}
             </DialogDescription>
           </DialogHeader>
 
           <DialogFooter>
-            {permanentDeleteSummary ? (
-              <>
-                <Button type="button" variant="outline" onClick={() => setPermanentDeleteSummary(null)} disabled={isPermanentlyDeleting}>
-                  Volver
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={isPermanentlyDeleting}>Cancelar</Button>
+            </DialogClose>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" disabled={deleteMoveDestinationTabs.length === 0 || isPermanentlyDeleting}>
+                  Mover
                 </Button>
-                <Button type="button" variant="destructive" onClick={() => void confirmPermanentSubjectDelete()} disabled={isPermanentlyDeleting}>
-                  {isPermanentlyDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Eliminar archivos
-                </Button>
-              </>
-            ) : (
-              <>
-                <DialogClose asChild>
-                  <Button type="button" variant="outline">Cancelar</Button>
-                </DialogClose>
-                {LOCAL_STORAGE_MODE && deleteConfirmationTarget?.type === "subject" ? (
-                  <Button type="button" variant="outline" onClick={() => void preparePermanentSubjectDelete()} disabled={isPreparingPermanentDelete} className="text-red-700">
-                    {isPreparingPermanentDelete ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Eliminar de verdad
-                  </Button>
-                ) : null}
-                <Button type="button" variant="destructive" onClick={confirmDeleteTarget}>
-                  Desvincular
-                </Button>
-              </>
-            )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Mover a</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {deleteMoveDestinationTabs.map((tab) => (
+                  <DropdownMenuItem key={tab.id} onClick={() => moveDeleteTarget(tab.id)}>
+                    {tab.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void confirmPermanentSubjectDelete()}
+              disabled={!LOCAL_STORAGE_MODE || isPreparingPermanentDelete || isPermanentlyDeleting}
+            >
+              {isPermanentlyDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Borrar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

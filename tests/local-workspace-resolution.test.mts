@@ -6,6 +6,14 @@ const localWorkspaceSource = readFileSync(
   new URL("../lib/local-workspace-data.ts", import.meta.url),
   "utf8"
 )
+const subjectWheelSource = readFileSync(
+  new URL("../components/subject-wheel.tsx", import.meta.url),
+  "utf8"
+)
+const subjectMigrationSource = readFileSync(
+  new URL("../lib/local-subject-migration.ts", import.meta.url),
+  "utf8"
+)
 
 test("descubre materias personalizadas desde los manifiestos locales", () => {
   assert.match(
@@ -48,4 +56,27 @@ test("las lecturas normales no limpian manifiestos y el estado usa catalogo y re
   assert.match(localWorkspaceSource, /subject-catalog\.json/)
   assert.match(localWorkspaceSource, /workspace-state\.backup\.json/)
   assert.match(localWorkspaceSource, /reconstructLocalMaterialManifests\(\)/)
+})
+
+test("reconecta carpetas por nombre visible y crea las carpetas que faltan", () => {
+  assert.match(localWorkspaceSource, /findCatalogSubjectByDirectoryName\(catalog, sourceId\)/)
+  assert.match(localWorkspaceSource, /targetStorageKey: safeName/)
+  assert.match(localWorkspaceSource, /copyDirectoryContents\(/)
+  assert.match(localWorkspaceSource, /filesHaveSameContent\(/)
+  assert.match(subjectMigrationSource, /addFileNameSuffix\(input\.requestedName, suffix\)/)
+  assert.match(localWorkspaceSource, /SUBJECT_MIGRATION_MANIFEST/)
+  assert.match(localWorkspaceSource, /ensureLocalSubjectDirectories\(Object\.values\(reconciled\.catalog\.subjects\)\)/)
+  assert.match(localWorkspaceSource, /\[THEORY_DIR, PRACTICE_DIR, AUDIO_DIR\]/)
+  assert.match(localWorkspaceSource, /const resolvedContainerId = material\.container_id/)
+})
+
+test("reemplaza Recuperadas por una pestaña comun y borrable", () => {
+  assert.match(localWorkspaceSource, /UNASSIGNED_WORKSPACE_TAB_NAME/)
+  assert.match(localWorkspaceSource, /delete workspaceTabs\["tab-recovered"\]/)
+  assert.doesNotMatch(localWorkspaceSource, /name: "Recuperadas"/)
+  assert.doesNotMatch(subjectWheelSource, /RECOVERED_WORKSPACE_TAB_ID/)
+  assert.doesNotMatch(subjectWheelSource, /name: "Recuperadas"/)
+  assert.match(subjectWheelSource, /\sMover\s/)
+  assert.match(subjectWheelSource, /\sBorrar\s/)
+  assert.doesNotMatch(subjectWheelSource, /Desvincular/)
 })

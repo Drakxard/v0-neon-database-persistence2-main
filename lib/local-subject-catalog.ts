@@ -1,19 +1,28 @@
-export const RECOVERED_WORKSPACE_TAB_ID = "tab-recovered"
+export const UNASSIGNED_WORKSPACE_TAB_ID = "tab-unassigned"
+export const UNASSIGNED_WORKSPACE_TAB_NAME = "Sin pestaña"
 
 export type LocalSubjectCatalogEntry = {
   id: string
   name: string
   normalizedName: string
   storageKey: string
-  sourceIds: string[]
   createdAt: string
   updatedAt: string
-  recovered: boolean
 }
 
 export type LocalSubjectCatalog = {
-  version: 1
+  version: 2
   subjects: Record<string, LocalSubjectCatalogEntry>
+}
+
+export type LegacyLocalSubjectCatalogEntry = LocalSubjectCatalogEntry & {
+  sourceIds?: string[]
+  recovered?: boolean
+}
+
+export type LegacyLocalSubjectCatalog = {
+  version?: 1 | 2
+  subjects?: Record<string, Partial<LegacyLocalSubjectCatalogEntry>>
 }
 
 export function normalizeLocalSubjectName(value: string) {
@@ -33,36 +42,58 @@ export function createLocalSubjectStorageKey(value: string) {
     .replace(/^-|-$/g, "") || "materia"
 }
 
-export function createEmptyLocalSubjectCatalog(): LocalSubjectCatalog {
-  return { version: 1, subjects: {} }
+export function createLocalSubjectDirectoryName(value: string) {
+  const normalized = String(value || "")
+    .normalize("NFC")
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+  const name = normalized || "Materia"
+  const windowsReservedName = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+  return windowsReservedName.test(name) ? `${name}-` : name
 }
 
-export function normalizeLocalSubjectCatalog(input: Partial<LocalSubjectCatalog> | null | undefined) {
+export function createEmptyLocalSubjectCatalog(): LocalSubjectCatalog {
+  return { version: 2, subjects: {} }
+}
+
+export function normalizeLocalSubjectCatalog(input: LegacyLocalSubjectCatalog | null | undefined): LocalSubjectCatalog {
   const subjects = Object.entries(input?.subjects ?? {}).reduce<Record<string, LocalSubjectCatalogEntry>>(
     (accumulator, [key, value]) => {
       if (!value || typeof value !== "object") return accumulator
       const id = String(value.id || key).trim()
-      const name = String(value.name || "").trim()
-      const storageKey = String(value.storageKey || id).trim()
-      if (!id || !name || !storageKey) return accumulator
+      const safeName = createLocalSubjectDirectoryName(String(value.name || "").trim())
+      const storageKey = createLocalSubjectDirectoryName(String(value.storageKey || safeName).trim())
+      if (!id || !safeName || !storageKey) return accumulator
       const timestamp = new Date().toISOString()
       accumulator[id] = {
         id,
-        name,
-        normalizedName: normalizeLocalSubjectName(value.normalizedName || name),
+        name: safeName,
+        normalizedName: normalizeLocalSubjectName(safeName),
         storageKey,
-        sourceIds: Array.from(new Set([storageKey, ...(Array.isArray(value.sourceIds) ? value.sourceIds : [])]))
-          .map((sourceId) => String(sourceId || "").trim())
-          .filter(Boolean),
         createdAt: typeof value.createdAt === "string" ? value.createdAt : timestamp,
         updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : timestamp,
-        recovered: Boolean(value.recovered),
       }
       return accumulator
     },
     {}
   )
-  return { version: 1 as const, subjects }
+  return { version: 2, subjects }
+}
+
+export function getLegacyLocalSubjectSources(input: LegacyLocalSubjectCatalog | null | undefined) {
+  return Object.entries(input?.subjects ?? {}).reduce<Record<string, string[]>>((accumulator, [key, value]) => {
+    if (!value || typeof value !== "object") return accumulator
+    const id = String(value.id || key).trim()
+    if (!id) return accumulator
+    accumulator[id] = Array.from(new Set([
+      id,
+      String(value.storageKey || "").trim(),
+      ...(Array.isArray(value.sourceIds) ? value.sourceIds.map((sourceId) => String(sourceId || "").trim()) : []),
+    ].filter(Boolean)))
+    return accumulator
+  }, {})
 }
 
 export function findCatalogSubjectByName(catalog: LocalSubjectCatalog, name: string) {
@@ -70,58 +101,27 @@ export function findCatalogSubjectByName(catalog: LocalSubjectCatalog, name: str
   return Object.values(catalog.subjects).find((subject) => subject.normalizedName === normalizedName) ?? null
 }
 
+export function findCatalogSubjectByDirectoryName(catalog: LocalSubjectCatalog, directoryName: string) {
+  const directoryKey = createLocalSubjectStorageKey(directoryName)
+  return Object.values(catalog.subjects).find((subject) =>
+    createLocalSubjectStorageKey(subject.name) === directoryKey ||
+    createLocalSubjectStorageKey(subject.storageKey) === directoryKey
+  ) ?? null
+}
+
 export function findCatalogSubjectByAnyId(catalog: LocalSubjectCatalog, subjectId: string) {
   return catalog.subjects[subjectId] ??
-    Object.values(catalog.subjects).find((subject) => subject.sourceIds.includes(subjectId)) ??
+    Object.values(catalog.subjects).find((subject) => subject.storageKey === subjectId) ??
     null
 }
 
-export function allocateLocalSubjectStorageKey(catalog: LocalSubjectCatalog, name: string) {
+export function allocateLocalSubjectId(catalog: LocalSubjectCatalog, name: string) {
   const base = createLocalSubjectStorageKey(name)
-  const used = new Set(
-    Object.values(catalog.subjects).flatMap((subject) => [subject.storageKey, ...subject.sourceIds])
-  )
-  if (!used.has(base)) return base
+  if (!catalog.subjects[base]) return base
   let suffix = 2
-  while (used.has(`${base}-${suffix}`)) suffix += 1
+  while (catalog.subjects[`${base}-${suffix}`]) suffix += 1
   return `${base}-${suffix}`
 }
 
-export function mergeCatalogSubjects(
-  catalog: LocalSubjectCatalog,
-  targetId: string,
-  sourceIds: string[]
-) {
-  const normalized = normalizeLocalSubjectCatalog(catalog)
-  const target = findCatalogSubjectByAnyId(normalized, targetId)
-  if (!target) return normalized
-
-  const mergedEntryIds = new Set<string>()
-  const mergedSources = new Set(target.sourceIds)
-  for (const sourceId of sourceIds) {
-    if (!sourceId) continue
-    const entry = findCatalogSubjectByAnyId(normalized, sourceId)
-    if (entry && entry.id !== target.id) {
-      mergedEntryIds.add(entry.id)
-      entry.sourceIds.forEach((id) => mergedSources.add(id))
-    } else {
-      mergedSources.add(sourceId)
-    }
-  }
-
-  const subjects = { ...normalized.subjects }
-  for (const id of mergedEntryIds) delete subjects[id]
-  const nextSourceIds = Array.from(mergedSources)
-  const isUnchanged = mergedEntryIds.size === 0 &&
-    target.recovered === false &&
-    nextSourceIds.length === target.sourceIds.length &&
-    nextSourceIds.every((sourceId) => target.sourceIds.includes(sourceId))
-  if (isUnchanged) return normalized
-  subjects[target.id] = {
-    ...target,
-    sourceIds: nextSourceIds,
-    recovered: false,
-    updatedAt: new Date().toISOString(),
-  }
-  return { version: 1 as const, subjects }
-}
+// Kept as an alias for callers created before catalog v2.
+export const allocateLocalSubjectStorageKey = allocateLocalSubjectId

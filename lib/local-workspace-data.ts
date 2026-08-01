@@ -24,15 +24,20 @@ import {
   wouldCreateTagCycle,
 } from "@/lib/tag-utils"
 import { loadWorkspaceHandle, queryWorkspacePermission } from "@/lib/local-workspace-client"
+import { chooseNonOverwritingFileName } from "@/lib/local-subject-migration"
 import {
-  RECOVERED_WORKSPACE_TAB_ID,
+  UNASSIGNED_WORKSPACE_TAB_ID,
+  UNASSIGNED_WORKSPACE_TAB_NAME,
   allocateLocalSubjectStorageKey,
+  createLocalSubjectDirectoryName,
   createEmptyLocalSubjectCatalog,
   findCatalogSubjectByAnyId,
+  findCatalogSubjectByDirectoryName,
   findCatalogSubjectByName,
-  mergeCatalogSubjects,
+  getLegacyLocalSubjectSources,
   normalizeLocalSubjectCatalog,
   normalizeLocalSubjectName,
+  type LegacyLocalSubjectCatalog,
   type LocalSubjectCatalog,
   type LocalSubjectCatalogEntry,
 } from "@/lib/local-subject-catalog"
@@ -145,8 +150,24 @@ const SUBJECT_CATALOG_MANIFEST = [MANIFESTS_DIR, "subject-catalog.json"]
 const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
 const MATERIAL_CONTAINERS_MANIFEST = [MANIFESTS_DIR, "material-containers.json"]
 const MATERIAL_CONTAINERS_BACKUP_MANIFEST = [MANIFESTS_DIR, "material-containers.backup.json"]
+const SUBJECT_MIGRATION_MANIFEST = [MANIFESTS_DIR, "subject-folder-migration-v2.json"]
+const SUBJECT_CATALOG_V1_BACKUP_MANIFEST = [MANIFESTS_DIR, "subject-catalog.v1.backup.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
 const CURRENT_ALGEBRA_LEGACY_SOURCE_ID = "custom-1783994292371-hofqi6"
+
+type SubjectFolderMigrationPlan = {
+  subjectId: string
+  name: string
+  targetStorageKey: string
+  sourceStorageKeys: string[]
+}
+
+type SubjectFolderMigrationJournal = {
+  version: 1
+  completedSubjectIds: string[]
+  plans: SubjectFolderMigrationPlan[]
+  updatedAt: string
+}
 
 function sanitizePathSegment(value: string) {
   return value
@@ -543,7 +564,12 @@ async function removeDirectoryBySegments(pathSegments: string[]) {
   const rootHandle = await ensureWorkspaceRootHandle()
   const parent = await getDirectoryHandleBySegments(rootHandle, pathSegments.slice(0, -1), false).catch(() => null)
   if (!parent) return
-  await parent.removeEntry(pathSegments[pathSegments.length - 1], { recursive: true }).catch(() => {})
+  try {
+    await parent.removeEntry(pathSegments[pathSegments.length - 1], { recursive: true })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotFoundError") return
+    throw error
+  }
 }
 
 async function countFilesBySegments(pathSegments: string[]) {
@@ -583,13 +609,364 @@ async function listLocalDirectoryNames(pathSegments: string[]) {
   return names
 }
 
+async function filesHaveSameContent(left: File, right: File) {
+  if (left.size !== right.size) return false
+  const [leftBytes, rightBytes] = await Promise.all([left.arrayBuffer(), right.arrayBuffer()])
+  const leftView = new Uint8Array(leftBytes)
+  const rightView = new Uint8Array(rightBytes)
+  for (let index = 0; index < leftView.length; index += 1) {
+    if (leftView[index] !== rightView[index]) return false
+  }
+  return true
+}
+
+async function chooseCopiedFileName(
+  targetDirectory: FileSystemDirectoryHandle,
+  requestedName: string,
+  sourceFile: File
+) {
+  return chooseNonOverwritingFileName({
+    requestedName,
+    source: sourceFile,
+    readExisting: async (candidate) => {
+      const handle = await targetDirectory.getFileHandle(candidate, { create: false }).catch(() => null)
+      return handle ? handle.getFile() : null
+    },
+    hasSameContent: filesHaveSameContent,
+  })
+}
+
+async function copyDirectoryContents(
+  rootHandle: FileSystemDirectoryHandle,
+  sourceSegments: string[],
+  targetSegments: string[],
+  pathRewrites: Map<string, string>
+) {
+  const sourceDirectory = await getDirectoryHandleBySegments(rootHandle, sourceSegments, false).catch(() => null)
+  if (!sourceDirectory) return false
+  const targetDirectory = await getDirectoryHandleBySegments(rootHandle, targetSegments, true)
+  for await (const [name, handle] of sourceDirectory.entries()) {
+    if (handle.kind === "directory") {
+      await copyDirectoryContents(
+        rootHandle,
+        [...sourceSegments, name],
+        [...targetSegments, name],
+        pathRewrites
+      )
+      continue
+    }
+
+    const sourceFile = await (handle as FileSystemFileHandle).getFile()
+    const target = await chooseCopiedFileName(targetDirectory, name, sourceFile)
+    if (!target.alreadyCopied) {
+      const targetHandle = await targetDirectory.getFileHandle(target.name, { create: true })
+      const writable = await targetHandle.createWritable()
+      try {
+        await writable.write(sourceFile)
+        await writable.close()
+      } catch (error) {
+        await writable.abort().catch(() => {})
+        throw error
+      }
+      const copiedFile = await targetHandle.getFile()
+      if (!(await filesHaveSameContent(sourceFile, copiedFile))) {
+        throw new Error(`No se pudo verificar la copia de ${sourceSegments.join("/")}/${name}.`)
+      }
+    }
+    pathRewrites.set(
+      joinWorkspaceId(...sourceSegments, name),
+      joinWorkspaceId(...targetSegments, target.name)
+    )
+  }
+  return true
+}
+
+function rewriteWorkspaceId(
+  workspaceId: string,
+  pathRewrites: Map<string, string>,
+  sourceStorageKeys: string[],
+  targetStorageKey: string
+) {
+  const exact = pathRewrites.get(workspaceId)
+  if (exact) return exact
+  if (!isWorkspaceFileId(workspaceId)) return workspaceId
+  const segments = workspaceIdToSegments(workspaceId)
+  if (
+    segments.length >= 2 &&
+    [THEORY_DIR, PRACTICE_DIR, AUDIO_DIR].includes(segments[0] as typeof THEORY_DIR) &&
+    sourceStorageKeys.includes(segments[1])
+  ) {
+    segments[1] = targetStorageKey
+    return joinWorkspaceId(...segments)
+  }
+  return workspaceId
+}
+
+async function readLocalSubjectCatalogWithLegacy() {
+  const raw = await readJsonFile<LegacyLocalSubjectCatalog | null>(SUBJECT_CATALOG_MANIFEST, null)
+  return {
+    raw,
+    catalog: raw ? normalizeLocalSubjectCatalog(raw) : createEmptyLocalSubjectCatalog(),
+    legacySources: getLegacyLocalSubjectSources(raw),
+  }
+}
+
 async function readLocalSubjectCatalog() {
-  const value = await readJsonFile<Partial<LocalSubjectCatalog> | null>(SUBJECT_CATALOG_MANIFEST, null)
-  return value ? normalizeLocalSubjectCatalog(value) : createEmptyLocalSubjectCatalog()
+  return (await readLocalSubjectCatalogWithLegacy()).catalog
 }
 
 async function writeLocalSubjectCatalog(catalog: LocalSubjectCatalog) {
   await writeJsonFile(SUBJECT_CATALOG_MANIFEST, normalizeLocalSubjectCatalog(catalog))
+}
+
+async function ensureLocalSubjectDirectories(subjects: LocalSubjectCatalogEntry[]) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  for (const subject of subjects) {
+    for (const baseDir of [THEORY_DIR, PRACTICE_DIR, AUDIO_DIR]) {
+      await getDirectoryHandleBySegments(rootHandle, [baseDir, subject.storageKey], true)
+    }
+  }
+}
+
+function allocateUniqueNumericId(used: Set<number>) {
+  let id = nextLocalId()
+  while (used.has(id)) id = nextLocalId()
+  used.add(id)
+  return id
+}
+
+async function migrateSubjectPlan(plan: SubjectFolderMigrationPlan) {
+  const rootHandle = await ensureWorkspaceRootHandle()
+  const sources = Array.from(new Set(plan.sourceStorageKeys.filter((source) => source && source !== plan.targetStorageKey)))
+  const allSources = Array.from(new Set([plan.targetStorageKey, ...sources]))
+  const pathRewrites = new Map<string, string>()
+
+  for (const source of sources) {
+    for (const baseDir of [THEORY_DIR, PRACTICE_DIR, AUDIO_DIR]) {
+      await copyDirectoryContents(
+        rootHandle,
+        [baseDir, source],
+        [baseDir, plan.targetStorageKey],
+        pathRewrites
+      )
+    }
+  }
+
+  const containersManifest = await readMaterialContainersManifest()
+  const canonicalDefaults = buildDefaultLocalSubjectContainers(plan.targetStorageKey)
+  const canonicalStored = containersManifest[plan.targetStorageKey] ?? []
+  const canonicalCustom = canonicalStored.filter((container) => container.kind === "custom")
+  const mergedContainers: SubjectMaterialContainer[] = [...canonicalDefaults, ...canonicalCustom.map((container) => ({
+    ...container,
+    subjectId: plan.targetStorageKey,
+  }))]
+  const usedContainerIds = new Set(mergedContainers.map((container) => container.id))
+  const containerIdMap = new Map<string, number>()
+  for (const source of allSources) {
+    const sourceContainers = containersManifest[source] ?? []
+    for (const container of sourceContainers) {
+      const defaultTarget = container.kind === "theory" || container.kind === "practice"
+        ? mergedContainers.find((candidate) => candidate.kind === container.kind)
+        : mergedContainers.find((candidate) =>
+            candidate.kind === "custom" && candidate.normalizedName === container.normalizedName
+          )
+      if (defaultTarget) {
+        containerIdMap.set(`${source}:${container.id}`, defaultTarget.id)
+        continue
+      }
+      const id = usedContainerIds.has(container.id) ? allocateUniqueNumericId(usedContainerIds) : container.id
+      usedContainerIds.add(id)
+      const migrated = { ...container, id, subjectId: plan.targetStorageKey }
+      mergedContainers.push(migrated)
+      containerIdMap.set(`${source}:${container.id}`, id)
+    }
+  }
+  containersManifest[plan.targetStorageKey] = mergedContainers
+  for (const source of sources) delete containersManifest[source]
+
+  const materialWeeks = Array.from(new Set((await Promise.all(
+    allSources.map((source) => listWeekNumbersForManifestKind(MATERIALS_DIR, source))
+  )).flat())).sort((left, right) => left - right)
+  const materialIdMap = new Map<string, number>()
+  const usedMaterialIds = new Set<number>()
+  const migratedMaterialsByWeek = new Map<number, SubjectDayMaterial[]>()
+
+  for (const weekNumber of materialWeeks) {
+    const migrated: SubjectDayMaterial[] = []
+    const byPath = new Map<string, SubjectDayMaterial>()
+    for (const source of allSources) {
+      const manifest = await readMaterialManifest(source, weekNumber)
+      for (const material of manifest.materials) {
+        const driveFileId = rewriteWorkspaceId(material.drive_file_id, pathRewrites, allSources, plan.targetStorageKey)
+        const existingByPath = driveFileId ? byPath.get(driveFileId) : null
+        if (existingByPath) {
+          materialIdMap.set(`${source}:${material.id}`, existingByPath.id)
+          continue
+        }
+        const id = usedMaterialIds.has(material.id) ? allocateUniqueNumericId(usedMaterialIds) : material.id
+        usedMaterialIds.add(id)
+        materialIdMap.set(`${source}:${material.id}`, id)
+        const migratedMaterial: SubjectDayMaterial = {
+          ...material,
+          id,
+          subject_id: plan.targetStorageKey,
+          container_id: material.container_id == null
+            ? null
+            : containerIdMap.get(`${source}:${material.container_id}`) ??
+              mergedContainers.find((container) => container.kind === material.material_type)?.id ?? null,
+          drive_file_id: driveFileId,
+          local_file_status: material.local_file_status === "recovered" ? "available" : material.local_file_status,
+        }
+        migrated.push(migratedMaterial)
+        if (driveFileId) byPath.set(driveFileId, migratedMaterial)
+      }
+    }
+    migratedMaterialsByWeek.set(weekNumber, migrated)
+  }
+
+  const entryWeeks = Array.from(new Set((await Promise.all(
+    allSources.map((source) => listWeekNumbersForManifestKind(ENTRIES_DIR, source))
+  )).flat())).sort((left, right) => left - right)
+  const usedEntryIds = new Set<number>()
+  const migratedEntriesByWeek = new Map<number, SubjectDayEntry[]>()
+  for (const weekNumber of entryWeeks) {
+    const migrated: SubjectDayEntry[] = []
+    for (const source of allSources) {
+      const manifest = await readEntryManifest(source, weekNumber)
+      for (const entry of manifest.entries) {
+        const id = usedEntryIds.has(entry.id) ? allocateUniqueNumericId(usedEntryIds) : entry.id
+        usedEntryIds.add(id)
+        migrated.push({
+          ...entry,
+          id,
+          subject_id: plan.targetStorageKey,
+          subject_day_material_id: entry.subject_day_material_id == null
+            ? null
+            : materialIdMap.get(`${source}:${entry.subject_day_material_id}`) ?? entry.subject_day_material_id,
+          drive_file_id: rewriteWorkspaceId(entry.drive_file_id, pathRewrites, allSources, plan.targetStorageKey),
+        })
+      }
+    }
+    migratedEntriesByWeek.set(weekNumber, migrated)
+  }
+
+  const synthesisWeeks = Array.from(new Set((await Promise.all(
+    allSources.map((source) => listSynthesisWeekNumbersForSubject(source))
+  )).flat())).sort((left, right) => left - right)
+  const synthesisByWeek = new Map<number, SubjectMaterialSynthesisRecord[]>()
+  for (const weekNumber of synthesisWeeks) {
+    const byMaterialId = new Map<number, SubjectMaterialSynthesisRecord>()
+    for (const source of allSources) {
+      for (const item of await readSynthesisProgressManifest(source, weekNumber)) {
+        const materialId = materialIdMap.get(`${source}:${item.subjectDayMaterialId}`) ?? item.subjectDayMaterialId
+        const current = byMaterialId.get(materialId)
+        if (!current || String(item.updatedAt ?? "") >= String(current.updatedAt ?? "")) {
+          byMaterialId.set(materialId, { ...item, subjectDayMaterialId: materialId })
+        }
+      }
+    }
+    synthesisByWeek.set(weekNumber, Array.from(byMaterialId.values()))
+  }
+
+  const [tags, shortcuts, sessions, completions] = await Promise.all([
+    readTagManifest(),
+    readShortcutsManifest(),
+    readSessionsManifest(),
+    readSubjectCompletionsManifest(),
+  ])
+  for (const [mappingKey, targetId] of materialIdMap) {
+    const sourceId = Number(mappingKey.slice(mappingKey.lastIndexOf(":") + 1))
+    if (sourceId === targetId) continue
+    const sourceKey = String(sourceId)
+    const targetKey = String(targetId)
+    tags.assignments[targetKey] = Array.from(new Set([
+      ...(tags.assignments[targetKey] ?? []),
+      ...(tags.assignments[sourceKey] ?? []),
+    ]))
+    delete tags.assignments[sourceKey]
+    for (const [regionKey, regions] of Object.entries({ ...tags.regions })) {
+      if (!regionKey.startsWith(`${sourceId}:`)) continue
+      const targetRegionKey = `${targetId}:${regionKey.slice(regionKey.indexOf(":") + 1)}`
+      tags.regions[targetRegionKey] = [
+        ...(tags.regions[targetRegionKey] ?? []),
+        ...regions.map((region) => ({ ...region, materialId: targetId })),
+      ]
+      delete tags.regions[regionKey]
+    }
+  }
+
+  const shortcutRecords = allSources.map((source) => shortcuts[source]).filter(Boolean)
+  if (shortcutRecords.length > 0) {
+    shortcuts[plan.targetStorageKey] = shortcutRecords.reduce<SubjectShortcuts>((merged, record) => ({
+      subjectId: plan.targetStorageKey,
+      eFich: merged.eFich ?? record.eFich,
+      figma: merged.figma ?? record.figma,
+      nlm: merged.nlm ?? record.nlm,
+    }), { subjectId: plan.targetStorageKey, eFich: null, figma: null, nlm: null })
+  }
+  for (const source of sources) delete shortcuts[source]
+
+  const sourceSet = new Set(allSources)
+  for (const session of Object.values(sessions)) {
+    session.active_subject_ids = Array.from(new Set(session.active_subject_ids.map((id) => sourceSet.has(id) ? plan.subjectId : id)))
+    session.completed_subjects = Object.fromEntries(Object.entries(session.completed_subjects).map(([id, value]) => [
+      sourceSet.has(id) ? plan.subjectId : id,
+      value,
+  ]))
+}
+  for (const [key, completion] of Object.entries({ ...completions })) {
+    if (!sourceSet.has(completion.subject_id)) continue
+    const targetKey = `${completion.date}:${plan.subjectId}`
+    completions[targetKey] = { ...completion, subject_id: plan.subjectId }
+    if (key !== targetKey) delete completions[key]
+  }
+
+  await Promise.all([
+    ...Array.from(migratedMaterialsByWeek, ([week, materials]) => writeMaterialManifest(plan.targetStorageKey, week, materials)),
+    ...Array.from(migratedEntriesByWeek, ([week, entries]) => writeEntryManifest(plan.targetStorageKey, week, entries)),
+    ...Array.from(synthesisByWeek, ([week, items]) => writeSynthesisProgressManifest(plan.targetStorageKey, week, items)),
+    writeMaterialContainersManifest(containersManifest),
+    writeTagManifest(tags),
+    writeShortcutsManifest(shortcuts),
+    writeSessionsManifest(sessions),
+    writeSubjectCompletionsManifest(completions),
+  ])
+
+  for (const source of sources) {
+    await Promise.all([
+      removeDirectoryBySegments([THEORY_DIR, source]),
+      removeDirectoryBySegments([PRACTICE_DIR, source]),
+      removeDirectoryBySegments([AUDIO_DIR, source]),
+      removeDirectoryBySegments([MANIFESTS_DIR, MATERIALS_DIR, source]),
+      removeDirectoryBySegments([MANIFESTS_DIR, ENTRIES_DIR, source]),
+      removeDirectoryBySegments([MANIFESTS_DIR, "synthesis", source]),
+    ])
+  }
+  await ensureLocalSubjectDirectories([{
+    id: plan.subjectId,
+    name: plan.name,
+    normalizedName: normalizeLocalSubjectName(plan.name),
+    storageKey: plan.targetStorageKey,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  }])
+}
+
+async function runSubjectFolderMigrations(plans: SubjectFolderMigrationPlan[]) {
+  if (plans.length === 0) return
+  const existingJournal = await readJsonFile<SubjectFolderMigrationJournal | null>(SUBJECT_MIGRATION_MANIFEST, null)
+  const journal: SubjectFolderMigrationJournal = existingJournal?.version === 1
+    ? { ...existingJournal, plans }
+    : { version: 1, completedSubjectIds: [], plans, updatedAt: nowIso() }
+  await writeJsonFile(SUBJECT_MIGRATION_MANIFEST, journal)
+  for (const plan of plans) {
+    if (journal.completedSubjectIds.includes(plan.subjectId)) continue
+    await migrateSubjectPlan(plan)
+    journal.completedSubjectIds.push(plan.subjectId)
+    journal.updatedAt = nowIso()
+    await writeJsonFile(SUBJECT_MIGRATION_MANIFEST, journal)
+  }
+  await deleteJsonFile(SUBJECT_MIGRATION_MANIFEST)
 }
 
 async function discoverLocalSubjectSourceIds(state: LocalWorkspaceTabsState, catalog: LocalSubjectCatalog) {
@@ -603,8 +980,6 @@ async function discoverLocalSubjectSourceIds(state: LocalWorkspaceTabsState, cat
     readJsonFile<Record<string, SubjectMaterialContainer[]>>(MATERIAL_CONTAINERS_MANIFEST, {}),
   ])
   return Array.from(new Set([
-    ...Object.keys(state.customSubjects),
-    ...Object.values(catalog.subjects).flatMap((subject) => subject.sourceIds),
     ...Object.keys(containerManifest),
     ...materialIds,
     ...entryIds,
@@ -615,7 +990,7 @@ async function discoverLocalSubjectSourceIds(state: LocalWorkspaceTabsState, cat
   ].filter(Boolean)))
 }
 
-function stableRecoveredMaterialId(workspaceId: string) {
+function stableLocalMaterialId(workspaceId: string) {
   let left = 2166136261
   let right = 5381
   for (let index = 0; index < workspaceId.length; index += 1) {
@@ -653,7 +1028,7 @@ async function reconstructLocalMaterialManifests() {
               (material) => material.session_date === sessionDate && material.material_type === materialType
             )
             additions.push({
-              id: stableRecoveredMaterialId(workspaceId),
+              id: stableLocalMaterialId(workspaceId),
               subject_id: subjectId,
               week_number: weekNumber,
               session_date: sessionDate,
@@ -666,7 +1041,7 @@ async function reconstructLocalMaterialManifests() {
               drive_mime_type: file.type || "application/pdf",
               drive_web_view_link: "",
               is_checkup_done: false,
-              local_file_status: "recovered",
+              local_file_status: "available",
               created_at: timestamp,
               updated_at: timestamp,
             })
@@ -680,7 +1055,12 @@ async function reconstructLocalMaterialManifests() {
   }
 }
 
-function replaceWorkspaceSubjectId(state: LocalWorkspaceTabsState, sourceId: string, targetId: string) {
+function replaceWorkspaceSubjectId(
+  state: LocalWorkspaceTabsState,
+  sourceId: string,
+  targetId: string,
+  targetStorageKey?: string
+) {
   if (sourceId === targetId) return state
   const workspaceTabs = Object.fromEntries(
     Object.entries(state.workspaceTabs).map(([tabId, tab]) => [
@@ -694,10 +1074,47 @@ function replaceWorkspaceSubjectId(state: LocalWorkspaceTabsState, sourceId: str
   const customSubjects = { ...state.customSubjects }
   const source = customSubjects[sourceId]
   if (source && !customSubjects[targetId]) {
-    customSubjects[targetId] = { ...source, id: targetId, storageKey: targetId }
+    customSubjects[targetId] = { ...source, id: targetId, storageKey: targetStorageKey ?? source.storageKey }
   }
   delete customSubjects[sourceId]
   return { ...state, workspaceTabs, customSubjects }
+}
+
+function removeLegacyRecoveredWorkspaceTab(state: LocalWorkspaceTabsState) {
+  const workspaceTabs = { ...state.workspaceTabs }
+  delete workspaceTabs["tab-recovered"]
+  return { ...state, workspaceTabs }
+}
+
+function buildSubjectFolderMigrationPlans(
+  inputState: LocalWorkspaceTabsState,
+  catalog: LocalSubjectCatalog,
+  legacySources: Record<string, string[]>
+) {
+  const plans = new Map<string, SubjectFolderMigrationPlan>()
+  for (const subject of Object.values(inputState.customSubjects)) {
+    const safeName = createLocalSubjectDirectoryName(subject.name)
+    const catalogEntry = findCatalogSubjectByAnyId(catalog, subject.id) ?? findCatalogSubjectByName(catalog, safeName)
+    const subjectId = catalogEntry?.id ?? subject.id
+    const sources = new Set([
+      subject.id,
+      subject.storageKey ?? subject.id,
+      catalogEntry?.storageKey ?? "",
+      ...(legacySources[subject.id] ?? []),
+      ...(catalogEntry ? legacySources[catalogEntry.id] ?? [] : []),
+    ].filter(Boolean))
+    if (normalizeLocalSubjectName(safeName) === normalizeLocalSubjectName("Algebra 2")) {
+      sources.add("algebra")
+      sources.add(CURRENT_ALGEBRA_LEGACY_SOURCE_ID)
+    }
+    plans.set(subjectId, {
+      subjectId,
+      name: safeName,
+      targetStorageKey: safeName,
+      sourceStorageKeys: Array.from(sources),
+    })
+  }
+  return Array.from(plans.values())
 }
 
 function reconcileLocalSubjectCatalogState(
@@ -705,103 +1122,95 @@ function reconcileLocalSubjectCatalogState(
   inputCatalog: LocalSubjectCatalog,
   discoveredSourceIds: string[]
 ) {
-  let state = normalizeLocalWorkspaceTabsState(inputState)
+  let state = removeLegacyRecoveredWorkspaceTab(normalizeLocalWorkspaceTabsState(inputState))
   let catalog = normalizeLocalSubjectCatalog(inputCatalog)
   const timestamp = new Date().toISOString()
 
   for (const subject of Object.values(state.customSubjects)) {
-    const existing = findCatalogSubjectByAnyId(catalog, subject.id)
-    const normalizedName = normalizeLocalSubjectName(subject.name)
-    const storageKey = existing?.storageKey ?? subject.storageKey ?? subject.id
-    const sourceIds = Array.from(new Set([...(existing?.sourceIds ?? []), subject.storageKey ?? subject.id, subject.id]))
-    const changed = !existing || existing.name !== subject.name || existing.normalizedName !== normalizedName ||
-      existing.storageKey !== storageKey || sourceIds.length !== existing.sourceIds.length ||
-      sourceIds.some((sourceId) => !existing.sourceIds.includes(sourceId))
+    const safeName = createLocalSubjectDirectoryName(subject.name)
+    const existing = findCatalogSubjectByAnyId(catalog, subject.id) ?? findCatalogSubjectByName(catalog, safeName)
+    if (existing && existing.id !== subject.id) {
+      state = replaceWorkspaceSubjectId(state, subject.id, existing.id, existing.storageKey)
+    }
     const entry: LocalSubjectCatalogEntry = {
       id: existing?.id ?? subject.id,
-      name: subject.name,
-      normalizedName,
-      storageKey,
-      sourceIds,
+      name: safeName,
+      normalizedName: normalizeLocalSubjectName(safeName),
+      storageKey: safeName,
       createdAt: existing?.createdAt ?? subject.createdAt,
-      updatedAt: changed ? timestamp : existing.updatedAt,
-      recovered: existing?.recovered ?? false,
+      updatedAt: existing?.name === safeName && existing.storageKey === safeName ? existing.updatedAt : timestamp,
     }
     catalog.subjects[entry.id] = entry
   }
 
-  for (const builtIn of SUBJECTS) {
-    if (!discoveredSourceIds.includes(builtIn.id)) continue
-    const existing = findCatalogSubjectByAnyId(catalog, builtIn.id)
-    if (!existing) {
-      catalog.subjects[builtIn.id] = {
-        id: builtIn.id,
-        name: builtIn.name.replace("\n", " "),
-        normalizedName: normalizeLocalSubjectName(builtIn.name),
-        storageKey: builtIn.id,
-        sourceIds: [builtIn.id],
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        recovered: true,
-      }
-    }
-  }
-
-  // Known pre-catalog repair: the recreated Algebra 2 card is empty while these two
-  // storage sources contain the 22 preserved PDFs inspected in the workspace.
-  if (discoveredSourceIds.includes("algebra") && discoveredSourceIds.includes(CURRENT_ALGEBRA_LEGACY_SOURCE_ID)) {
-    const algebraCard = Object.values(state.customSubjects).find(
-      (subject) => normalizeLocalSubjectName(subject.name) === normalizeLocalSubjectName("Algebra 2")
-    )
-    const target = findCatalogSubjectByAnyId(catalog, "algebra")
-    if (target) {
-      catalog = mergeCatalogSubjects(catalog, target.id, [CURRENT_ALGEBRA_LEGACY_SOURCE_ID, algebraCard?.id ?? ""])
-      if (algebraCard && algebraCard.id !== target.id) {
-        state = replaceWorkspaceSubjectId(state, algebraCard.id, target.id)
-      }
-    }
-  }
-
   for (const sourceId of discoveredSourceIds) {
-    if (findCatalogSubjectByAnyId(catalog, sourceId)) continue
-    catalog.subjects[sourceId] = {
-      id: sourceId,
-      name: `Recuperada · ${sourceId}`,
-      normalizedName: normalizeLocalSubjectName(`Recuperada ${sourceId}`),
-      storageKey: sourceId,
-      sourceIds: [sourceId],
+    const matchingSubject = findCatalogSubjectByDirectoryName(catalog, sourceId)
+    if (matchingSubject) {
+      if (!state.customSubjects[matchingSubject.id]) {
+        state.customSubjects[matchingSubject.id] = {
+          id: matchingSubject.id,
+          storageKey: matchingSubject.storageKey,
+          name: matchingSubject.name,
+          color: "#0f766e",
+          tabId: UNASSIGNED_WORKSPACE_TAB_ID,
+          createdAt: matchingSubject.createdAt,
+          targetWeekday: 0,
+        }
+      }
+      continue
+    }
+    const name = createLocalSubjectDirectoryName(sourceId)
+    const id = allocateLocalSubjectStorageKey(catalog, name)
+    catalog.subjects[id] = {
+      id,
+      name,
+      normalizedName: normalizeLocalSubjectName(name),
+      storageKey: name,
       createdAt: timestamp,
       updatedAt: timestamp,
-      recovered: true,
+    }
+    state.customSubjects[id] = {
+      id,
+      storageKey: name,
+      name,
+      color: "#0f766e",
+      tabId: UNASSIGNED_WORKSPACE_TAB_ID,
+      createdAt: timestamp,
+      targetWeekday: 0,
     }
   }
 
-  const linkedIds = new Set(Object.values(state.workspaceTabs).flatMap((tab) => tab.subjectIds))
-  for (const subject of Object.values(state.customSubjects)) {
-    if (subject.tabId === MAIN_WORKSPACE_TAB_ID && state.isMainWorkspaceTabVisible) linkedIds.add(subject.id)
+  const linkedByExplicitTab = new Set(Object.values(state.workspaceTabs).flatMap((tab) => tab.subjectIds))
+  const unassignedSubjectIds: string[] = []
+  for (const [subjectId, subject] of Object.entries(state.customSubjects)) {
+    const isOnVisibleMain = subject.tabId === MAIN_WORKSPACE_TAB_ID && state.isMainWorkspaceTabVisible
+    if (!isOnVisibleMain && !linkedByExplicitTab.has(subjectId)) {
+      state.customSubjects[subjectId] = { ...subject, tabId: UNASSIGNED_WORKSPACE_TAB_ID }
+      unassignedSubjectIds.push(subjectId)
+    }
   }
-  const recoveredEntries = Object.values(catalog.subjects).filter((subject) => !linkedIds.has(subject.id))
-  if (recoveredEntries.length > 0) {
-    const existingTab = state.workspaceTabs[RECOVERED_WORKSPACE_TAB_ID]
-    state.workspaceTabs[RECOVERED_WORKSPACE_TAB_ID] = {
-      id: RECOVERED_WORKSPACE_TAB_ID,
-      name: "Recuperadas",
-      color: "#92400e",
+  if (unassignedSubjectIds.length > 0) {
+    const existingTab = state.workspaceTabs[UNASSIGNED_WORKSPACE_TAB_ID]
+    state.workspaceTabs[UNASSIGNED_WORKSPACE_TAB_ID] = {
+      id: UNASSIGNED_WORKSPACE_TAB_ID,
+      name: UNASSIGNED_WORKSPACE_TAB_NAME,
+      color: "#475569",
       createdAt: existingTab?.createdAt ?? timestamp,
       orderIndex: existingTab?.orderIndex ?? Object.keys(state.workspaceTabs).length,
-      subjectIds: Array.from(new Set([...(existingTab?.subjectIds ?? []), ...recoveredEntries.map((subject) => subject.id)])),
+      subjectIds: Array.from(new Set([...(existingTab?.subjectIds ?? []), ...unassignedSubjectIds])),
     }
   }
 
   for (const entry of Object.values(catalog.subjects)) {
     const existing = state.customSubjects[entry.id]
     const owningTab = Object.values(state.workspaceTabs).find((tab) => tab.subjectIds.includes(entry.id))?.id
+    if (!existing && !owningTab) continue
     state.customSubjects[entry.id] = {
       id: entry.id,
       storageKey: entry.storageKey,
       name: entry.name,
       color: existing?.color ?? "#0f766e",
-      tabId: existing?.tabId ?? owningTab ?? RECOVERED_WORKSPACE_TAB_ID,
+      tabId: existing?.tabId ?? owningTab ?? MAIN_WORKSPACE_TAB_ID,
       createdAt: existing?.createdAt ?? entry.createdAt,
       targetWeekday: existing?.targetWeekday ?? 0,
     }
@@ -812,6 +1221,8 @@ function reconcileLocalSubjectCatalogState(
     tabId,
     { ...tab, subjectIds: Array.from(new Set(tab.subjectIds.filter((id) => validIds.has(id)))) },
   ]))
+  const visibleIds = new Set(Object.keys(state.customSubjects))
+  catalog.subjects = Object.fromEntries(Object.entries(catalog.subjects).filter(([id]) => visibleIds.has(id)))
   return { state: normalizeLocalWorkspaceTabsState(state), catalog: normalizeLocalSubjectCatalog(catalog) }
 }
 
@@ -853,25 +1264,33 @@ async function ensureLocalReconciliationBackups() {
     const containers = await readJsonFile<Record<string, SubjectMaterialContainer[]>>(MATERIAL_CONTAINERS_MANIFEST, {})
     await writeJsonFile(MATERIAL_CONTAINERS_BACKUP_MANIFEST, containers)
   }
+  if (await jsonFileExists(SUBJECT_CATALOG_MANIFEST) && !(await jsonFileExists(SUBJECT_CATALOG_V1_BACKUP_MANIFEST))) {
+    const catalog = await readJsonFile<LegacyLocalSubjectCatalog | null>(SUBJECT_CATALOG_MANIFEST, null)
+    if (catalog) await writeJsonFile(SUBJECT_CATALOG_V1_BACKUP_MANIFEST, catalog)
+  }
 }
 
 export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
   const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
   await ensureLocalReconciliationBackups()
   const loaded = await readWorkspaceStateWithBackup()
-  const catalog = await readLocalSubjectCatalog()
+  const catalogRead = await readLocalSubjectCatalogWithLegacy()
+  const catalog = catalogRead.catalog
+  const migrationPlans = buildSubjectFolderMigrationPlans(loaded.state, catalog, catalogRead.legacySources)
+  await runSubjectFolderMigrations(migrationPlans)
   await reconstructLocalMaterialManifests()
   const discoveredSourceIds = await discoverLocalSubjectSourceIds(loaded.state, catalog)
   const reconciled = reconcileLocalSubjectCatalogState(loaded.state, catalog, discoveredSourceIds)
   const changed = JSON.stringify(reconciled.state) !== JSON.stringify(loaded.state) ||
     JSON.stringify(reconciled.catalog) !== JSON.stringify(catalog)
-  if (changed || loaded.usedBackup || !exists) {
+  if (changed || loaded.usedBackup || !exists || catalogRead.raw?.version !== 2) {
     await Promise.all([
       saveLocalWorkspaceTabsState(reconciled.state),
       writeLocalSubjectCatalog(reconciled.catalog),
     ])
   }
   await ensureLocalDefaultContainersForSubjects(Object.values(reconciled.catalog.subjects))
+  await ensureLocalSubjectDirectories(Object.values(reconciled.catalog.subjects))
   logWorkspaceDataSource({
     operation: "readLocalWorkspaceTabsState",
     path: WORKSPACE_STATE_MANIFEST.join("/"),
@@ -908,22 +1327,38 @@ export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceT
 
 export async function ensureLocalSubjectForName(name: string) {
   let catalog = await readLocalSubjectCatalog()
-  const existing = findCatalogSubjectByName(catalog, name)
-  if (existing) return existing
-  const storageKey = allocateLocalSubjectStorageKey(catalog, name)
+  const safeName = createLocalSubjectDirectoryName(name)
+  const existing = findCatalogSubjectByName(catalog, safeName) ?? findCatalogSubjectByDirectoryName(catalog, safeName)
+  if (existing) {
+    const updated = safeName === existing.storageKey && existing.name === safeName
+      ? existing
+      : {
+          ...existing,
+          name: safeName,
+          normalizedName: normalizeLocalSubjectName(safeName),
+          storageKey: safeName,
+          updatedAt: new Date().toISOString(),
+        }
+    if (updated !== existing) {
+      catalog = { ...catalog, subjects: { ...catalog.subjects, [updated.id]: updated } }
+      await writeLocalSubjectCatalog(catalog)
+    }
+    await ensureLocalSubjectDirectories([updated])
+    return updated
+  }
+  const id = allocateLocalSubjectStorageKey(catalog, safeName)
   const timestamp = new Date().toISOString()
   const entry: LocalSubjectCatalogEntry = {
-    id: storageKey,
-    name: name.trim(),
-    normalizedName: normalizeLocalSubjectName(name),
-    storageKey,
-    sourceIds: [storageKey],
+    id,
+    name: safeName,
+    normalizedName: normalizeLocalSubjectName(safeName),
+    storageKey: safeName,
     createdAt: timestamp,
     updatedAt: timestamp,
-    recovered: false,
   }
   catalog = { ...catalog, subjects: { ...catalog.subjects, [entry.id]: entry } }
   await writeLocalSubjectCatalog(catalog)
+  await ensureLocalSubjectDirectories([entry])
   await ensureLocalDefaultContainersForSubjects([entry])
   return entry
 }
@@ -932,20 +1367,37 @@ export async function renameLocalCatalogSubject(subjectId: string, name: string)
   const catalog = await readLocalSubjectCatalog()
   const current = findCatalogSubjectByAnyId(catalog, subjectId)
   if (!current) return null
-  const duplicate = findCatalogSubjectByName(catalog, name)
+  const safeName = createLocalSubjectDirectoryName(name)
+  const duplicate = findCatalogSubjectByName(catalog, safeName) ?? findCatalogSubjectByDirectoryName(catalog, safeName)
   if (duplicate && duplicate.id !== current.id) {
-    const merged = mergeCatalogSubjects(catalog, duplicate.id, current.sourceIds)
-    await writeLocalSubjectCatalog(merged)
-    return merged.subjects[duplicate.id]
+    await runSubjectFolderMigrations([{
+      subjectId: duplicate.id,
+      name: duplicate.name,
+      targetStorageKey: duplicate.storageKey,
+      sourceStorageKeys: [current.storageKey],
+    }])
+    const subjects = { ...catalog.subjects }
+    delete subjects[current.id]
+    await writeLocalSubjectCatalog({ version: 2, subjects })
+    return duplicate
   }
-  const updated = {
+  if (safeName !== current.storageKey) {
+    await runSubjectFolderMigrations([{
+      subjectId: current.id,
+      name: safeName,
+      targetStorageKey: safeName,
+      sourceStorageKeys: [current.storageKey],
+    }])
+  }
+  const updated: LocalSubjectCatalogEntry = {
     ...current,
-    name: name.trim(),
-    normalizedName: normalizeLocalSubjectName(name),
-    recovered: false,
+    name: safeName,
+    normalizedName: normalizeLocalSubjectName(safeName),
+    storageKey: safeName,
     updatedAt: new Date().toISOString(),
   }
   await writeLocalSubjectCatalog({ ...catalog, subjects: { ...catalog.subjects, [updated.id]: updated } })
+  await ensureLocalSubjectDirectories([updated])
   return updated
 }
 
@@ -956,7 +1408,7 @@ async function resolveLocalSubjectCatalogEntry(subjectId: string) {
 
 async function resolveLocalSubjectSourceIds(subjectId: string) {
   const entry = await resolveLocalSubjectCatalogEntry(subjectId)
-  return entry?.sourceIds.length ? entry.sourceIds : [subjectId]
+  return [entry?.storageKey ?? subjectId]
 }
 
 async function resolveLocalSubjectStorageKey(subjectId: string) {
@@ -981,7 +1433,7 @@ export type LocalSubjectDeletionSummary = {
 
 export async function getLocalSubjectDeletionSummary(subjectId: string): Promise<LocalSubjectDeletionSummary> {
   const entry = await resolveLocalSubjectCatalogEntry(subjectId)
-  const sourceIds = entry?.sourceIds.length ? entry.sourceIds : [subjectId]
+  const sourceIds = [entry?.storageKey ?? subjectId]
   let materialCount = 0
   let entryCount = 0
   let fileCount = 0
@@ -994,7 +1446,7 @@ export async function getLocalSubjectDeletionSummary(subjectId: string): Promise
       entryCount += (await readEntryManifest(sourceId, weekNumber)).entries.length
     }
     for (const base of [[THEORY_DIR], [PRACTICE_DIR], [AUDIO_DIR]] as string[][]) {
-      const path = [...base, sanitizePathSegment(sourceId)]
+      const path = [...base, sourceId]
       if (await directoryExistsBySegments(path)) directoryCount += 1
       fileCount += await countFilesBySegments(path)
     }
@@ -1021,9 +1473,9 @@ export async function deleteLocalSubjectPermanently(subjectId: string) {
 
   for (const sourceId of summary.sourceIds) {
     await Promise.all([
-      removeDirectoryBySegments([THEORY_DIR, sanitizePathSegment(sourceId)]),
-      removeDirectoryBySegments([PRACTICE_DIR, sanitizePathSegment(sourceId)]),
-      removeDirectoryBySegments([AUDIO_DIR, sanitizePathSegment(sourceId)]),
+      removeDirectoryBySegments([THEORY_DIR, sourceId]),
+      removeDirectoryBySegments([PRACTICE_DIR, sourceId]),
+      removeDirectoryBySegments([AUDIO_DIR, sourceId]),
       removeDirectoryBySegments([MANIFESTS_DIR, MATERIALS_DIR, sourceId]),
       removeDirectoryBySegments([MANIFESTS_DIR, ENTRIES_DIR, sourceId]),
       removeDirectoryBySegments([MANIFESTS_DIR, "synthesis", sourceId]),
@@ -1057,7 +1509,7 @@ export async function deleteLocalSubjectPermanently(subjectId: string) {
   ]))
   const remainingCompletions = Object.fromEntries(Object.entries(completions).filter(([, completion]) => !deletedSourceIds.has(completion.subject_id)))
   await Promise.all([
-    writeLocalSubjectCatalog({ version: 1, subjects }),
+    writeLocalSubjectCatalog({ version: 2, subjects }),
     writeMaterialContainersManifest(containers),
     writeShortcutsManifest(shortcuts),
     writeSessionsManifest(remainingSessions),
@@ -1445,7 +1897,7 @@ async function writeMaterialContainersManifest(value: Record<string, SubjectMate
 function buildDefaultLocalSubjectContainers(storageKey: string, timestamp = nowIso()): SubjectMaterialContainer[] {
   return [
     {
-      id: stableRecoveredMaterialId(`container:${storageKey}:theory`),
+      id: stableLocalMaterialId(`container:${storageKey}:theory`),
       subjectId: storageKey,
       name: "Teoría",
       normalizedName: "teoría",
@@ -1456,7 +1908,7 @@ function buildDefaultLocalSubjectContainers(storageKey: string, timestamp = nowI
       updatedAt: timestamp,
     },
     {
-      id: stableRecoveredMaterialId(`container:${storageKey}:practice`),
+      id: stableLocalMaterialId(`container:${storageKey}:practice`),
       subjectId: storageKey,
       name: "Práctica",
       normalizedName: "práctica",
@@ -1507,7 +1959,8 @@ export async function listLocalSubjectMaterialContainers(subjectId: string) {
       for (const material of materials) {
         const container = material.container_id == null
           ? containers.find((candidate) => candidate.kind === material.material_type)
-          : containers.find((candidate) => candidate.id === material.container_id)
+          : containers.find((candidate) => candidate.id === material.container_id) ??
+            containers.find((candidate) => candidate.kind === material.material_type)
         if (container) counts.set(container.id, (counts.get(container.id) ?? 0) + 1)
       }
     }
@@ -1733,7 +2186,7 @@ function getMaterialRelativePath(params: {
   const baseDir = params.materialType === "theory" ? THEORY_DIR : PRACTICE_DIR
   return joinWorkspaceId(
     baseDir,
-    sanitizePathSegment(params.subjectId),
+    createLocalSubjectDirectoryName(params.subjectId),
     `week-${params.weekNumber}`,
     params.sessionDate,
     `${Date.now()}-${sanitizePathSegment(normalizePdfFileName(params.fileName))}`
@@ -1748,7 +2201,7 @@ function getAudioRelativePath(params: {
 }) {
   return joinWorkspaceId(
     AUDIO_DIR,
-    sanitizePathSegment(params.subjectId),
+    createLocalSubjectDirectoryName(params.subjectId),
     `week-${params.weekNumber}`,
     params.sessionDate,
     `${Date.now()}-${sanitizePathSegment(params.fileName)}`
@@ -2177,10 +2630,14 @@ async function readLocalSubjectWeekMaterials(subjectId: string, weekNumber: numb
     })))
     for (const { material, exists } of materialsWithStatus) {
       const assigned = new Set(tagManifest.assignments[String(material.id)] ?? [])
+      const resolvedContainerId = material.container_id != null &&
+        containers.some((container) => container.id === material.container_id)
+        ? material.container_id
+        : containers.find((container) => container.kind === material.material_type)?.id ?? null
       byId.set(material.id, {
         ...material,
         local_file_status: exists ? material.local_file_status ?? "available" : "missing",
-        container_id: material.container_id ?? containers.find((container) => container.kind === material.material_type)?.id ?? null,
+        container_id: resolvedContainerId,
         tags: tagsWithCounts.filter((tag) => assigned.has(tag.id)),
       })
     }

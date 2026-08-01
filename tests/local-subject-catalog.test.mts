@@ -4,10 +4,14 @@ import test from "node:test"
 import {
   allocateLocalSubjectStorageKey,
   createEmptyLocalSubjectCatalog,
+  createLocalSubjectDirectoryName,
   createLocalSubjectStorageKey,
+  findCatalogSubjectByDirectoryName,
   findCatalogSubjectByName,
-  mergeCatalogSubjects,
+  getLegacyLocalSubjectSources,
+  normalizeLocalSubjectCatalog,
   normalizeLocalSubjectName,
+  type LegacyLocalSubjectCatalog,
   type LocalSubjectCatalog,
 } from "../lib/local-subject-catalog.ts"
 
@@ -16,57 +20,61 @@ test("normaliza el nombre de materia sin depender de acentos, espacios o mayuscu
   assert.equal(createLocalSubjectStorageKey("  Laboratorio 1 "), "laboratorio-1")
 })
 
-test("reutiliza nombres equivalentes y asigna sufijos solo a colisiones distintas", () => {
+test("conserva el nombre visible como carpeta y reemplaza caracteres no validos", () => {
+  assert.equal(createLocalSubjectDirectoryName("  Lab   1  "), "Lab 1")
+  assert.equal(createLocalSubjectDirectoryName("Fisica: teoria/practica"), "Fisica- teoria-practica")
+  assert.equal(createLocalSubjectDirectoryName("CON"), "CON-")
+})
+
+test("catalogo v2 mantiene una sola carpeta canonica por materia", () => {
   const timestamp = "2026-07-31T00:00:00.000Z"
   const catalog: LocalSubjectCatalog = {
-    version: 1,
+    version: 2,
     subjects: {
       "lab-1": {
         id: "lab-1",
         name: "Lab 1",
         normalizedName: "lab 1",
-        storageKey: "lab-1",
-        sourceIds: ["lab-1"],
+        storageKey: "Lab 1",
         createdAt: timestamp,
         updatedAt: timestamp,
-        recovered: false,
       },
     },
   }
   assert.equal(findCatalogSubjectByName(catalog, "LÁB  1")?.id, "lab-1")
+  assert.equal(findCatalogSubjectByDirectoryName(catalog, "LÁB-1")?.id, "lab-1")
   assert.equal(allocateLocalSubjectStorageKey(catalog, "Lab 1"), "lab-1-2")
   assert.equal(allocateLocalSubjectStorageKey(createEmptyLocalSubjectCatalog(), "Lab 1"), "lab-1")
 })
 
-test("une fuentes antiguas de forma idempotente sin mover archivos", () => {
+test("migra catalogo v1 sin persistir aliases ni estado recuperado", () => {
   const timestamp = "2026-07-31T00:00:00.000Z"
-  const catalog: LocalSubjectCatalog = {
+  const legacy: LegacyLocalSubjectCatalog = {
     version: 1,
     subjects: {
-      algebra: {
-        id: "algebra",
-        name: "Algebra 2",
-        normalizedName: "algebra 2",
-        storageKey: "algebra",
-        sourceIds: ["algebra"],
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        recovered: false,
-      },
-      legacy: {
-        id: "legacy",
-        name: "Recuperada",
-        normalizedName: "recuperada",
-        storageKey: "legacy",
-        sourceIds: ["legacy"],
+      lab: {
+        id: "lab",
+        name: "Lab 1",
+        normalizedName: "lab 1",
+        storageKey: "custom-123",
+        sourceIds: ["custom-123", "Lab 1"],
         createdAt: timestamp,
         updatedAt: timestamp,
         recovered: true,
       },
     },
   }
-  const merged = mergeCatalogSubjects(catalog, "algebra", ["legacy"])
-  assert.deepEqual(merged.subjects.algebra.sourceIds, ["algebra", "legacy"])
-  assert.equal(merged.subjects.legacy, undefined)
-  assert.deepEqual(mergeCatalogSubjects(merged, "algebra", ["legacy"]), merged)
+  assert.deepEqual(getLegacyLocalSubjectSources(legacy).lab, ["lab", "custom-123", "Lab 1"])
+  const migrated = normalizeLocalSubjectCatalog(legacy)
+  assert.equal(migrated.version, 2)
+  assert.deepEqual(migrated.subjects.lab, {
+    id: "lab",
+    name: "Lab 1",
+    normalizedName: "lab 1",
+    storageKey: "custom-123",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  assert.equal("sourceIds" in migrated.subjects.lab, false)
+  assert.equal("recovered" in migrated.subjects.lab, false)
 })
