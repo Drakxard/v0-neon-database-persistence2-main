@@ -10,6 +10,10 @@ type WorkspaceRecord = {
   handle: FileSystemDirectoryHandle
 }
 
+let cachedWorkspaceHandle: FileSystemDirectoryHandle | null = null
+let workspaceHandleLoad: Promise<FileSystemDirectoryHandle | null> | null = null
+let readyWorkspaceHandle: FileSystemDirectoryHandle | null = null
+
 function openWorkspaceDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = window.indexedDB.open(WORKSPACE_DB_NAME, WORKSPACE_DB_VERSION)
@@ -52,22 +56,42 @@ export function supportsWorkspacePicker() {
 }
 
 export async function loadWorkspaceHandle() {
-  return withStore<FileSystemDirectoryHandle | null>("readonly", (store) => {
+  if (cachedWorkspaceHandle) return cachedWorkspaceHandle
+  if (workspaceHandleLoad) return workspaceHandleLoad
+
+  workspaceHandleLoad = withStore<FileSystemDirectoryHandle | null>("readonly", (store) => {
     return new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
       const request = store.get(WORKSPACE_ROOT_KEY)
       request.onsuccess = () => resolve((request.result as WorkspaceRecord | undefined)?.handle ?? null)
       request.onerror = () => reject(request.error ?? new Error("No se pudo leer la carpeta guardada."))
     })
   })
+
+  try {
+    cachedWorkspaceHandle = await workspaceHandleLoad
+    return cachedWorkspaceHandle
+  } finally {
+    workspaceHandleLoad = null
+  }
 }
 
 export async function persistWorkspaceHandle(handle: FileSystemDirectoryHandle) {
-  return withStore<void>("readwrite", (store) => {
+  await withStore<void>("readwrite", (store) => {
     store.put({
       id: WORKSPACE_ROOT_KEY,
       handle,
     } satisfies WorkspaceRecord)
   })
+  cachedWorkspaceHandle = handle
+}
+
+export function getReadyWorkspaceHandle() {
+  return readyWorkspaceHandle
+}
+
+export function setReadyWorkspaceHandle(handle: FileSystemDirectoryHandle | null) {
+  readyWorkspaceHandle = handle
+  if (handle) cachedWorkspaceHandle = handle
 }
 
 export async function queryWorkspacePermission(handle: FileSystemDirectoryHandle, mode: FileSystemPermissionMode = "readwrite") {
@@ -87,11 +111,11 @@ export async function requestWorkspacePermission(handle: FileSystemDirectoryHand
 }
 
 export async function ensureWorkspaceSubdirectories(rootHandle: FileSystemDirectoryHandle) {
-  await rootHandle.getDirectoryHandle("cronograma", { create: true })
-  await rootHandle.getDirectoryHandle("teoria", { create: true })
-  await rootHandle.getDirectoryHandle("practica", { create: true })
-  await rootHandle.getDirectoryHandle("audio", { create: true })
-  await rootHandle.getDirectoryHandle("manifests", { create: true })
+  await Promise.all(
+    ["cronograma", "teoria", "practica", "audio", "manifests"].map((directoryName) =>
+      rootHandle.getDirectoryHandle(directoryName, { create: true })
+    )
+  )
 }
 
 export async function pickWorkspaceRootHandle() {
@@ -103,6 +127,7 @@ export async function pickWorkspaceRootHandle() {
 
   await ensureWorkspaceSubdirectories(handle)
   await persistWorkspaceHandle(handle)
+  setReadyWorkspaceHandle(handle)
   return handle
 }
 

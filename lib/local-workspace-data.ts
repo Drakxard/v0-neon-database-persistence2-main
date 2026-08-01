@@ -23,7 +23,13 @@ import {
   normalizeTagName,
   wouldCreateTagCycle,
 } from "@/lib/tag-utils"
-import { loadWorkspaceHandle, queryWorkspacePermission } from "@/lib/local-workspace-client"
+import {
+  ensureWorkspaceSubdirectories,
+  getReadyWorkspaceHandle,
+  loadWorkspaceHandle,
+  queryWorkspacePermission,
+  setReadyWorkspaceHandle,
+} from "@/lib/local-workspace-client"
 import { chooseNonOverwritingFileName } from "@/lib/local-subject-migration"
 import {
   UNASSIGNED_WORKSPACE_TAB_ID,
@@ -142,7 +148,6 @@ const CRONOGRAMA_DIR = "cronograma"
 const THEORY_DIR = "teoria"
 const PRACTICE_DIR = "practica"
 const AUDIO_DIR = "audio"
-const ROOT_SUBDIRECTORIES = [CRONOGRAMA_DIR, THEORY_DIR, PRACTICE_DIR, AUDIO_DIR, MANIFESTS_DIR] as const
 const WORKSPACE_STATE_MANIFEST = [MANIFESTS_DIR, "workspace-state.json"]
 const WORKSPACE_STATE_BACKUP_MANIFEST = [MANIFESTS_DIR, "workspace-state.backup.json"]
 const WORKSPACE_STATE_PRE_RECONCILIATION_MANIFEST = [MANIFESTS_DIR, "workspace-state.pre-reconciliation.json"]
@@ -163,6 +168,13 @@ type SubjectFolderMigrationPlan = {
 }
 
 type SubjectFolderMigrationJournal = {
+  version: 2
+  completedPlanSignatures: string[]
+  plans: SubjectFolderMigrationPlan[]
+  updatedAt: string
+}
+
+type LegacySubjectFolderMigrationJournal = {
   version: 1
   completedSubjectIds: string[]
   plans: SubjectFolderMigrationPlan[]
@@ -266,6 +278,9 @@ function workspaceIdToSegments(workspaceId: string) {
 }
 
 async function ensureWorkspaceRootHandle() {
+  const readyHandle = getReadyWorkspaceHandle()
+  if (readyHandle) return readyHandle
+
   const handle = await loadWorkspaceHandle()
   if (!handle) {
     throw new Error("No hay una carpeta local seleccionada.")
@@ -276,9 +291,8 @@ async function ensureWorkspaceRootHandle() {
     throw new Error("No hay permiso de lectura/escritura para la carpeta local.")
   }
 
-  for (const directoryName of ROOT_SUBDIRECTORIES) {
-    await handle.getDirectoryHandle(directoryName, { create: true })
-  }
+  await ensureWorkspaceSubdirectories(handle)
+  setReadyWorkspaceHandle(handle)
 
   return handle
 }
@@ -954,19 +968,35 @@ async function migrateSubjectPlan(plan: SubjectFolderMigrationPlan) {
 
 async function runSubjectFolderMigrations(plans: SubjectFolderMigrationPlan[]) {
   if (plans.length === 0) return
-  const existingJournal = await readJsonFile<SubjectFolderMigrationJournal | null>(SUBJECT_MIGRATION_MANIFEST, null)
-  const journal: SubjectFolderMigrationJournal = existingJournal?.version === 1
-    ? { ...existingJournal, plans }
-    : { version: 1, completedSubjectIds: [], plans, updatedAt: nowIso() }
+  const existingJournal = await readJsonFile<SubjectFolderMigrationJournal | LegacySubjectFolderMigrationJournal | null>(
+    SUBJECT_MIGRATION_MANIFEST,
+    null
+  )
+  const planSignature = (plan: SubjectFolderMigrationPlan) => JSON.stringify([
+    plan.subjectId,
+    plan.targetStorageKey,
+    [...plan.sourceStorageKeys].sort(),
+  ])
+  const completedPlanSignatures = existingJournal?.version === 2
+    ? existingJournal.completedPlanSignatures
+    : plans
+        .filter((plan) => existingJournal?.completedSubjectIds.includes(plan.subjectId))
+        .map(planSignature)
+  const journal: SubjectFolderMigrationJournal = {
+    version: 2,
+    completedPlanSignatures: Array.from(new Set(completedPlanSignatures)),
+    plans,
+    updatedAt: nowIso(),
+  }
   await writeJsonFile(SUBJECT_MIGRATION_MANIFEST, journal)
   for (const plan of plans) {
-    if (journal.completedSubjectIds.includes(plan.subjectId)) continue
+    const signature = planSignature(plan)
+    if (journal.completedPlanSignatures.includes(signature)) continue
     await migrateSubjectPlan(plan)
-    journal.completedSubjectIds.push(plan.subjectId)
+    journal.completedPlanSignatures.push(signature)
     journal.updatedAt = nowIso()
     await writeJsonFile(SUBJECT_MIGRATION_MANIFEST, journal)
   }
-  await deleteJsonFile(SUBJECT_MIGRATION_MANIFEST)
 }
 
 async function discoverLocalSubjectSourceIds(state: LocalWorkspaceTabsState, catalog: LocalSubjectCatalog) {
@@ -1003,6 +1033,7 @@ function stableLocalMaterialId(workspaceId: string) {
 
 async function reconstructLocalMaterialManifests() {
   const rootHandle = await ensureWorkspaceRootHandle()
+  const recoveredScopes: Array<{ subjectId: string; weekNumber: number; sessionDate: string }> = []
   for (const [baseDir, materialType] of [[THEORY_DIR, "theory"], [PRACTICE_DIR, "practice"]] as const) {
     const baseHandle = await getDirectoryHandleBySegments(rootHandle, [baseDir], false).catch(() => null)
     if (!baseHandle) continue
@@ -1048,11 +1079,24 @@ async function reconstructLocalMaterialManifests() {
           }
         }
         if (additions.length > 0) {
-          await writeMaterialManifest(subjectId, weekNumber, [...manifest.materials, ...additions])
+          const latestManifest = await readMaterialManifest(subjectId, weekNumber)
+          const knownWorkspaceIds = new Set(latestManifest.materials.map((material) => material.drive_file_id))
+          const newAdditions = additions.filter((material) => !knownWorkspaceIds.has(material.drive_file_id))
+          if (newAdditions.length > 0) {
+            await writeMaterialManifest(subjectId, weekNumber, [...latestManifest.materials, ...newAdditions])
+            recoveredScopes.push(
+              ...newAdditions.map((material) => ({
+                subjectId,
+                weekNumber,
+                sessionDate: material.session_date,
+              }))
+            )
+          }
         }
       }
     }
   }
+  return recoveredScopes
 }
 
 function replaceWorkspaceSubjectId(
@@ -1270,29 +1314,77 @@ async function ensureLocalReconciliationBackups() {
   }
 }
 
+async function writeLocalWorkspaceTabsStateFiles(state: LocalWorkspaceTabsState) {
+  const normalizedState = normalizeLocalWorkspaceTabsState(state)
+  try {
+    const current = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
+    if (current) await writeJsonFile(WORKSPACE_STATE_BACKUP_MANIFEST, normalizeLocalWorkspaceTabsState(current))
+  } catch {}
+  await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
+  return normalizedState
+}
+
 export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
+  const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
+  const loaded = await readWorkspaceStateWithBackup()
+  return {
+    state: loaded.state,
+    exists: exists || loaded.usedBackup,
+  }
+}
+
+export async function reconcileLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsReadResult> {
   const exists = await jsonFileExists(WORKSPACE_STATE_MANIFEST)
   await ensureLocalReconciliationBackups()
   const loaded = await readWorkspaceStateWithBackup()
   const catalogRead = await readLocalSubjectCatalogWithLegacy()
   const catalog = catalogRead.catalog
+  const discoveredBeforeMigration = await discoverLocalSubjectSourceIds(loaded.state, catalog)
+  const availableSources = new Set(discoveredBeforeMigration)
   const migrationPlans = buildSubjectFolderMigrationPlans(loaded.state, catalog, catalogRead.legacySources)
+    .map((plan) => ({
+      ...plan,
+      sourceStorageKeys: plan.sourceStorageKeys.filter(
+        (sourceId) => sourceId !== plan.targetStorageKey && availableSources.has(sourceId)
+      ),
+    }))
+    .filter((plan) => plan.sourceStorageKeys.length > 0)
   await runSubjectFolderMigrations(migrationPlans)
-  await reconstructLocalMaterialManifests()
+  const recoveredScopes = await reconstructLocalMaterialManifests()
   const discoveredSourceIds = await discoverLocalSubjectSourceIds(loaded.state, catalog)
-  const reconciled = reconcileLocalSubjectCatalogState(loaded.state, catalog, discoveredSourceIds)
-  const changed = JSON.stringify(reconciled.state) !== JSON.stringify(loaded.state) ||
-    JSON.stringify(reconciled.catalog) !== JSON.stringify(catalog)
-  if (changed || loaded.usedBackup || !exists || catalogRead.raw?.version !== 2) {
-    await Promise.all([
-      saveLocalWorkspaceTabsState(reconciled.state),
-      writeLocalSubjectCatalog(reconciled.catalog),
-    ])
+  const persistReconciliation = async () => {
+    const latestLoaded = await readWorkspaceStateWithBackup()
+    const latestCatalogRead = await readLocalSubjectCatalogWithLegacy()
+    const reconciled = reconcileLocalSubjectCatalogState(
+      latestLoaded.state,
+      latestCatalogRead.catalog,
+      discoveredSourceIds
+    )
+    const changed = JSON.stringify(reconciled.state) !== JSON.stringify(latestLoaded.state) ||
+      JSON.stringify(reconciled.catalog) !== JSON.stringify(latestCatalogRead.catalog)
+    if (changed || latestLoaded.usedBackup || !exists || latestCatalogRead.raw?.version !== 2) {
+      await Promise.all([
+        writeLocalWorkspaceTabsStateFiles(reconciled.state),
+        writeLocalSubjectCatalog(reconciled.catalog),
+      ])
+    }
+    return { reconciled, changed }
   }
+  const pendingReconciliation = workspaceStateWriteQueue.then(persistReconciliation, persistReconciliation)
+  workspaceStateWriteQueue = pendingReconciliation.then(() => undefined, () => undefined)
+  const { reconciled, changed } = await pendingReconciliation
   await ensureLocalDefaultContainersForSubjects(Object.values(reconciled.catalog.subjects))
   await ensureLocalSubjectDirectories(Object.values(reconciled.catalog.subjects))
+  if (recoveredScopes.length > 0 && typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel("subject-day-materials")
+    for (const scope of recoveredScopes) {
+      const logicalSubjectId = findCatalogSubjectByDirectoryName(reconciled.catalog, scope.subjectId)?.id ?? scope.subjectId
+      channel.postMessage({ ...scope, subjectId: logicalSubjectId })
+    }
+    channel.close()
+  }
   logWorkspaceDataSource({
-    operation: "readLocalWorkspaceTabsState",
+    operation: "reconcileLocalWorkspaceTabsState",
     path: WORKSPACE_STATE_MANIFEST.join("/"),
     exists,
     workspaceTabs: Object.keys(reconciled.state.workspaceTabs).length,
@@ -1306,13 +1398,7 @@ export async function readLocalWorkspaceTabsState(): Promise<LocalWorkspaceTabsR
 
 export async function saveLocalWorkspaceTabsState(state: Partial<LocalWorkspaceTabsState>) {
   const normalizedState = normalizeLocalWorkspaceTabsState(state)
-  const write = async () => {
-    try {
-      const current = await readJsonFile<Partial<LocalWorkspaceTabsState> | null>(WORKSPACE_STATE_MANIFEST, null)
-      if (current) await writeJsonFile(WORKSPACE_STATE_BACKUP_MANIFEST, normalizeLocalWorkspaceTabsState(current))
-    } catch {}
-    await writeJsonFile(WORKSPACE_STATE_MANIFEST, normalizedState)
-  }
+  const write = () => writeLocalWorkspaceTabsStateFiles(normalizedState)
   const pending = workspaceStateWriteQueue.then(write, write)
   workspaceStateWriteQueue = pending.catch(() => undefined)
   await pending
@@ -1933,7 +2019,18 @@ async function ensureLocalDefaultContainersForSubjects(subjects: LocalSubjectCat
     manifest[subject.storageKey] = [...buildDefaultLocalSubjectContainers(subject.storageKey), ...custom]
     changed = true
   }
-  if (changed) await writeMaterialContainersManifest(manifest)
+  if (changed) {
+    const latestManifest = await readMaterialContainersManifest()
+    for (const subject of subjects) {
+      const current = latestManifest[subject.storageKey]
+      if (Array.isArray(current) && current.some((container) => container.kind === "theory") && current.some((container) => container.kind === "practice")) {
+        continue
+      }
+      const custom = Array.isArray(current) ? current.filter((container) => container.kind === "custom") : []
+      latestManifest[subject.storageKey] = [...buildDefaultLocalSubjectContainers(subject.storageKey), ...custom]
+    }
+    await writeMaterialContainersManifest(latestManifest)
+  }
 }
 
 export async function listLocalSubjectMaterialContainers(subjectId: string) {

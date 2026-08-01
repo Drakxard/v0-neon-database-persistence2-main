@@ -28,6 +28,16 @@ test("acepta la carpeta canónica de una materia en práctica y teoría", () => 
     }),
     ""
   )
+  assert.equal(
+    validateWorkspaceMaterialIdentity({
+      ...baseMaterial,
+      subjectId: "Ecu Ordinarias",
+      sessionDate: "2026-07-30",
+      materialType: "theory",
+      workspaceFileId: "workspace://teoria/Ecu Ordinarias/week-20/2026-07-30/178543463115418-ecuaciones.pdf",
+    }),
+    ""
+  )
 })
 
 test("rechaza una ruta con tipo, materia, semana, fecha o archivo incorrectos", () => {

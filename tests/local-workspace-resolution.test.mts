@@ -80,3 +80,16 @@ test("reemplaza Recuperadas por una pestaña comun y borrable", () => {
   assert.match(subjectWheelSource, /\sBorrar\s/)
   assert.doesNotMatch(subjectWheelSource, /Desvincular/)
 })
+
+test("una materia o pestaña puede copiarse a otro destino sin quitar el original", () => {
+  const copyStart = subjectWheelSource.indexOf("const copyDeleteTarget")
+  const destinationsStart = subjectWheelSource.indexOf("const deleteMoveDestinationTabs")
+  const copyAction = subjectWheelSource.slice(copyStart, destinationsStart)
+
+  assert.ok(copyStart >= 0)
+  assert.ok(destinationsStart > copyStart)
+  assert.match(copyAction, /subjectIds: Array\.from\(new Set\(\[\.\.\.destination\.subjectIds, \.\.\.subjectIds\]\)\)/)
+  assert.doesNotMatch(copyAction, /filter\(\(subjectId\) => !subjectIdSet\.has\(subjectId\)\)/)
+  assert.match(subjectWheelSource, />\s*Copiar a\s*</)
+  assert.match(subjectWheelSource, /onClick=\{\(\) => copyDeleteTarget\(tab\.id\)\}/)
+})

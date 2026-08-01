@@ -1,4 +1,4 @@
-import { SubjectWheel } from "@/components/subject-wheel"
+import { SubjectWheelLoader } from "@/components/subject-wheel-loader"
 import { getRequestAuthSession } from "@/lib/authz"
 
 type HomePageProps = {
@@ -17,5 +17,5 @@ export default async function Home({ searchParams }: HomePageProps) {
     return null
   }
 
-  return <SubjectWheel authSession={session} initialSearchParams={await searchParams} />
+  return <SubjectWheelLoader authSession={session} initialSearchParams={await searchParams} />
 }

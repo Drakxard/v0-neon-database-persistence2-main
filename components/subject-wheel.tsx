@@ -40,6 +40,7 @@ import {
   listLocalSubjectWeekNumbersWithContent,
   listLocalWeekNumbersWithContent,
   readLocalWorkspaceTabsState,
+  reconcileLocalWorkspaceTabsState,
   renameLocalCatalogSubject,
   saveLocalWorkspaceTabsState,
   type LocalSubjectDeletionSummary,
@@ -640,7 +641,6 @@ function loadWorkspaceTabsState(): WorkspaceTabsState {
 
 function saveWorkspaceTabsState(state: WorkspaceTabsState) {
   if (typeof window === "undefined") return
-  if (LOCAL_STORAGE_MODE) return
 
   try {
     window.localStorage.setItem(WORKSPACE_TABS_STORAGE_KEY, JSON.stringify(state))
@@ -1223,9 +1223,10 @@ export function SubjectWheel({
     [session.allowedSubjectIds, session.isAdmin]
   )
   const initialWorkspaceTabsState = useMemo(
-    () => (LOCAL_STORAGE_MODE ? createEmptyWorkspaceTabsState() : loadWorkspaceTabsState()),
+    () => loadWorkspaceTabsState(),
     []
   )
+  const hasCachedWorkspaceStateRef = useRef(hasWorkspaceTabsStateContent(initialWorkspaceTabsState))
   const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(initialWorkspaceTabsState.workspaceTabs)
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(initialWorkspaceTabsState.activeWorkspaceTabId)
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(initialWorkspaceTabsState.customSubjects)
@@ -1300,6 +1301,7 @@ export function SubjectWheel({
 
   useEffect(() => {
     let isCancelled = false
+    let cancelScheduledReconciliation: (() => void) | null = null
     const canUseLocalWorkspace = LOCAL_STORAGE_MODE && localWorkspaceReady
 
     hasLoadedLocalWorkspaceStateRef.current = !LOCAL_STORAGE_MODE
@@ -1337,6 +1339,24 @@ export function SubjectWheel({
           if (!hasUserChangedWorkspaceStateRef.current) {
             applyWorkspaceState(nextState)
           }
+
+          const runReconciliation = () => {
+            void reconcileLocalWorkspaceTabsState()
+              .then((reconciledResult) => {
+                if (isCancelled || hasUserChangedWorkspaceStateRef.current) return
+                applyWorkspaceState(reconciledResult.state)
+              })
+              .catch((error) => {
+                console.error("Failed to reconcile local workspace in background:", error)
+              })
+          }
+          if (typeof window.requestIdleCallback === "function") {
+            const idleCallbackId = window.requestIdleCallback(runReconciliation, { timeout: 1_000 })
+            cancelScheduledReconciliation = () => window.cancelIdleCallback(idleCallbackId)
+          } else {
+            const reconciliationTimer = window.setTimeout(runReconciliation, 50)
+            cancelScheduledReconciliation = () => window.clearTimeout(reconciliationTimer)
+          }
         }
       } catch (error) {
         console.error("Failed to load local workspace tabs state:", error)
@@ -1365,6 +1385,7 @@ export function SubjectWheel({
 
     return () => {
       isCancelled = true
+      cancelScheduledReconciliation?.()
     }
   }, [localWorkspaceReady])
 
@@ -1691,6 +1712,43 @@ export function SubjectWheel({
     setDeleteSummaries([])
   }, [deleteConfirmationTarget, getDeleteTargetSubjectIds, workspaceTabs])
 
+  const copyDeleteTarget = useCallback((destinationTabId: string) => {
+    if (!deleteConfirmationTarget || destinationTabId === deleteConfirmationTarget.id) return
+    const subjectIds = getDeleteTargetSubjectIds(deleteConfirmationTarget)
+    if (subjectIds.length === 0) return
+    const subjectIdSet = new Set(subjectIds)
+
+    if (destinationTabId === MAIN_WORKSPACE_TAB_ID) {
+      setIsMainWorkspaceTabVisible(true)
+      setCustomSubjects((previous) => Object.fromEntries(Object.entries(previous).map(([subjectId, subject]) => [
+        subjectId,
+        subjectIdSet.has(subjectId) ? { ...subject, tabId: MAIN_WORKSPACE_TAB_ID } : subject,
+      ])))
+    } else {
+      setWorkspaceTabs((previous) => {
+        const destination = previous[destinationTabId]
+        if (!destination) return previous
+        return {
+          ...previous,
+          [destinationTabId]: {
+            ...destination,
+            subjectIds: Array.from(new Set([...destination.subjectIds, ...subjectIds])),
+          },
+        }
+      })
+    }
+
+    hasUserChangedWorkspaceStateRef.current = true
+    const copiedLabel = deleteConfirmationTarget.label
+    const copiedType = deleteConfirmationTarget.type
+    setDeleteConfirmationTarget(null)
+    setDeleteSummaries([])
+    toast({
+      title: copiedType === "tab" ? "Contenido copiado" : "Materia copiada",
+      description: `${copiedLabel} también está disponible en la pestaña destino; usa los mismos archivos locales.`,
+    })
+  }, [deleteConfirmationTarget, getDeleteTargetSubjectIds])
+
   const confirmPermanentSubjectDelete = useCallback(async () => {
     if (!deleteConfirmationTarget || isPreparingPermanentDelete) return
     const subjectIds = getDeleteTargetSubjectIds(deleteConfirmationTarget)
@@ -1734,9 +1792,9 @@ export function SubjectWheel({
     if (!deleteConfirmationTarget) return []
     const sourceTabId = deleteConfirmationTarget.type === "tab"
       ? deleteConfirmationTarget.id
-      : customSubjects[deleteConfirmationTarget.id]?.tabId ?? activeWorkspaceTabId
+      : activeWorkspaceTabId
     return workspaceTabList.filter((tab) => tab.id !== sourceTabId)
-  }, [activeWorkspaceTabId, customSubjects, deleteConfirmationTarget, workspaceTabList])
+  }, [activeWorkspaceTabId, deleteConfirmationTarget, workspaceTabList])
 
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isNextWeekDialogOpen, setIsNextWeekDialogOpen] = useState(false)
@@ -2792,12 +2850,14 @@ export function SubjectWheel({
 
     const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("subject-day-materials") : null
     const handleRefreshPayload = (payload: unknown) => {
-      if (!payload || typeof payload !== "object" || !currentSubject || !isDialogOpen) return
+      if (!payload || typeof payload !== "object") return
       if (!("subjectId" in payload) || !("sessionDate" in payload) || !("weekNumber" in payload)) return
 
       const subjectId = typeof payload.subjectId === "string" ? payload.subjectId : ""
       const sessionDate = typeof payload.sessionDate === "string" ? payload.sessionDate : ""
       const weekNumber = Number(payload.weekNumber)
+      void refreshLocalWeekOptions().catch(() => undefined)
+      if (!currentSubject || !isDialogOpen) return
       if (subjectId !== currentSubject.id || weekNumber !== dialogSelectedWeekNumber) return
       if (!isWeeklyExercisesScope && sessionDate !== subjectDialogDateKey) return
 
@@ -2823,7 +2883,7 @@ export function SubjectWheel({
       channel?.close()
       window.removeEventListener("storage", handleStorage)
     }
-  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, isWeeklyExercisesScope, loadSubjectDayData, subjectDialogDateKey])
+  }, [currentSubject, dialogSelectedWeekNumber, isDialogOpen, isWeeklyExercisesScope, loadSubjectDayData, refreshLocalWeekOptions, subjectDialogDateKey])
 
   useEffect(() => {
     return () => {
@@ -6955,8 +7015,12 @@ export function SubjectWheel({
     return questionEntry && answerEntry ? { questionEntry, answerEntry } : null
   }, [editingEntry, entries])
 
+  const isRefreshingCachedHome =
+    LOCAL_STORAGE_MODE && hasCachedWorkspaceStateRef.current &&
+    (!hasResolvedPersistentWorkspaceState || isLoading || !localWorkspaceReady)
   const shouldShowInitialHomeLoading =
-    !hasResolvedPersistentWorkspaceState || isLoading || (LOCAL_STORAGE_MODE && !localWorkspaceReady)
+    !isRefreshingCachedHome &&
+    (!hasResolvedPersistentWorkspaceState || isLoading || (LOCAL_STORAGE_MODE && !localWorkspaceReady))
 
   if (shouldShowInitialHomeLoading) {
     return (
@@ -6978,7 +7042,18 @@ export function SubjectWheel({
   }
 
   return (
-    <div className="relative min-h-dvh max-h-dvh overflow-hidden bg-background text-foreground transition-colors duration-300">
+    <div
+      className={cn(
+        "relative min-h-dvh max-h-dvh overflow-hidden bg-background text-foreground transition-colors duration-300",
+        isRefreshingCachedHome && "pointer-events-none"
+      )}
+      aria-busy={isRefreshingCachedHome}
+    >
+      {isRefreshingCachedHome ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-2 z-50 text-center text-xs text-muted-foreground">
+          Actualizando datos locales…
+        </div>
+      ) : null}
       {/* Header */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
         <div className="flex items-start justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
@@ -7421,7 +7496,7 @@ export function SubjectWheel({
       }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>{deleteConfirmationTarget?.type === "tab" ? "¿Borrar pestaña?" : "¿Borrar materia?"}</DialogTitle>
+            <DialogTitle>{deleteConfirmationTarget?.type === "tab" ? "Opciones de pestaña" : "Opciones de materia"}</DialogTitle>
             <DialogDescription>
               {isPreparingPermanentDelete
                 ? `Revisando ${deleteConfirmationTarget?.label ?? ""}...`
@@ -7444,6 +7519,23 @@ export function SubjectWheel({
                 <DropdownMenuSeparator />
                 {deleteMoveDestinationTabs.map((tab) => (
                   <DropdownMenuItem key={tab.id} onClick={() => moveDeleteTarget(tab.id)}>
+                    {tab.name}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button type="button" variant="outline" disabled={deleteMoveDestinationTabs.length === 0 || isPermanentlyDeleting}>
+                  <Copy className="h-4 w-4" />
+                  Copiar a
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Copiar a</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {deleteMoveDestinationTabs.map((tab) => (
+                  <DropdownMenuItem key={tab.id} onClick={() => copyDeleteTarget(tab.id)}>
                     {tab.name}
                   </DropdownMenuItem>
                 ))}

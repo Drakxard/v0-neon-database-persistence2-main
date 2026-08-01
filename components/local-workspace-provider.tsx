@@ -3,12 +3,14 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
+import { WorkspaceStartupScreen } from "@/components/workspace-startup-screen"
 import {
   ensureWorkspaceSubdirectories,
   loadWorkspaceHandle,
   pickWorkspaceRootHandle,
   queryWorkspacePermission,
   requestWorkspacePermission,
+  setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
 
@@ -118,12 +120,14 @@ export function LocalWorkspaceProvider({
     }
 
     let cancelled = false
+    setReadyWorkspaceHandle(null)
     setBootState("checking")
     setError("")
 
     const bootstrap = async () => {
       if (!supportsWorkspacePicker()) {
         if (cancelled) return
+        setReadyWorkspaceHandle(null)
         setPermissionState("unsupported")
         setBootState("unsupported")
         return
@@ -145,6 +149,7 @@ export function LocalWorkspaceProvider({
         const permission = await queryWorkspacePermission(storedHandle)
         if (permission !== "granted") {
           if (cancelled) return
+          setReadyWorkspaceHandle(null)
           setRootHandle(null)
           setPermissionState(permission)
           setError("La carpeta local ya esta guardada, pero el navegador necesita recuperar el permiso.")
@@ -154,11 +159,13 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
+        setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
         setPermissionState("granted")
         setBootState("ready")
       } catch (workspaceError) {
         if (cancelled) return
+        setReadyWorkspaceHandle(null)
         setError(workspaceError instanceof Error ? workspaceError.message : "No se pudo restaurar la carpeta local.")
         setBootState("recover")
       }
@@ -181,6 +188,7 @@ export function LocalWorkspaceProvider({
       if (restoredPermission === "granted") return
 
       if (cancelled) return
+      setReadyWorkspaceHandle(null)
       setRootHandle(null)
       setStoredHandle(rootHandle)
       setPermissionState(restoredPermission)
@@ -204,11 +212,13 @@ export function LocalWorkspaceProvider({
       setError("")
       setBootState("checking")
       const handle = await pickWorkspaceRootHandle()
+      setReadyWorkspaceHandle(handle)
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
       setBootState("ready")
     } catch (workspaceError) {
+      setReadyWorkspaceHandle(null)
       setRootHandle(null)
       setPermissionState("prompt")
       setBootState(supportsWorkspacePicker() ? "prompt" : "unsupported")
@@ -228,6 +238,7 @@ export function LocalWorkspaceProvider({
       setBootState("checking")
       const permission = await requestWorkspacePermission(storedHandle, "readwrite")
       if (permission !== "granted") {
+        setReadyWorkspaceHandle(null)
         setRootHandle(null)
         setPermissionState(permission)
         setBootState("recover")
@@ -236,10 +247,12 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
+      setReadyWorkspaceHandle(storedHandle)
       setRootHandle(storedHandle)
       setPermissionState("granted")
       setBootState("ready")
     } catch (workspaceError) {
+      setReadyWorkspaceHandle(null)
       setRootHandle(null)
       setPermissionState("prompt")
       setBootState("recover")
@@ -261,6 +274,7 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady ? children : null}
+      {enabled && !isReady ? <WorkspaceStartupScreen /> : null}
       {enabled && bootState !== "ready" && bootState !== "checking" ? (
         <WorkspaceModal
           bootState={bootState}
