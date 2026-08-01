@@ -11,6 +11,7 @@ import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getSubjectById } from "@/lib/subjects"
 import { normalizeTagName } from "@/lib/tag-utils"
+import { validateWorkspaceMaterialIdentity } from "@/lib/workspace-material-identity"
 import { buildPracticePdfCacheKey, preloadPracticePdf, releasePracticePdf } from "./pdf-memory-cache"
 
 type MaterialContext = {
@@ -99,39 +100,6 @@ type DeleteEntriesResponse = {
 
 const PAIR_ROLES: PairRole[] = ["question", "answer"]
 const EMPTY_PRESENTATION_TAG_IDS: number[] = []
-
-function sanitizeWorkspaceSegment(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9._ -]+/g, "-")
-    .replace(/-+/g, "-")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/^-|-$/g, "")
-    .toLowerCase() || "archivo"
-}
-
-function validateWorkspaceMaterialIdentity(material: MaterialContext) {
-  const workspaceFileId = material.workspaceFileId || ""
-  if (!workspaceFileId.startsWith("workspace://")) {
-    return `El material ${material.id} no tiene un identificador de archivo local válido.`
-  }
-
-  const segments = workspaceFileId.slice("workspace://".length).split("/").filter(Boolean)
-  const expectedTypeDirectory = material.materialType === "theory" ? "teoria" : "practica"
-  const matches =
-    segments.length === 5 &&
-    segments[0] === expectedTypeDirectory &&
-    segments[1] === sanitizeWorkspaceSegment(material.subjectId) &&
-    segments[2] === `week-${material.weekNumber}` &&
-    segments[3] === material.sessionDate &&
-    Boolean(segments[4])
-
-  return matches
-    ? ""
-    : `La ruta local del material ${material.id} no coincide con ${material.subjectId}, semana ${material.weekNumber} y ${material.sessionDate}.`
-}
 
 function getRecorderMimeType() {
   if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
