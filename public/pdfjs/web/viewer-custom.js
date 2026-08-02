@@ -87,6 +87,7 @@
     isExportingPageRange: false,
     translateButton: null,
     translatePromptButton: null,
+    translationMode: false,
     selectedText: "",
     selectedTextRect: null,
     translationPopover: null,
@@ -370,7 +371,7 @@
     if (!state.translateButton) {
       state.translateButton = document.getElementById("translateSelectionButton");
       if (state.translateButton) {
-        state.translateButton.addEventListener("click", () => void translateSelectedText());
+        state.translateButton.addEventListener("click", toggleTranslationMode);
       }
     }
 
@@ -935,7 +936,28 @@
 
   function refreshTranslationButton() {
     if (!(state.translateButton instanceof HTMLButtonElement)) return;
-    state.translateButton.disabled = !state.selectedText;
+    state.translateButton.disabled = !state.translationMode && !state.selectedText;
+    state.translateButton.setAttribute("aria-pressed", String(state.translationMode));
+    state.translateButton.title = state.translationMode
+      ? "Desactivar traduccion consecutiva"
+      : "Activar traduccion consecutiva";
+    state.translateButton.setAttribute("aria-label", state.translateButton.title);
+  }
+
+  function toggleTranslationMode() {
+    if (state.translationMode) {
+      state.translationMode = false;
+      refreshTranslationButton();
+      showToast("Traduccion consecutiva desactivada.", "info");
+      return;
+    }
+    if (!state.selectedText || !state.selectedTextRect) {
+      showToast("Selecciona texto del PDF para traducir.", "info");
+      return;
+    }
+    state.translationMode = true;
+    refreshTranslationButton();
+    void translateSelectedText();
   }
 
   function closeTranslationPopover() {
@@ -968,6 +990,7 @@
       bottom: rect.bottom,
     };
     refreshTranslationButton();
+    if (state.translationMode) void translateSelectedText();
     return true;
   }
 

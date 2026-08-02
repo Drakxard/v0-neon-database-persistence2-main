@@ -6,6 +6,10 @@ import { SUBJECT_IDS } from "@/lib/subjects"
 
 export function proxy(request: NextRequest) {
   if (isLocalStorageMode() && request.nextUrl.pathname.startsWith("/api/")) {
+    if (request.nextUrl.pathname === "/api/pdf-translate" && request.method.toUpperCase() === "POST") {
+      return NextResponse.next()
+    }
+
     if (request.nextUrl.pathname === "/api/auth/session" && request.method.toUpperCase() === "GET") {
       return NextResponse.json(
         {
