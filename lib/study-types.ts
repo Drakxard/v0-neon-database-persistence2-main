@@ -56,6 +56,7 @@ export type SubjectMaterialContainer = {
   name: string
   normalizedName: string
   kind: SubjectMaterialContainerKind
+  isPinned: boolean
   orderIndex: number
   materialCount: number
   createdAt: string

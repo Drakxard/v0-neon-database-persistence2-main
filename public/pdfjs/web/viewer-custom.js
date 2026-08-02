@@ -20,6 +20,11 @@
     modalInput: null,
     modalConfirm: null,
     modalCancel: null,
+    modalTitle: null,
+    modalDescription: null,
+    modalError: null,
+    modalMode: "idle",
+    pendingPageRange: null,
     busy: null,
     busyText: null,
     loadingOverlay: null,
@@ -80,12 +85,24 @@
     cutStartPage: null,
     cutEndPage: null,
     isExportingPageRange: false,
+    translateButton: null,
+    translatePromptButton: null,
+    selectedText: "",
+    selectedTextRect: null,
+    translationPopover: null,
+    translationPopoverText: null,
+    translationRequestId: 0,
+    translationPromptBackdrop: null,
+    translationPromptInput: null,
+    translationPromptError: null,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
   const DEFAULT_HIGHLIGHT_OPACITY = 1;
   const MAX_CONTEXT_LENGTH = 64;
   const MIN_SELECTABLE_TEXT = 24;
+  const DEFAULT_TRANSLATION_PROMPT = "Traduce a español el texto, sin agregar de más: {texto}";
+  const TRANSLATION_PROMPT_STORAGE_KEY = "pdfjs.translationPrompt.v1";
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -131,7 +148,8 @@
     if (!(target instanceof HTMLElement)) return false;
     if (
       target.closest(".pdfjs-custom-modal-backdrop[data-open='true']") ||
-      target.closest(".pdfjs-custom-replacement-backdrop[data-open='true']")
+      target.closest(".pdfjs-custom-replacement-backdrop[data-open='true']") ||
+      target.closest(".pdfjs-custom-translation-prompt-backdrop[data-open='true']")
     ) {
       return true;
     }
@@ -349,6 +367,20 @@
   }
 
   function ensureUi() {
+    if (!state.translateButton) {
+      state.translateButton = document.getElementById("translateSelectionButton");
+      if (state.translateButton) {
+        state.translateButton.addEventListener("click", () => void translateSelectedText());
+      }
+    }
+
+    if (!state.translatePromptButton) {
+      state.translatePromptButton = document.getElementById("translatePromptButton");
+      if (state.translatePromptButton) {
+        state.translatePromptButton.addEventListener("click", () => openTranslationPromptEditor());
+      }
+    }
+
     if (!state.cutButton) {
       const downloadButton = document.getElementById("downloadButton");
       const toolbar = downloadButton?.parentElement || document.getElementById("toolbarViewerRight");
@@ -442,9 +474,10 @@
       backdrop.innerHTML = [
         '<div class="pdfjs-custom-modal" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-modal-title">',
         '<h2 id="pdfjs-custom-modal-title">Crear PDF fragmentado</h2>',
-        "<p>Se generara un nuevo PDF con las selecciones activas y se subira al material actual.</p>",
+        '<p id="pdfjs-custom-modal-description">Se generara un nuevo PDF con las selecciones activas y se subira al material actual.</p>',
         '<label for="pdfjs-custom-modal-input">Nombre del archivo</label>',
         '<input id="pdfjs-custom-modal-input" type="text" autocomplete="off" />',
+        '<p id="pdfjs-custom-modal-error" class="pdfjs-custom-modal-error" role="alert"></p>',
         '<div class="pdfjs-custom-modal-actions">',
         '<button type="button" data-variant="ghost" id="pdfjs-custom-modal-cancel">Cancelar</button>',
         '<button type="button" data-variant="primary" id="pdfjs-custom-modal-confirm">Confirmar</button>',
@@ -461,19 +494,70 @@
       state.modalInput = backdrop.querySelector("#pdfjs-custom-modal-input");
       state.modalConfirm = backdrop.querySelector("#pdfjs-custom-modal-confirm");
       state.modalCancel = backdrop.querySelector("#pdfjs-custom-modal-cancel");
+      state.modalTitle = backdrop.querySelector("#pdfjs-custom-modal-title");
+      state.modalDescription = backdrop.querySelector("#pdfjs-custom-modal-description");
+      state.modalError = backdrop.querySelector("#pdfjs-custom-modal-error");
 
       state.modalCancel.addEventListener("click", () => closeModal());
       state.modalConfirm.addEventListener("click", () => {
-        void submitSelectionsPdf(state.modalInput.value);
+        void submitNameModal();
       });
       state.modalInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
-          void submitSelectionsPdf(state.modalInput.value);
+          void submitNameModal();
         } else if (event.key === "Escape") {
           event.preventDefault();
           closeModal();
         }
+      });
+      state.modalInput.addEventListener("input", () => {
+        state.modalError.textContent = "";
+      });
+    }
+
+    if (!state.translationPopover) {
+      const popover = document.createElement("aside");
+      popover.className = "pdfjs-custom-translation-popover";
+      popover.setAttribute("role", "status");
+      popover.innerHTML = '<div class="pdfjs-custom-translation-text"></div>';
+      document.body.appendChild(popover);
+      state.translationPopover = popover;
+      state.translationPopoverText = popover.querySelector(".pdfjs-custom-translation-text");
+    }
+
+    if (!state.translationPromptBackdrop) {
+      const backdrop = document.createElement("div");
+      backdrop.className = "pdfjs-custom-translation-prompt-backdrop";
+      backdrop.innerHTML = [
+        '<div class="pdfjs-custom-translation-prompt" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-translation-prompt-title">',
+        '<h2 id="pdfjs-custom-translation-prompt-title">Prompt para traducir</h2>',
+        '<p>Usa {texto} donde debe insertarse la seleccion.</p>',
+        '<textarea id="pdfjs-custom-translation-prompt-input" rows="5" spellcheck="true"></textarea>',
+        '<p id="pdfjs-custom-translation-prompt-error" role="alert"></p>',
+        '<div class="pdfjs-custom-modal-actions">',
+        '<button type="button" data-variant="ghost" id="pdfjs-custom-translation-prompt-cancel">Cancelar</button>',
+        '<button type="button" data-variant="primary" id="pdfjs-custom-translation-prompt-save">Guardar</button>',
+        "</div>",
+        "</div>",
+      ].join("");
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) closeTranslationPromptEditor();
+      });
+      document.body.appendChild(backdrop);
+      state.translationPromptBackdrop = backdrop;
+      state.translationPromptInput = backdrop.querySelector("#pdfjs-custom-translation-prompt-input");
+      state.translationPromptError = backdrop.querySelector("#pdfjs-custom-translation-prompt-error");
+      backdrop.querySelector("#pdfjs-custom-translation-prompt-cancel").addEventListener("click", closeTranslationPromptEditor);
+      backdrop.querySelector("#pdfjs-custom-translation-prompt-save").addEventListener("click", saveTranslationPrompt);
+      state.translationPromptInput.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeTranslationPromptEditor();
+        }
+      });
+      state.translationPromptInput.addEventListener("input", () => {
+        state.translationPromptError.textContent = "";
       });
     }
 
@@ -660,16 +744,15 @@
 
     button.dataset.syncState = nextState;
     button.toggleAttribute("disabled", state.isSyncing || !state.hasUnsyncedChanges);
-    button.setAttribute(
-      "title",
-      state.isSyncing
+    const accessibleLabel = state.isSyncing
         ? "Sincronizando cambios"
         : state.hasUnsyncedChanges
           ? "Sincronizar cambios"
           : state.isSynced
             ? "Sincronizado"
-            : "Sin cambios para sincronizar"
-    );
+            : "Sin cambios para sincronizar";
+    button.setAttribute("title", accessibleLabel);
+    button.setAttribute("aria-label", accessibleLabel);
   }
 
   function refreshSyncButtons() {
@@ -787,12 +870,13 @@
   }
 
   function sanitizeName(name) {
-    return (
-      String(name || "documento")
-        .replace(/[^a-zA-Z0-9._-]/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "") || "documento"
-    );
+    const sanitized = String(name || "documento")
+      .normalize("NFC")
+      .replace(/[\u0000-\u001f<>:"/\\|?*]/g, "_")
+      .replace(/_+/g, "_")
+      .trim()
+      .replace(/[. ]+$/g, "");
+    return sanitized || "documento";
   }
 
   function normalizePdfFileName(name) {
@@ -807,6 +891,137 @@
       state.app?._docFilename ||
       "fragmento";
     return String(currentName).replace(/\.pdf$/i, "") || "fragmento";
+  }
+
+  function getTranslationPrompt() {
+    try {
+      const saved = window.localStorage.getItem(TRANSLATION_PROMPT_STORAGE_KEY);
+      return saved?.trim() || DEFAULT_TRANSLATION_PROMPT;
+    } catch {
+      return DEFAULT_TRANSLATION_PROMPT;
+    }
+  }
+
+  function openTranslationPromptEditor() {
+    ensureUi();
+    state.translationPromptInput.value = getTranslationPrompt();
+    state.translationPromptError.textContent = "";
+    state.translationPromptBackdrop.dataset.open = "true";
+    window.setTimeout(() => {
+      state.translationPromptInput.focus();
+      state.translationPromptInput.select();
+    }, 0);
+  }
+
+  function closeTranslationPromptEditor() {
+    if (state.translationPromptBackdrop) state.translationPromptBackdrop.dataset.open = "false";
+  }
+
+  function saveTranslationPrompt() {
+    const prompt = String(state.translationPromptInput?.value || "").trim();
+    if (!prompt.includes("{texto}")) {
+      state.translationPromptError.textContent = "El prompt debe incluir {texto}.";
+      state.translationPromptInput.focus();
+      return;
+    }
+    try {
+      window.localStorage.setItem(TRANSLATION_PROMPT_STORAGE_KEY, prompt);
+    } catch {
+      state.translationPromptError.textContent = "No se pudo guardar el prompt en este navegador.";
+      return;
+    }
+    closeTranslationPromptEditor();
+  }
+
+  function refreshTranslationButton() {
+    if (!(state.translateButton instanceof HTMLButtonElement)) return;
+    state.translateButton.disabled = !state.selectedText;
+  }
+
+  function closeTranslationPopover() {
+    state.translationRequestId += 1;
+    if (state.translationPopover) state.translationPopover.dataset.open = "false";
+  }
+
+  function getSelectionRect(range) {
+    const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+    return rects[rects.length - 1] || range.getBoundingClientRect();
+  }
+
+  function captureViewerTextSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+    const text = selection.toString().trim();
+    if (!text) return false;
+    const range = selection.getRangeAt(0);
+    const commonNode = range.commonAncestorContainer;
+    const commonElement = commonNode instanceof Element ? commonNode : commonNode.parentElement;
+    if (!commonElement?.closest("#viewer .textLayer")) return false;
+    const rect = getSelectionRect(range);
+    if (!rect || (!rect.width && !rect.height)) return false;
+    closeTranslationPopover();
+    state.selectedText = text;
+    state.selectedTextRect = {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    };
+    refreshTranslationButton();
+    return true;
+  }
+
+  function placeTranslationPopover() {
+    if (!state.translationPopover || !state.selectedTextRect) return;
+    const margin = 10;
+    const gap = 8;
+    const rect = state.selectedTextRect;
+    const width = Math.min(360, Math.max(220, window.innerWidth - margin * 2));
+    state.translationPopover.style.width = `${width}px`;
+    const measuredHeight = state.translationPopover.offsetHeight || 100;
+    let left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
+    let top = rect.bottom + gap;
+    if (top + measuredHeight > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - measuredHeight - gap);
+    }
+    state.translationPopover.style.left = `${left}px`;
+    state.translationPopover.style.top = `${top}px`;
+  }
+
+  function showTranslationPopover(message, tone = "loading") {
+    ensureUi();
+    state.translationPopoverText.textContent = message;
+    state.translationPopover.dataset.tone = tone;
+    state.translationPopover.dataset.open = "true";
+    placeTranslationPopover();
+  }
+
+  async function translateSelectedText() {
+    if (!state.selectedText || !state.selectedTextRect) {
+      showToast("Selecciona texto del PDF para traducir.", "info");
+      return;
+    }
+    const requestId = state.translationRequestId + 1;
+    state.translationRequestId = requestId;
+    showTranslationPopover("Traduciendo...");
+    try {
+      const response = await fetch("/api/pdf-translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: state.selectedText, promptTemplate: getTranslationPrompt() }),
+      });
+      const payload = await readJsonish(response);
+      if (requestId !== state.translationRequestId) return;
+      if (!response.ok) {
+        throw new Error(getErrorMessage(payload, "No se pudo traducir el texto."));
+      }
+      const translation = payload && typeof payload === "object" ? String(payload.translation || "").trim() : "";
+      if (!translation) throw new Error("La traduccion llego vacia.");
+      showTranslationPopover(translation, "success");
+    } catch (error) {
+      if (requestId !== state.translationRequestId) return;
+      showTranslationPopover(error instanceof Error ? error.message : "No se pudo traducir el texto.", "error");
+    }
   }
 
   function startCutSelection() {
@@ -883,7 +1098,7 @@
       refreshCutButton();
       refreshCutPageHighlights();
       if (firstPage === pageNumber) {
-        void submitPageRangeExport(state.cutStartPage, state.cutEndPage);
+        openPageRangeNameDialog(state.cutStartPage, state.cutEndPage);
       }
       return;
     }
@@ -903,7 +1118,7 @@
     if (state.cutStartPage == null) {
       return;
     }
-    void submitPageRangeExport(
+    openPageRangeNameDialog(
       state.cutStartPage,
       state.cutEndPage == null ? state.cutStartPage : state.cutEndPage
     );
@@ -947,7 +1162,7 @@
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 
-  async function submitPageRangeExport(startPage, endPage) {
+  async function submitPageRangeExport(startPage, endPage, inputName) {
     if (state.isExportingPageRange) return;
     const pageCount = Number(state.app?.pdfDocument?.numPages || 0);
     if (
@@ -961,15 +1176,22 @@
       return;
     }
 
+    const strippedName = String(inputName || "").trim().replace(/\.pdf$/i, "").trim();
+    if (!strippedName) {
+      state.modalError.textContent = "Ingresa un nombre para el archivo.";
+      state.modalInput.focus();
+      return;
+    }
+
+    closeModal();
     state.isExportingPageRange = true;
     refreshCutButton();
     showBusy("Preparando paginas...");
     try {
       const pdfBytes = await buildCopiedPageRangePdf(startPage, endPage);
-      const fileName = normalizePdfFileName(
-        `${getDefaultBaseName()}_paginas-${startPage}-${endPage}`
-      );
+      const fileName = normalizePdfFileName(strippedName);
       downloadPdfBytes(pdfBytes, fileName);
+      cancelCutSelection();
     } catch (error) {
       console.error("Custom PDF.js rasterized range export failed:", error);
       showToast(
@@ -979,7 +1201,6 @@
       );
     } finally {
       state.isExportingPageRange = false;
-      cancelCutSelection();
       hideBusy();
     }
   }
@@ -3030,12 +3251,52 @@
     }
 
     ensureUi();
+    state.modalMode = "fragment-upload";
+    state.pendingPageRange = null;
+    state.modalTitle.textContent = "Crear PDF fragmentado";
+    state.modalDescription.textContent = "Se generara un nuevo PDF con las selecciones activas y se subira al material actual.";
+    state.modalConfirm.textContent = "Confirmar";
+    state.modalError.textContent = "";
     state.modalInput.value = normalizePdfFileName(getDefaultBaseName()).replace(/\.pdf$/i, "");
     state.modal.dataset.open = "true";
     window.setTimeout(() => {
       state.modalInput.focus();
       state.modalInput.select();
     }, 0);
+  }
+
+  function openPageRangeNameDialog(startPage, endPage) {
+    ensureUi();
+    state.modalMode = "page-range-download";
+    state.pendingPageRange = { startPage, endPage };
+    state.modalTitle.textContent = "Descargar PDF recortado";
+    state.modalDescription.textContent = `Se descargaran las paginas ${startPage} a ${endPage}. La extension .pdf se agregara automaticamente.`;
+    state.modalConfirm.textContent = "Descargar";
+    state.modalError.textContent = "";
+    state.modalInput.value = `${getDefaultBaseName()}_paginas-${startPage}-${endPage}`;
+    state.modal.dataset.open = "true";
+    window.setTimeout(() => {
+      state.modalInput.focus();
+      state.modalInput.select();
+    }, 0);
+  }
+
+  async function submitNameModal() {
+    if (state.modalMode === "page-range-download" && state.pendingPageRange) {
+      await submitPageRangeExport(
+        state.pendingPageRange.startPage,
+        state.pendingPageRange.endPage,
+        state.modalInput.value
+      );
+      return;
+    }
+    const name = String(state.modalInput?.value || "").trim().replace(/\.pdf$/i, "").trim();
+    if (!name) {
+      state.modalError.textContent = "Ingresa un nombre para el archivo.";
+      state.modalInput.focus();
+      return;
+    }
+    await submitSelectionsPdf(name);
   }
 
   function closeModal() {
@@ -3173,6 +3434,11 @@
 
   function handleKeyDown(event) {
     if (!state.app || event.defaultPrevented || event.repeat) return;
+    if (event.key === "Escape" && state.translationPopover?.dataset.open === "true") {
+      event.preventDefault();
+      closeTranslationPopover();
+      return;
+    }
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
@@ -3273,6 +3539,20 @@
     });
     document.addEventListener("keydown", handleKeyDown, true);
     document.addEventListener("click", handleCutPageClick, true);
+    const viewerContainer = document.getElementById("viewerContainer");
+    viewerContainer?.addEventListener("mouseup", () => window.setTimeout(captureViewerTextSelection, 0));
+    viewerContainer?.addEventListener("keyup", () => window.setTimeout(captureViewerTextSelection, 0));
+    viewerContainer?.addEventListener("scroll", closeTranslationPopover, { passive: true });
+    document.addEventListener("pointerdown", (event) => {
+      if (state.translationPopover?.dataset.open !== "true") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(".pdfjs-custom-translation-popover") || target.closest("#translateSelectionButton")) return;
+      closeTranslationPopover();
+    }, true);
+    window.addEventListener("resize", () => {
+      if (state.translationPopover?.dataset.open === "true") placeTranslationPopover();
+    });
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
     window.addEventListener("message", handleParentMessage);

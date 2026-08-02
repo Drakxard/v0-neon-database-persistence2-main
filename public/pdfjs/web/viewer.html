@@ -568,8 +568,12 @@ See https://github.com/adobe-type-tools/cmap-resources
                     <span data-l10n-id="pdfjs-save-button-label"></span>
                   </button>
 
+                  <button id="translateSelectionButton" class="toolbarButton pdfjs-custom-translate-button" type="button" tabindex="0" title="Traducir texto seleccionado" aria-label="Traducir texto seleccionado" disabled>
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 8 6 0"></path><path d="m8 5 0 3c0 4-2 7-5 9"></path><path d="M5 13c1 2 3 3 5 4"></path><path d="m14 19 3-8 3 8"></path><path d="m15 16 4 0"></path></svg>
+                  </button>
+
                   <button id="syncButton" class="toolbarButton pdfjs-custom-sync-button" type="button" tabindex="0" title="Sincronizar cambios">
-                    <span>Sincronizar</span>
+                    <span><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7h-5V2"></path><path d="M20 7a8 8 0 1 0 1.7 8"></path></svg></span>
                   </button>
 
                   <button id="replaceButton" class="toolbarButton pdfjs-custom-replace-button" type="button" tabindex="0" title="Reemplazar PDF">
@@ -616,6 +620,12 @@ See https://github.com/adobe-type-tools/cmap-resources
                         </button>
 
                       </div>
+
+                      <div class="horizontalToolbarSeparator"></div>
+
+                      <button id="translatePromptButton" class="toolbarButton labeled pdfjs-custom-translate-prompt-button" type="button" tabindex="0" title="Prompt para traducir">
+                        <span>Prompt para traducir</span>
+                      </button>
 
                       <div class="horizontalToolbarSeparator"></div>
 

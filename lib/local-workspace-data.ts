@@ -1988,6 +1988,7 @@ function buildDefaultLocalSubjectContainers(storageKey: string, timestamp = nowI
       name: "Teoría",
       normalizedName: "teoría",
       kind: "theory",
+      isPinned: false,
       orderIndex: 0,
       materialCount: 0,
       createdAt: timestamp,
@@ -1999,6 +2000,7 @@ function buildDefaultLocalSubjectContainers(storageKey: string, timestamp = nowI
       name: "Práctica",
       normalizedName: "práctica",
       kind: "practice",
+      isPinned: false,
       orderIndex: 1,
       materialCount: 0,
       createdAt: timestamp,
@@ -2063,8 +2065,20 @@ export async function listLocalSubjectMaterialContainers(subjectId: string) {
     }
   }
   return containers
-    .map((container) => ({ ...container, materialCount: counts.get(container.id) ?? 0 }))
-    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .map((container) => ({
+      ...container,
+      isPinned: container.kind === "custom" && Boolean(container.isPinned),
+      materialCount: counts.get(container.id) ?? 0,
+    }))
+    .sort((left, right) => {
+      const leftKind = left.kind === "theory" ? 0 : left.kind === "practice" ? 1 : 2
+      const rightKind = right.kind === "theory" ? 0 : right.kind === "practice" ? 1 : 2
+      if (leftKind !== rightKind) return leftKind - rightKind
+      if (left.kind === "custom" && right.kind === "custom" && left.isPinned !== right.isPinned) {
+        return left.isPinned ? -1 : 1
+      }
+      return left.orderIndex - right.orderIndex || left.id - right.id
+    })
 }
 
 export async function createLocalSubjectMaterialContainer(subjectId: string, rawName: string) {
@@ -2083,6 +2097,7 @@ export async function createLocalSubjectMaterialContainer(subjectId: string, raw
     name,
     normalizedName,
     kind: "custom",
+    isPinned: false,
     orderIndex: Math.max(1, ...containers.map((candidate) => candidate.orderIndex)) + 1,
     materialCount: 0,
     createdAt: timestamp,
@@ -2114,6 +2129,64 @@ export async function renameLocalSubjectMaterialContainer(containerId: number, r
     return updated
   }
   return null
+}
+
+function persistLocalCustomOrder(
+  manifest: Record<string, SubjectMaterialContainer[]>,
+  ordered: SubjectMaterialContainer[]
+) {
+  const orderById = new Map(ordered.map((container, index) => [container.id, index + 2]))
+  for (const [subjectId, stored] of Object.entries(manifest)) {
+    manifest[subjectId] = stored.map((container) => {
+      const nextOrder = orderById.get(container.id)
+      return nextOrder == null ? container : { ...container, orderIndex: nextOrder, updatedAt: nowIso() }
+    })
+  }
+}
+
+export async function setLocalSubjectMaterialContainerPinned(containerId: number, isPinned: boolean) {
+  const manifest = await readMaterialContainersManifest()
+  const owner = Object.entries(manifest).find(([, stored]) => stored.some((container) => container.id === containerId))
+  if (!owner) return null
+  const [subjectId] = owner
+  const containers = await listLocalSubjectMaterialContainers(subjectId)
+  const current = containers.find((container) => container.id === containerId)
+  if (!current) return null
+  if (current.kind !== "custom") throw new Error("TeorÃ­a y PrÃ¡ctica son contenedores fijos.")
+
+  for (const [key, stored] of Object.entries(manifest)) {
+    manifest[key] = stored.map((container) =>
+      container.id === containerId ? { ...container, isPinned, updatedAt: nowIso() } : container
+    )
+  }
+  const others = containers.filter((container) => container.kind === "custom" && container.id !== containerId)
+  const pinned = others.filter((container) => container.isPinned)
+  const unpinned = others.filter((container) => !container.isPinned)
+  const updated = { ...current, isPinned }
+  persistLocalCustomOrder(manifest, isPinned ? [...pinned, updated, ...unpinned] : [...pinned, ...unpinned, updated])
+  await writeMaterialContainersManifest(manifest)
+  return { ...updated, orderIndex: isPinned ? pinned.length + 2 : pinned.length + unpinned.length + 2 }
+}
+
+export async function moveLocalSubjectMaterialContainer(containerId: number, direction: "up" | "down") {
+  const manifest = await readMaterialContainersManifest()
+  const owner = Object.entries(manifest).find(([, stored]) => stored.some((container) => container.id === containerId))
+  if (!owner) return null
+  const [subjectId] = owner
+  const custom = (await listLocalSubjectMaterialContainers(subjectId)).filter((container) => container.kind === "custom")
+  const current = custom.find((container) => container.id === containerId)
+  if (!current) return null
+  const pinned = custom.filter((container) => container.isPinned)
+  const unpinned = custom.filter((container) => !container.isPinned)
+  const group = current.isPinned ? pinned : unpinned
+  const currentIndex = group.findIndex((container) => container.id === containerId)
+  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= group.length) return current
+  const reordered = [...group]
+  ;[reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]]
+  persistLocalCustomOrder(manifest, current.isPinned ? [...reordered, ...unpinned] : [...pinned, ...reordered])
+  await writeMaterialContainersManifest(manifest)
+  return { ...current, orderIndex: nextIndex + (current.isPinned ? 2 : pinned.length + 2), updatedAt: nowIso() }
 }
 
 export async function deleteLocalSubjectMaterialContainer(containerId: number) {
@@ -2775,6 +2848,20 @@ export async function listLocalSubjectDayMaterials(scope: {
     count: materials.length,
   })
   return materials
+}
+
+export async function listLocalPinnedSubjectMaterials(subjectId: string) {
+  const pinnedIds = new Set(
+    (await listLocalSubjectMaterialContainers(subjectId))
+      .filter((container) => container.kind === "custom" && container.isPinned)
+      .map((container) => container.id)
+  )
+  if (pinnedIds.size === 0) return []
+  const weekNumbers = await listLocalSubjectWeekNumbersWithContent(subjectId)
+  const groups = await Promise.all(
+    weekNumbers.map((weekNumber) => listLocalSubjectDayMaterials({ subjectId, weekNumber }))
+  )
+  return sortMaterials(groups.flat().filter((material) => material.container_id != null && pinnedIds.has(material.container_id)))
 }
 
 export async function updateLocalMaterial(

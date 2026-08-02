@@ -3,7 +3,7 @@ import { listLocalSubjectDayMaterials } from "@/lib/local-r2-manifests"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { getWeekNumberForDate, parseDateKey } from "@/lib/subject-utils"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
-import { listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
+import { listPinnedSubjectMaterials, listSubjectDayMaterials, reconcileSubjectDayMaterialsFromR2 } from "@/lib/subject-day-materials-r2"
 import { getSubjectDayMaterialMetadataOrAutocleanup } from "@/lib/subject-day-materials-storage"
 import { listTagsForMaterials } from "@/lib/material-tags"
 
@@ -73,7 +73,9 @@ export async function GET(request: Request) {
 
     const shouldReconcile = Boolean(subjectId) && (!Number.isNaN(rawWeekNumber) || Boolean(sessionDate))
 
-    if (scope === "week") {
+    if (scope === "pinned") {
+      weekNumber = Number.NaN
+    } else if (scope === "week") {
       if (Number.isNaN(rawWeekNumber)) {
         return badRequest("Missing weekNumber")
       }
@@ -163,12 +165,14 @@ export async function GET(request: Request) {
       return NextResponse.json(materials)
     }
 
-    const rows = await listSubjectDayMaterials({
-      subjectId,
-      weekNumber,
-      sessionDate: scope === "week" ? undefined : sessionDate!,
-      materialType: scope === "week" ? materialType : materialType,
-    })
+    const rows = scope === "pinned"
+      ? await listPinnedSubjectMaterials(subjectId)
+      : await listSubjectDayMaterials({
+          subjectId,
+          weekNumber,
+          sessionDate: scope === "week" ? undefined : sessionDate!,
+          materialType,
+        })
     const availabilityChecks = await Promise.all(
       rows.map(async (row) => ({
         row,
@@ -187,8 +191,8 @@ export async function GET(request: Request) {
     if (removedCount > 0) {
       console.warn("GET /api/subject-day-materials removed orphan materials during listing", {
         subjectId,
-        weekNumber,
-        sessionDate: scope === "week" ? undefined : sessionDate!,
+        weekNumber: scope === "pinned" ? undefined : weekNumber,
+        sessionDate: scope === "week" || scope === "pinned" ? undefined : sessionDate!,
         materialType: materialType ?? "all",
         removedCount,
       })
@@ -197,8 +201,8 @@ export async function GET(request: Request) {
     if (unavailableRows.length > 0) {
       console.warn("GET /api/subject-day-materials found materials with unavailable remote metadata", {
         subjectId,
-        weekNumber,
-        sessionDate: scope === "week" ? undefined : sessionDate!,
+        weekNumber: scope === "pinned" ? undefined : weekNumber,
+        sessionDate: scope === "week" || scope === "pinned" ? undefined : sessionDate!,
         materialType: materialType ?? "all",
         materialIds: unavailableRows.map((entry) => entry.row.id),
         driveFileIds: unavailableRows.map((entry) => entry.row.drive_file_id),

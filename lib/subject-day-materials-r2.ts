@@ -414,3 +414,16 @@ export async function listSubjectDayMaterials(scope: ReconcileScope) {
 
   return normalizeRows(rows)
 }
+
+export async function listPinnedSubjectMaterials(subjectId: string) {
+  const rows = await requireSql(sql)`
+    SELECT m.id, m.subject_id, m.week_number, m.session_date, m.weekday_index, m.material_type,
+           m.container_id, m.order_index, m.file_name, m.drive_file_id, m.drive_mime_type,
+           m.drive_web_view_link, m.is_checkup_done, m.created_at, m.updated_at
+    FROM subject_day_materials m
+    INNER JOIN subject_material_containers c ON c.id = m.container_id
+    WHERE m.subject_id = ${subjectId} AND c.subject_id = ${subjectId} AND c.is_pinned = TRUE
+    ORDER BY c.order_index ASC, m.week_number ASC, m.session_date ASC, m.order_index ASC, m.id ASC
+  ` as SubjectDayMaterialRow[]
+  return normalizeRows(rows)
+}

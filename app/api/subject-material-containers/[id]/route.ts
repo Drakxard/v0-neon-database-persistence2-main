@@ -4,7 +4,9 @@ import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import {
   deleteSubjectMaterialContainer,
   getSubjectMaterialContainer,
+  moveSubjectMaterialContainer,
   renameSubjectMaterialContainer,
+  setSubjectMaterialContainerPinned,
 } from "@/lib/material-containers"
 
 export const runtime = "nodejs"
@@ -34,11 +36,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const result = await authorize((await context.params).id)
     if (result.response) return result.response
     const body = await request.json()
-    return NextResponse.json(await renameSubjectMaterialContainer(result.id!, String(body?.name || "")))
+    const hasName = typeof body?.name === "string"
+    const hasPinned = typeof body?.isPinned === "boolean"
+    const hasMove = body?.move === "up" || body?.move === "down"
+    if ([hasName, hasPinned, hasMove].filter(Boolean).length !== 1) {
+      return NextResponse.json(
+        { error: "Envia solamente name, isPinned o move." },
+        { status: 400 }
+      )
+    }
+    if (hasName) {
+      return NextResponse.json(await renameSubjectMaterialContainer(result.id!, body.name))
+    }
+    if (hasPinned) {
+      return NextResponse.json(await setSubjectMaterialContainerPinned(result.id!, body.isPinned))
+    }
+    return NextResponse.json(await moveSubjectMaterialContainer(result.id!, body.move))
   } catch (error) {
     const response = errorResponse(error)
     if (response) return response
-    return NextResponse.json({ error: "No se pudo renombrar el contenedor." }, { status: 500 })
+    return NextResponse.json({ error: "No se pudo modificar el contenedor." }, { status: 500 })
   }
 }
 

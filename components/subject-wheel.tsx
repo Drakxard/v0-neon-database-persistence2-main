@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
+import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Pin, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -61,8 +61,10 @@ import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import {
   createSubjectMaterialContainer,
   fetchSubjectMaterialContainers,
+  moveSubjectMaterialContainer,
   removeSubjectMaterialContainer,
   renameSubjectMaterialContainer,
+  setSubjectMaterialContainerPinned,
 } from "@/lib/material-containers-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
@@ -1838,6 +1840,7 @@ export function SubjectWheel({
   const [droppedTextPdfError, setDroppedTextPdfError] = useState("")
   const [isCreatingTextPdf, setIsCreatingTextPdf] = useState(false)
   const [editingContainerId, setEditingContainerId] = useState<number | null>(null)
+  const [activeContainerControlsId, setActiveContainerControlsId] = useState<number | null>(null)
   const [editingContainerName, setEditingContainerName] = useState("")
   const [deleteContainerTarget, setDeleteContainerTarget] = useState<SubjectMaterialContainer | null>(null)
   const containerLongPressTimerRef = useRef<number | null>(null)
@@ -2233,6 +2236,46 @@ export function SubjectWheel({
       setIsSavingContainer(false)
     }
   }
+
+  const toggleContainerPinned = async (container: SubjectMaterialContainer) => {
+    if (!currentSubject || container.kind !== "custom" || isSavingContainer) return
+    setIsSavingContainer(true)
+    setEntriesError("")
+    try {
+      await setSubjectMaterialContainerPinned(container.id, !container.isPinned)
+      await loadMaterialContainers(currentSubject.id)
+      await loadSubjectDayData()
+    } catch (error) {
+      setEntriesError(error instanceof Error ? error.message : "No se pudo fijar el contenedor.")
+    } finally {
+      setIsSavingContainer(false)
+    }
+  }
+
+  const moveContainer = async (container: SubjectMaterialContainer, direction: "up" | "down") => {
+    if (!currentSubject || container.kind !== "custom" || isSavingContainer) return
+    setIsSavingContainer(true)
+    setEntriesError("")
+    try {
+      await moveSubjectMaterialContainer(container.id, direction)
+      await loadMaterialContainers(currentSubject.id)
+    } catch (error) {
+      setEntriesError(error instanceof Error ? error.message : "No se pudo ordenar el contenedor.")
+    } finally {
+      setIsSavingContainer(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeContainerControlsId == null) return
+    const closeControls = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest(`[data-container-controls="${activeContainerControlsId}"]`)) return
+      setActiveContainerControlsId(null)
+    }
+    document.addEventListener("pointerdown", closeControls, true)
+    return () => document.removeEventListener("pointerdown", closeControls, true)
+  }, [activeContainerControlsId])
 
   const startContainerLongPress = (container: SubjectMaterialContainer) => {
     if (container.kind !== "custom") return
@@ -2778,11 +2821,19 @@ export function SubjectWheel({
               subjectId: currentSubject.id,
               weekNumber: String(dialogSelectedWeekNumber),
               scope: "week",
+            }).toString()}`,
+            `/api/subject-day-materials?${new URLSearchParams({
+              subjectId: currentSubject.id,
+              scope: "pinned",
             }).toString()}`]
           : [`/api/subject-day-materials?${new URLSearchParams({
               subjectId: currentSubject.id,
               weekNumber: String(dialogSelectedWeekNumber),
               sessionDate: subjectDialogDateKey,
+            }).toString()}`,
+            `/api/subject-day-materials?${new URLSearchParams({
+              subjectId: currentSubject.id,
+              scope: "pinned",
             }).toString()}`]
 
       const [entriesResult, ...materialResults] = await Promise.all([
@@ -6556,9 +6607,12 @@ export function SubjectWheel({
     container: SubjectMaterialContainer | null = null
   ) => {
     const isTheorySection = mode === "theory"
-    const allVisibleMaterials = [...materials, ...pendingMaterials].filter(
-      (material) => !isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber
-    )
+    const allLoadedMaterials = [...materials, ...pendingMaterials]
+    const allVisibleMaterials = container?.kind === "custom" && container.isPinned
+      ? allLoadedMaterials
+      : allLoadedMaterials.filter(
+          (material) => !isWeeklyExercisesScope || material.week_number === dialogSelectedWeekNumber
+        )
     const materialsForMode = container?.kind === "custom"
       ? sortSubjectDayMaterials(allVisibleMaterials.filter((material) => material.container_id === container.id))
       : isTheorySection
@@ -6575,6 +6629,12 @@ export function SubjectWheel({
     const title = container?.name ?? (isTheorySection ? "Teoria" : "Practica")
     const dropKey = container ? String(container.id) : mode
     const isDropActive = dragOverMaterialType === dropKey
+    const containerGroup = container?.kind === "custom"
+      ? customMaterialContainers.filter((candidate) => candidate.isPinned === container.isPinned)
+      : []
+    const containerGroupIndex = container
+      ? containerGroup.findIndex((candidate) => candidate.id === container.id)
+      : -1
     const emptyLabel = isWeeklyExercisesScope
       ? `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para esta semana.`
       : `Todavia no hay PDFs de ${getContinueModeLabel(mode)} para este dia.`
@@ -6590,8 +6650,8 @@ export function SubjectWheel({
           isDropActive ? "border-primary bg-primary/5" : "border-border"
         )}
       >
-        <div className="flex flex-col gap-2">
-          <div>
+        <div className="flex flex-col gap-2" data-container-controls={container?.id}>
+          <div className="flex min-h-8 items-center justify-between gap-2">
             {container?.kind === "custom" && editingContainerId === container.id ? (
               <Input
                 value={editingContainerName}
@@ -6613,7 +6673,7 @@ export function SubjectWheel({
                 type="button"
                 className={cn(
                   "text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground",
-                  container?.kind === "custom" && "cursor-text hover:text-foreground"
+                  container?.kind === "custom" && "cursor-pointer hover:text-foreground"
                 )}
                 onPointerDown={() => container && startContainerLongPress(container)}
                 onPointerUp={cancelContainerLongPress}
@@ -6625,14 +6685,41 @@ export function SubjectWheel({
                     suppressContainerClickRef.current = false
                     return
                   }
-                  setEditingContainerId(container.id)
-                  setEditingContainerName(container.name)
+                  setActiveContainerControlsId((current) => current === container.id ? null : container.id)
                 }}
-                title={container?.kind === "custom" ? "Clic para renombrar; mantén pulsado para eliminar" : undefined}
+                title={container?.kind === "custom" ? "Clic para mostrar opciones; mantén pulsado para eliminar" : undefined}
               >
                 {title}
               </button>
             )}
+            {container?.kind === "custom" && activeContainerControlsId === container.id && editingContainerId !== container.id ? (
+              <div className="flex shrink-0 items-center gap-0.5" aria-label={`Opciones de ${container.name}`}>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground"
+                  onClick={() => { setEditingContainerId(container.id); setEditingContainerName(container.name) }}
+                  disabled={isSavingContainer} aria-label={`Editar ${container.name}`} title="Editar nombre">
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon"
+                  className={cn("h-7 w-7 rounded-full", container.isPinned ? "text-foreground" : "text-muted-foreground/45")}
+                  onClick={() => void toggleContainerPinned(container)} disabled={isSavingContainer}
+                  aria-pressed={container.isPinned}
+                  aria-label={container.isPinned ? `Desfijar ${container.name}` : `Fijar ${container.name}`}
+                  title={container.isPinned ? "Desfijar" : "Fijar"}>
+                  <Pin className={cn("h-3.5 w-3.5", container.isPinned && "fill-current")} />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground"
+                  onClick={() => void moveContainer(container, "up")}
+                  disabled={isSavingContainer || containerGroupIndex <= 0} aria-label={`Subir ${container.name}`} title="Subir">
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-full text-muted-foreground"
+                  onClick={() => void moveContainer(container, "down")}
+                  disabled={isSavingContainer || containerGroupIndex < 0 || containerGroupIndex >= containerGroup.length - 1}
+                  aria-label={`Bajar ${container.name}`} title="Bajar">
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -8176,9 +8263,9 @@ export function SubjectWheel({
               <div className="mb-6 space-y-4">
                 {renderMaterialManagerSection("theory", theoryContainer)}
                 {isTheoryContinueMode ? null : renderMaterialManagerSection("practice", practiceContainer)}
-                {isTheoryContinueMode
-                  ? null
-                  : customMaterialContainers.map((container) => (
+                {(isTheoryContinueMode
+                  ? customMaterialContainers.filter((container) => container.isPinned)
+                  : customMaterialContainers).map((container) => (
                       <div key={container.id}>{renderMaterialManagerSection("practice", container)}</div>
                     ))}
               </div>

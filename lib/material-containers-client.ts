@@ -30,6 +30,28 @@ export async function renameSubjectMaterialContainer(id: number, name: string) {
   )
 }
 
+export async function setSubjectMaterialContainerPinned(id: number, isPinned: boolean) {
+  return requireOkJson<SubjectMaterialContainer>(
+    await fetch(`/api/subject-material-containers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isPinned }),
+    }),
+    "No se pudo fijar el contenedor."
+  )
+}
+
+export async function moveSubjectMaterialContainer(id: number, move: "up" | "down") {
+  return requireOkJson<SubjectMaterialContainer>(
+    await fetch(`/api/subject-material-containers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ move }),
+    }),
+    "No se pudo ordenar el contenedor."
+  )
+}
+
 export async function removeSubjectMaterialContainer(id: number) {
   return requireOkJson<{ deleted: boolean; materialCount: number }>(
     await fetch(`/api/subject-material-containers/${id}`, { method: "DELETE" }),

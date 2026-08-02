@@ -11,6 +11,7 @@ type ContainerRow = {
   name: string
   normalized_name: string
   kind: SubjectMaterialContainerKind
+  is_pinned: boolean
   order_index: number | string
   material_count: number | string
   created_at: string | Date
@@ -33,6 +34,7 @@ function mapContainer(row: ContainerRow): SubjectMaterialContainer {
     name: row.name,
     normalizedName: row.normalized_name,
     kind: row.kind,
+    isPinned: Boolean(row.is_pinned),
     orderIndex: Number(row.order_index),
     materialCount: Number(row.material_count || 0),
     createdAt: iso(row.created_at),
@@ -55,13 +57,17 @@ export async function listSubjectMaterialContainers(subjectId: string) {
   await ensureSubjectMaterialContainers(subjectId)
   const sql = sqlClient()
   const rows = await sql`
-    SELECT c.id, c.subject_id, c.name, c.normalized_name, c.kind, c.order_index,
+    SELECT c.id, c.subject_id, c.name, c.normalized_name, c.kind, c.is_pinned, c.order_index,
            COUNT(m.id)::int AS material_count, c.created_at, c.updated_at
     FROM subject_material_containers c
     LEFT JOIN subject_day_materials m ON m.container_id = c.id
     WHERE c.subject_id = ${subjectId}
     GROUP BY c.id
-    ORDER BY c.order_index, c.id
+    ORDER BY
+      CASE c.kind WHEN 'theory' THEN 0 WHEN 'practice' THEN 1 ELSE 2 END,
+      CASE WHEN c.kind = 'custom' THEN c.is_pinned::int ELSE 0 END DESC,
+      c.order_index,
+      c.id
   ` as ContainerRow[]
   return rows.map(mapContainer)
 }
@@ -69,7 +75,7 @@ export async function listSubjectMaterialContainers(subjectId: string) {
 export async function getSubjectMaterialContainer(containerId: number) {
   const sql = sqlClient()
   const rows = await sql`
-    SELECT c.id, c.subject_id, c.name, c.normalized_name, c.kind, c.order_index,
+    SELECT c.id, c.subject_id, c.name, c.normalized_name, c.kind, c.is_pinned, c.order_index,
            COUNT(m.id)::int AS material_count, c.created_at, c.updated_at
     FROM subject_material_containers c
     LEFT JOIN subject_day_materials m ON m.container_id = c.id
@@ -148,4 +154,60 @@ export async function deleteSubjectMaterialContainer(containerId: number) {
   const sql = sqlClient()
   await sql`DELETE FROM subject_material_containers WHERE id = ${containerId}`
   return { deleted: true, missing: false, materialCount: 0 }
+}
+
+async function persistCustomContainerOrder(containers: SubjectMaterialContainer[]) {
+  const sql = sqlClient()
+  for (const [index, container] of containers.entries()) {
+    const nextOrderIndex = index + 2
+    if (container.orderIndex === nextOrderIndex) continue
+    await sql`
+      UPDATE subject_material_containers
+      SET order_index = ${nextOrderIndex}, updated_at = NOW()
+      WHERE id = ${container.id} AND kind = 'custom'
+    `
+  }
+}
+
+export async function setSubjectMaterialContainerPinned(containerId: number, isPinned: boolean) {
+  const container = await getSubjectMaterialContainer(containerId)
+  if (!container) return null
+  if (container.kind !== "custom") throw new Error("CONTAINER_FIXED")
+
+  const containers = (await listSubjectMaterialContainers(container.subjectId))
+    .filter((candidate) => candidate.kind === "custom" && candidate.id !== containerId)
+  const pinned = containers.filter((candidate) => candidate.isPinned)
+  const unpinned = containers.filter((candidate) => !candidate.isPinned)
+  const updated = { ...container, isPinned }
+  const ordered = isPinned ? [...pinned, updated, ...unpinned] : [...pinned, ...unpinned, updated]
+  const sql = sqlClient()
+  await sql`
+    UPDATE subject_material_containers
+    SET is_pinned = ${isPinned}, updated_at = NOW()
+    WHERE id = ${containerId} AND kind = 'custom'
+  `
+  await persistCustomContainerOrder(ordered)
+  return getSubjectMaterialContainer(containerId)
+}
+
+export async function moveSubjectMaterialContainer(containerId: number, direction: "up" | "down") {
+  const container = await getSubjectMaterialContainer(containerId)
+  if (!container) return null
+  if (container.kind !== "custom") throw new Error("CONTAINER_FIXED")
+
+  const allCustom = (await listSubjectMaterialContainers(container.subjectId))
+    .filter((candidate) => candidate.kind === "custom")
+  const pinned = allCustom.filter((candidate) => candidate.isPinned)
+  const unpinned = allCustom.filter((candidate) => !candidate.isPinned)
+  const group = container.isPinned ? pinned : unpinned
+  const currentIndex = group.findIndex((candidate) => candidate.id === containerId)
+  const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= group.length) {
+    return container
+  }
+
+  const nextGroup = [...group]
+  ;[nextGroup[currentIndex], nextGroup[nextIndex]] = [nextGroup[nextIndex], nextGroup[currentIndex]]
+  await persistCustomContainerOrder(container.isPinned ? [...nextGroup, ...unpinned] : [...pinned, ...nextGroup])
+  return getSubjectMaterialContainer(containerId)
 }

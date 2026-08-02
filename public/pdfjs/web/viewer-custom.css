@@ -493,31 +493,56 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
   cursor: pointer;
 }
 
-.pdfjs-custom-sync-button {
+#syncButton.pdfjs-custom-sync-button {
+  width: 32px;
+  min-width: 32px;
+  background-image: none !important;
+}
+
+#syncButton.pdfjs-custom-sync-button span::before {
+  display: none;
+}
+
+#syncButton.pdfjs-custom-sync-button svg,
+.pdfjs-custom-translate-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+#syncButton.pdfjs-custom-sync-button[data-sync-state="syncing"] svg {
+  animation: pdfjs-custom-spin 900ms linear infinite;
+}
+
+#secondarySyncButton.pdfjs-custom-sync-button {
   min-width: 116px;
 }
 
-.pdfjs-custom-sync-button[data-sync-state="idle"] span::before {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="idle"] span::before {
   content: "Sincronizar";
 }
 
-.pdfjs-custom-sync-button[data-sync-state="dirty"] span::before {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="dirty"] span::before {
   content: "Sincronizar";
 }
 
-.pdfjs-custom-sync-button[data-sync-state="syncing"] span::before {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="syncing"] span::before {
   content: "Sincronizando...";
 }
 
-.pdfjs-custom-sync-button[data-sync-state="synced"] span::before {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="synced"] span::before {
   content: "Sincronizado";
 }
 
-.pdfjs-custom-sync-button[data-sync-state] span {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state] span {
   font-size: 0;
 }
 
-.pdfjs-custom-sync-button[data-sync-state] span::before {
+#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state] span::before {
   font-size: 12px;
 }
 
@@ -527,6 +552,127 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
 
 .pdfjs-custom-sync-button[data-sync-state="synced"] {
   color: #16a34a;
+}
+
+@keyframes pdfjs-custom-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pdfjs-custom-translate-button {
+  background-image: none !important;
+  color: var(--toolbar-icon-color, #374151);
+}
+
+.pdfjs-custom-translate-button::before {
+  display: none;
+}
+
+.pdfjs-custom-translate-button:disabled {
+  opacity: 0.38;
+}
+
+.pdfjs-custom-translation-popover {
+  position: fixed;
+  z-index: 1300;
+  display: none;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--toolbar-border-color, #94a3b8) 72%, transparent);
+  border-radius: 10px;
+  background: var(--toolbar-bg-color, #f8fafc);
+  color: var(--main-color, #111827);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.24);
+  white-space: pre-wrap;
+  font: 500 13px/1.5 system-ui, sans-serif;
+}
+
+.pdfjs-custom-translation-popover[data-open="true"] {
+  display: block;
+}
+
+.pdfjs-custom-translation-popover[data-tone="loading"] {
+  color: var(--main-color, #475569);
+}
+
+.pdfjs-custom-translation-popover[data-tone="error"] {
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #dc2626;
+}
+
+.pdfjs-custom-translation-prompt-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1310;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.52);
+}
+
+.pdfjs-custom-translation-prompt-backdrop[data-open="true"] {
+  display: flex;
+}
+
+.pdfjs-custom-translation-prompt {
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 16px;
+  background: #0f172a;
+  color: #e5e7eb;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.4);
+  font-family: system-ui, sans-serif;
+}
+
+.pdfjs-custom-translation-prompt h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+}
+
+.pdfjs-custom-translation-prompt p {
+  margin: 0 0 12px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.pdfjs-custom-translation-prompt textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: inherit;
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+#pdfjs-custom-translation-prompt-error,
+.pdfjs-custom-modal-error {
+  min-height: 18px;
+  margin: 6px 0 0 !important;
+  color: #fca5a5 !important;
+  font-size: 12px !important;
+}
+
+.pdfjs-custom-translation-prompt button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: 600 13px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pdfjs-custom-translation-prompt button[data-variant="ghost"] {
+  background: rgba(51, 65, 85, 0.88);
+  color: #e2e8f0;
+}
+
+.pdfjs-custom-translation-prompt button[data-variant="primary"] {
+  background: #f97316;
+  color: #111827;
 }
 
 .pdfjs-custom-replace-button {

@@ -30,11 +30,13 @@ import {
   getWorkspaceFile,
   listLocalSubjectDayEntries,
   listLocalSubjectDayMaterials,
+  listLocalPinnedSubjectMaterials,
   listLocalSubjectMaterialContainers,
   listLocalMaterialTagWorkspace,
   listLocalTagsForMaterial,
   listLocalMaterialTagRegions,
   mergeLocalMaterialTags,
+  moveLocalSubjectMaterialContainer,
   readLocalWorkspaceTabsState,
   saveLocalAiPrompt,
   saveLocalDailySession,
@@ -48,6 +50,7 @@ import {
   updateLocalEntry,
   updateLocalMaterial,
   renameLocalSubjectMaterialContainer,
+  setLocalSubjectMaterialContainerPinned,
   updateLocalMaterialTag,
   replaceLocalMaterialTagRegions,
   unassignLocalTagFromMaterial,
@@ -293,8 +296,18 @@ async function handleLocalApiRequest(request: Request) {
     if (!Number.isInteger(containerId)) return errorResponse("Invalid id")
     try {
       if (method === "PATCH") {
-        const body = await parseRequestJson<{ name?: string }>(request)
-        const updated = await renameLocalSubjectMaterialContainer(containerId, String(body?.name || ""))
+        const body = await parseRequestJson<{ name?: string; isPinned?: boolean; move?: "up" | "down" }>(request)
+        const hasName = typeof body?.name === "string"
+        const hasPinned = typeof body?.isPinned === "boolean"
+        const hasMove = body?.move === "up" || body?.move === "down"
+        if ([hasName, hasPinned, hasMove].filter(Boolean).length !== 1) {
+          return errorResponse("Envia solamente name, isPinned o move.")
+        }
+        const updated = hasName
+          ? await renameLocalSubjectMaterialContainer(containerId, body!.name!)
+          : hasPinned
+            ? await setLocalSubjectMaterialContainerPinned(containerId, body!.isPinned!)
+            : await moveLocalSubjectMaterialContainer(containerId, body!.move!)
         return updated ? jsonResponse(updated) : errorResponse("Container not found", 404)
       }
       if (method === "DELETE") {
@@ -362,8 +375,11 @@ async function handleLocalApiRequest(request: Request) {
       const materialTypeParam = String(url.searchParams.get("materialType") || "").trim()
       const materialType =
         materialTypeParam === "theory" || materialTypeParam === "practice" ? materialTypeParam : null
-      if (!subjectId || !Number.isInteger(weekNumber)) {
+      if (!subjectId || (scope !== "pinned" && !Number.isInteger(weekNumber))) {
         return errorResponse("Missing subjectId or weekNumber")
+      }
+      if (scope === "pinned") {
+        return jsonResponse(await listLocalPinnedSubjectMaterials(subjectId))
       }
       return jsonResponse(
         await listLocalSubjectDayMaterials({
@@ -748,6 +764,9 @@ export function LocalFetchInterceptor() {
 
       const url = new URL(request.url)
       if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
+        return originalFetch(input, init)
+      }
+      if (url.pathname === "/api/pdf-translate") {
         return originalFetch(input, init)
       }
 
