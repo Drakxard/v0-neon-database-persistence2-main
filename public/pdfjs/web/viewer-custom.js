@@ -936,7 +936,7 @@
 
   function refreshTranslationButton() {
     if (!(state.translateButton instanceof HTMLButtonElement)) return;
-    state.translateButton.disabled = !state.translationMode && !state.selectedText;
+    state.translateButton.disabled = false;
     state.translateButton.setAttribute("aria-pressed", String(state.translationMode));
     state.translateButton.title = state.translationMode
       ? "Desactivar traduccion consecutiva"
@@ -951,13 +951,13 @@
       showToast("Traduccion consecutiva desactivada.", "info");
       return;
     }
-    if (!state.selectedText || !state.selectedTextRect) {
-      showToast("Selecciona texto del PDF para traducir.", "info");
-      return;
-    }
     state.translationMode = true;
     refreshTranslationButton();
-    void translateSelectedText();
+    if (state.selectedText && state.selectedTextRect) {
+      void translateSelectedText();
+    } else {
+      showToast("Traduccion consecutiva activada. Selecciona texto del PDF.", "info");
+    }
   }
 
   function closeTranslationPopover() {
