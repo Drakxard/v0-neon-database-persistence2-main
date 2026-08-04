@@ -93,6 +93,7 @@
     translationPopover: null,
     translationPopoverText: null,
     translationRequestId: 0,
+    translationFlushPromise: null,
     translationPromptBackdrop: null,
     translationPromptInput: null,
     translationPromptError: null,
@@ -123,7 +124,7 @@
   const MIN_SELECTABLE_TEXT = 24;
   const DEFAULT_TRANSLATION_PROMPT = "Traduce a español el texto, sin agregar de más: {texto}";
   const TRANSLATION_PROMPT_STORAGE_KEY = "pdfjs.translationPrompt.v1";
-  const INSCREEN_PAGE_READING_MS = 10_000;
+  const INSCREEN_PAGE_READING_MS = 60_000;
   const INSCREEN_FREETEXT_TYPE = 3;
   const INSCREEN_HIGHLIGHT_TYPE = 9;
 
@@ -1114,11 +1115,102 @@
     placeTranslationPopover();
   }
 
+  function getInscreenTranslationStorageKey(suffix = "") {
+    if (!canUseInscreen()) return "";
+    const revision = getInscreenMaterialContext().contentRevision;
+    return `inscreen:translations:${state.query.materialId}:${revision}${suffix}`;
+  }
+
+  function readInscreenTranslationQueue() {
+    const key = getInscreenTranslationStorageKey();
+    if (!key) return [];
+    try {
+      const value = JSON.parse(window.localStorage.getItem(key) || "[]");
+      return Array.isArray(value)
+        ? value.filter((entry) => entry && typeof entry.id === "string" && typeof entry.source === "string" && typeof entry.translation === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeInscreenTranslationQueue(entries) {
+    const key = getInscreenTranslationStorageKey();
+    if (!key) return;
+    try {
+      if (entries.length) window.localStorage.setItem(key, JSON.stringify(entries));
+      else window.localStorage.removeItem(key);
+    } catch (error) {
+      console.warn("No se pudo persistir la cola de traducciones:", error);
+    }
+  }
+
+  function queueInscreenTranslation(source, translation) {
+    if (!canUseInscreen()) return;
+    const normalizedSource = String(source || "").replace(/\s+/g, " ").trim();
+    const normalizedTranslation = String(translation || "").replace(/\s+/g, " ").trim();
+    if (!normalizedSource || !normalizedTranslation) return;
+    const entries = readInscreenTranslationQueue();
+    entries.push({ id: crypto.randomUUID(), source: normalizedSource, translation: normalizedTranslation });
+    writeInscreenTranslationQueue(entries);
+  }
+
+  function hasPendingInscreenTranslations() {
+    return readInscreenTranslationQueue().length > 0;
+  }
+
+  async function flushInscreenTranslations(options = {}) {
+    if (!canUseInscreen() || !hasPendingInscreenTranslations()) return true;
+    if (state.translationFlushPromise) return state.translationFlushPromise;
+
+    const entries = readInscreenTranslationQueue();
+    const batchKey = getInscreenTranslationStorageKey(":batch");
+    let batchId = "";
+    try {
+      batchId = String(window.localStorage.getItem(batchKey) || "").trim();
+      if (!batchId) {
+        batchId = crypto.randomUUID();
+        window.localStorage.setItem(batchKey, batchId);
+      }
+    } catch {
+      batchId = crypto.randomUUID();
+    }
+
+    state.translationFlushPromise = (async () => {
+      try {
+        const payload = await requireOkJson(
+          await fetch("/api/inscreen/translation-batches", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...getInscreenMaterialContext(), batchId, entries }),
+            keepalive: options.keepalive === true,
+          }),
+          "No se pudieron guardar las traducciones."
+        );
+        if (!["complete", "duplicate"].includes(String(payload?.status || ""))) {
+          throw new Error("No se confirmo el lote de traducciones.");
+        }
+        const sentIds = new Set(entries.map((entry) => entry.id));
+        writeInscreenTranslationQueue(readInscreenTranslationQueue().filter((entry) => !sentIds.has(entry.id)));
+        try { window.localStorage.removeItem(batchKey); } catch {}
+        return true;
+      } catch (error) {
+        console.error("Inscreen translation flush failed:", error);
+        if (!options.silent) showToast(error instanceof Error ? error.message : "No se pudieron guardar las traducciones.", "error", 4200);
+        return false;
+      } finally {
+        state.translationFlushPromise = null;
+      }
+    })();
+    return state.translationFlushPromise;
+  }
+
   async function translateSelectedText() {
     if (!state.selectedText || !state.selectedTextRect) {
       showToast("Selecciona texto del PDF para traducir.", "info");
       return;
     }
+    const sourceText = state.selectedText;
     const requestId = state.translationRequestId + 1;
     state.translationRequestId = requestId;
     showTranslationPopover("Traduciendo...");
@@ -1126,7 +1218,7 @@
       const response = await fetch("/api/pdf-translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: state.selectedText, promptTemplate: getTranslationPrompt() }),
+        body: JSON.stringify({ text: sourceText, promptTemplate: getTranslationPrompt() }),
       });
       const payload = await readJsonish(response);
       if (requestId !== state.translationRequestId) return;
@@ -1135,6 +1227,7 @@
       }
       const translation = payload && typeof payload === "object" ? String(payload.translation || "").trim() : "";
       if (!translation) throw new Error("La traduccion llego vacia.");
+      queueInscreenTranslation(sourceText, translation);
       showTranslationPopover(translation, "success");
     } catch (error) {
       if (requestId !== state.translationRequestId) return;
@@ -1722,6 +1815,10 @@
   async function navigateBackToApp() {
     if (state.isSyncing) {
       showToast("Espera a que termine la sincronizacion.", "info");
+      return;
+    }
+
+    if (!(await flushInscreenTranslations())) {
       return;
     }
 
@@ -3673,7 +3770,9 @@
   }
 
   function handleBeforeUnload(event) {
-    if (state.suppressUnloadSync || !canSyncCurrentDocument() || state.isSyncing || !hasUnsyncedAnnotations()) {
+    const needsAnnotationSync = canSyncCurrentDocument() && hasUnsyncedAnnotations();
+    const needsTranslationFlush = hasPendingInscreenTranslations();
+    if (state.suppressUnloadSync || state.isSyncing || (!needsAnnotationSync && !needsTranslationFlush)) {
       return;
     }
 
@@ -3684,7 +3783,10 @@
     state.exitSyncTimer = window.setTimeout(() => {
       state.exitSyncTimer = null;
       if (state.pendingExitSync && document.visibilityState === "visible" && !state.isSyncing) {
-        void syncAnnotatedPdf();
+        void (async () => {
+          const translationsFlushed = await flushInscreenTranslations();
+          if (translationsFlushed && needsAnnotationSync) await syncAnnotatedPdf();
+        })();
       }
     }, 120);
 
@@ -3696,6 +3798,7 @@
     state.pendingExitSync = false;
     clearExitSyncTimer();
     clearInscreenPageTimer();
+    if (hasPendingInscreenTranslations()) void flushInscreenTranslations({ keepalive: true, silent: true });
     saveInscreenReadingPosition(state.inscreenCurrentPage, true);
     cleanupLocalWorkspaceObjectUrl();
   }

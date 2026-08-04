@@ -48,6 +48,13 @@ export type InscreenCapture = {
   updatedAt: string
 }
 
+export type InscreenTranslationBatch = {
+  status: "pending" | "complete"
+  r2Key: string | null
+  entryCount: number
+  updatedAt: string
+}
+
 export type InscreenMaterialManifest = {
   version: 1
   materialId: number
@@ -61,6 +68,7 @@ export type InscreenMaterialManifest = {
     r2Key: string | null
     updatedAt: string
   }>
+  translationBatches: Record<string, InscreenTranslationBatch>
   updatedAt: string
 }
 
@@ -153,6 +161,7 @@ function emptyMaterialManifest(context: InscreenMaterialContext): InscreenMateri
     captures: {},
     consumedAnnotationIds: [],
     focusedNotes: {},
+    translationBatches: {},
     updatedAt: nowIso(),
   }
 }
@@ -213,6 +222,7 @@ export async function updateInscreenMaterialManifest(
       ) {
         throw new InscreenHttpError(409, "Material manifest mismatch")
       }
+      current.translationBatches ??= {}
       const next = await mutate(current)
       next.updatedAt = nowIso()
       return next
@@ -261,7 +271,7 @@ export async function resolveInscreenStage(
 export async function uploadNextInscreenText(params: {
   subjectSegment: string
   stageNumber: number
-  kind: "pagina" | "material"
+  kind: "pagina" | "material" | "transcripcion"
   body: string
   metadata: Record<string, string>
 }) {
