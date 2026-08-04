@@ -51,6 +51,20 @@ test("normaliza texto de página y mantiene el título en una línea", () => {
   assert.equal(normalizeInscreenTitle("  Que es\nun grafo? "), "Que es un grafo?")
 })
 
+test("cada materia usa su día elegido como inicio relativo de etapa", () => {
+  const thursdaySubject = createInitialInscreenStage("2026-08-10", 3)
+
+  assert.deepEqual(thursdaySubject, {
+    currentStage: 1,
+    nextTransitionDate: "2026-08-20",
+  })
+  assert.deepEqual(advanceInscreenStage(thursdaySubject, "2026-08-19"), thursdaySubject)
+  assert.deepEqual(advanceInscreenStage(thursdaySubject, "2026-08-20"), {
+    currentStage: 2,
+    nextTransitionDate: "2026-08-27",
+  })
+})
+
 test("el contrato incluye revisión, deduplicación y subida condicional", () => {
   const server = readFileSync(new URL("../lib/inscreen-server.ts", import.meta.url), "utf8")
   const r2 = readFileSync(new URL("../lib/r2.ts", import.meta.url), "utf8")
@@ -66,4 +80,5 @@ test("el contrato incluye revisión, deduplicación y subida condicional", () =>
   assert.match(viewer, /Copiar pagina como PNG/)
   assert.match(viewer, /pdfjs-custom-inscreen-pencil/)
   assert.match(viewer, /inscreen:position:/)
+  assert.match(viewer, /String\(value \?\? ""\)/)
 })

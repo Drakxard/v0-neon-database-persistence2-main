@@ -2615,7 +2615,7 @@
     state.inscreenConsumedAnnotationIds = new Set();
     try {
       const contextParams = new URLSearchParams(
-        Object.entries(getInscreenMaterialContext()).map(([key, value]) => [key, String(value || "")])
+        Object.entries(getInscreenMaterialContext()).map(([key, value]) => [key, String(value ?? "")])
       );
       const payload = await requireOkJson(
         await fetch(`/api/inscreen/material-state?${contextParams.toString()}`, { cache: "no-store" }),
