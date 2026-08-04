@@ -3107,7 +3107,7 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
             let keepSelections = false;
             showOverlay('Transcribiendo selecciones…');
             try {
-              const result = await transcribeInstantSelectionsWithGroq();
+              const result = await extractTextFromInstantSelections();
               if (result === null) {
                 keepSelections = true;
                 return;
@@ -4371,155 +4371,29 @@ Tu respuesta completa debe ser un único objeto JSON válido.`;
           : [];
       }
 
-      async function transcribeInstantSelectionsWithGroq() {
+      async function extractTextFromInstantSelections() {
         if (!instantSelections.length) return { topicText: '', detailTexts: [] };
         if (!pdfDoc) return { topicText: '', detailTexts: [] };
         const [topicSelection, ...detailSelections] = instantSelections;
-        const config = getGroqVisionConfig();
-        if (!config || !config.model) {
-          showToast('Configura el modelo y los prompts en los ajustes (⚙️).', 'info');
-          return null;
-        }
-        const ratio = window.devicePixelRatio || 1;
-        const TARGET_LONG_SIDE = 1800;
-        const MIN_RENDER_SCALE = 2;
-        const MAX_RENDER_SCALE = 10;
-        const renderSelectionToImage = async (selection) => {
-          if (!selection) return null;
-          try {
-            const { pageNum, xp1, yp1, xp2, yp2 } = selection;
-            const widthFrac = Math.abs(xp2 - xp1);
-            const heightFrac = Math.abs(yp2 - yp1);
-            if (widthFrac === 0 || heightFrac === 0) return null;
-
-            const page = await pdfDoc.getPage(pageNum);
-            const baseViewport = page.getViewport({ scale: 1 });
-            const cssWidth = widthFrac * baseViewport.width;
-            const cssHeight = heightFrac * baseViewport.height;
-            const longestSide = Math.max(cssWidth, cssHeight);
-            const desiredScale = longestSide ? Math.max(1, TARGET_LONG_SIDE / longestSide) : 1;
-            const renderScale = Math.min(
-              MAX_RENDER_SCALE,
-              Math.max(MIN_RENDER_SCALE, desiredScale * ratio),
-            );
-            const viewport = page.getViewport({ scale: renderScale });
-            const minXp = Math.min(xp1, xp2);
-            const minYp = Math.min(yp1, yp2);
-            const x1 = minXp * viewport.width;
-            const y1 = minYp * viewport.height;
-            const w = widthFrac * viewport.width;
-            const h = heightFrac * viewport.height;
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.max(1, Math.round(w));
-            canvas.height = Math.max(1, Math.round(h));
-            const ctx = canvas.getContext('2d', { alpha: false });
-            if (!ctx) return null;
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            await page.render({
-              canvasContext: ctx,
-              viewport,
-              transform: [1, 0, 0, 1, -x1, -y1],
-            }).promise;
-
-            const state = pageStates.get(pageNum);
-            const drawCanvas = state?.wrapper?.querySelector('.draw-canvas');
-            if (drawCanvas) {
-              const sx2 = Math.round(minXp * drawCanvas.width);
-              const sy2 = Math.round(minYp * drawCanvas.height);
-              const sw2 = Math.max(1, Math.round(widthFrac * drawCanvas.width));
-              const sh2 = Math.max(1, Math.round(heightFrac * drawCanvas.height));
-              ctx.drawImage(drawCanvas, sx2, sy2, sw2, sh2, 0, 0, canvas.width, canvas.height);
-            }
-
-            return canvas.toDataURL('image/png');
-          } catch (error) {
-            console.error('No se pudo renderizar la selección para Groq', error);
-            return null;
-          }
-        };
-
         let topicText = ((await extractTextFromSelection(topicSelection)) || '').trim();
-        if (!topicText) {
-          const topicImage = await renderSelectionToImage(topicSelection);
-          if (topicImage) {
-            try {
-              const [imageTranscription] = await callGroqVision(
-                config.model,
-                config.imagePrompt,
-                [topicImage],
-                DEFAULT_GROQ_IMAGE_PROMPT_TEXT,
-              );
-              if (imageTranscription) {
-                topicText = imageTranscription.trim();
-              }
-            } catch (error) {
-              console.error('Error transcribiendo la selección principal con Groq', error);
-            }
-          }
-        }
 
         if (!detailSelections.length) {
           showToast('Agrega al menos una selección adicional para transcribir.', 'info');
           return { topicText, detailTexts: [] };
         }
 
-        const images = [];
+        const detailTexts = [];
         for (const selection of detailSelections) {
-          const rendered = await renderSelectionToImage(selection);
-          if (rendered) {
-            images.push(rendered);
+          const extractedText = ((await extractTextFromSelection(selection)) || '').trim();
+          if (extractedText) {
+            detailTexts.push(extractedText);
           }
         }
 
-        if (!images.length) {
-          showToast('No hay selecciones válidas para enviar.', 'info');
+        if (!detailTexts.length) {
+          showToast('No se pudo extraer texto de las selecciones.', 'info');
           return { topicText, detailTexts: [] };
         }
-
-        const transcriptions = await callGroqVision(
-          config.model,
-          config.prompt,
-          images,
-          DEFAULT_GROQ_PROMPT_TEXT,
-        );
-        const detailTexts = transcriptions
-          .map((entry) => {
-            let current = entry.trim();
-            if (!current) return '';
-
-            for (let depth = 0; depth < 3; depth++) {
-              try {
-                const parsed = JSON.parse(current);
-                if (parsed && typeof parsed === 'object' && typeof parsed.texto === 'string') {
-                  return parsed.texto.trim();
-                }
-                if (typeof parsed === 'string') {
-                  const next = parsed.trim();
-                  if (next === current) break;
-                  current = next;
-                  continue;
-                }
-              } catch {}
-              break;
-            }
-
-            const match = current.match(/^\{\s*"texto"\s*:\s*"([\s\S]*)"\s*\}$/);
-            if (match) {
-              const rawValue = match[1]
-                .replace(/\\n/g, '\n')
-                .replace(/\\r/g, '\r')
-                .replace(/\\t/g, '\t')
-                .replace(/\\"/g, '"')
-                .replace(/\\\\/g, '\\');
-              return rawValue.trim();
-            }
-
-            return current;
-          })
-          .filter((value) => value.length);
         return { topicText, detailTexts };
       }
 
