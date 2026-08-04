@@ -2680,7 +2680,6 @@
 
   async function buildInscreenFocusedDraft() {
     const entries = getInscreenAnnotationEntries()
-      .filter((entry) => !state.inscreenConsumedAnnotationIds.has(entry.id))
       .sort((left, right) => left.order - right.order);
     const titles = entries.filter(
       (entry) => Number(entry.value.annotationType) === INSCREEN_FREETEXT_TYPE && String(entry.value.value || "").trim()
