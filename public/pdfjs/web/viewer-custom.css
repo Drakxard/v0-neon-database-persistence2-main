@@ -301,16 +301,6 @@
   font-family: system-ui, sans-serif;
 }
 
-.pdfjs-custom-inscreen-note h2 {
-  margin: 0 0 18px;
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-align: center;
-  text-transform: uppercase;
-}
-
 #pdfjs-custom-inscreen-note-title {
   box-sizing: border-box;
   width: 100%;

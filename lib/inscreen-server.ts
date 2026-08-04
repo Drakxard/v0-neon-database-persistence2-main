@@ -113,7 +113,7 @@ export function parseInscreenMaterialContext(input: Record<string, unknown> | UR
   const subjectName = String(get("subjectName") || "").trim()
   const fileName = String(get("fileName") || "").trim()
   const contentRevision = normalizeRevision(get("contentRevision"))
-  const targetWeekday = Number.parseInt(String(get("targetWeekday") || ""), 10)
+  const targetWeekday = Number.parseInt(String(get("targetWeekday") ?? ""), 10)
 
   if (!Number.isInteger(materialId) || materialId <= 0 || !subjectId || !subjectName || !fileName) {
     throw new InscreenHttpError(400, "Invalid material context")

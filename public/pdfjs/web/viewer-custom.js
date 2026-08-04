@@ -633,8 +633,7 @@
       const backdrop = document.createElement("div");
       backdrop.className = "pdfjs-custom-inscreen-note-backdrop";
       backdrop.innerHTML = [
-        '<section class="pdfjs-custom-inscreen-note" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-inscreen-note-title-label">',
-        '<h2 id="pdfjs-custom-inscreen-note-title-label">Lectura enfocada</h2>',
+        '<section class="pdfjs-custom-inscreen-note" role="dialog" aria-modal="true" aria-label="Lectura enfocada">',
         '<input id="pdfjs-custom-inscreen-note-title" type="text" maxlength="300" aria-label="Titulo" />',
         '<textarea id="pdfjs-custom-inscreen-note-body" aria-label="Texto de la lectura"></textarea>',
         '<p id="pdfjs-custom-inscreen-note-error" role="alert"></p>',
@@ -2673,6 +2672,12 @@
     return entries;
   }
 
+  function getHighlightEditorSelectedText(annotationId) {
+    const editor = document.getElementById(String(annotationId));
+    if (!editor?.classList.contains("highlightEditor")) return "";
+    return String(editor.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+  }
+
   async function buildInscreenFocusedDraft() {
     const entries = getInscreenAnnotationEntries()
       .filter((entry) => !state.inscreenConsumedAnnotationIds.has(entry.id))
@@ -2690,6 +2695,11 @@
     const extracted = [];
     for (const highlight of highlights) {
       const pageIndex = Number(highlight.value.pageIndex);
+      const selectedText = getHighlightEditorSelectedText(highlight.id);
+      if (Number.isInteger(pageIndex) && selectedText) {
+        extracted.push({ id: highlight.id, pageNumber: pageIndex + 1, text: selectedText });
+        continue;
+      }
       const quadPoints = normalizeNumberArray(highlight.value.quadPoints);
       if (!Number.isInteger(pageIndex) || !quadPoints.length) continue;
       const pageModel = await getPageTextModel(pageIndex);
