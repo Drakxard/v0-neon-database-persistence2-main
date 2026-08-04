@@ -1,11 +1,11 @@
 "use server"
 
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 import { del, put } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 type SaveQuestionExampleResult =
   | {

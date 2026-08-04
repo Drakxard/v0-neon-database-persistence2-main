@@ -1,10 +1,10 @@
-import { neon } from '@neondatabase/serverless'
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { readLocalState, updateLocalState } from "@/lib/local-state-store"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 export async function GET(request: Request) {
   try {

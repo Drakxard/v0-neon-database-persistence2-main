@@ -2,7 +2,6 @@ import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
-import { isLocalStorageMode } from "@/lib/storage-mode"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
 const R2_KEY_PREFIX = "r2/"
@@ -28,12 +27,6 @@ function createR2Client() {
 
 function getBucketName() {
   return requireEnv("R2_BUCKET_NAME")
-}
-
-function assertR2Enabled(_operation: string) {
-  if (isLocalStorageMode()) {
-    throw new Error("R2 deshabilitado en modo local.")
-  }
 }
 
 function sanitizePathSegment(value: string) {
@@ -90,6 +83,24 @@ function isR2ObjectNotFoundError(error: unknown) {
   )
 }
 
+export function isR2PreconditionFailedError(error: unknown) {
+  if (!error || typeof error !== "object") return false
+
+  const maybeError = error as {
+    name?: string
+    code?: string
+    Code?: string
+    $metadata?: { httpStatusCode?: number }
+  }
+
+  return (
+    maybeError.$metadata?.httpStatusCode === 412 ||
+    maybeError.name === "PreconditionFailed" ||
+    maybeError.code === "PreconditionFailed" ||
+    maybeError.Code === "PreconditionFailed"
+  )
+}
+
 export function isR2ObjectKey(value: string) {
   return value.startsWith(R2_KEY_PREFIX)
 }
@@ -122,8 +133,9 @@ export async function uploadR2Object(params: {
   mimeType: string
   body: Buffer | Uint8Array | string
   metadata?: Record<string, string>
+  ifNoneMatch?: string
+  ifMatch?: string
 }) {
-  assertR2Enabled("uploadR2Object")
   const client = createR2Client()
   const metadata = normalizeUploadMetadata(params.metadata)
   const bodySize = typeof params.body === "string" ? Buffer.byteLength(params.body) : params.body.byteLength
@@ -139,6 +151,8 @@ export async function uploadR2Object(params: {
       Body: params.body,
       ContentType: params.mimeType,
       Metadata: metadata,
+      IfNoneMatch: params.ifNoneMatch,
+      IfMatch: params.ifMatch,
     })
   )
 }
@@ -148,7 +162,6 @@ export async function createR2UploadSession(params: {
   mimeType: string
   metadata?: Record<string, string>
 }) {
-  assertR2Enabled("createR2UploadSession")
   const client = createR2Client()
   const metadata = normalizeUploadMetadata(params.metadata)
   const command = new PutObjectCommand({
@@ -175,7 +188,6 @@ export async function createR2UploadSession(params: {
 }
 
 export async function getR2ObjectMetadata(objectKey: string) {
-  assertR2Enabled("getR2ObjectMetadata")
   const client = createR2Client()
   let response
 
@@ -201,16 +213,15 @@ export async function getR2ObjectMetadata(objectKey: string) {
     size: typeof response.ContentLength === "number" ? String(response.ContentLength) : undefined,
     metadata: response.Metadata ?? {},
     lastModified: response.LastModified?.toISOString() ?? null,
+    etag: response.ETag ?? null,
   }
 }
 
 export async function getR2ObjectMetadatas(objectKeys: string[]) {
-  assertR2Enabled("getR2ObjectMetadatas")
   return Promise.all(objectKeys.map((objectKey) => getR2ObjectMetadata(objectKey)))
 }
 
 export async function listR2ObjectsByPrefix(prefix = R2_KEY_PREFIX) {
-  assertR2Enabled("listR2ObjectsByPrefix")
   const client = createR2Client()
   const objects: Array<{
     key: string
@@ -244,7 +255,6 @@ export async function listR2ObjectsByPrefix(prefix = R2_KEY_PREFIX) {
 }
 
 export async function downloadR2Object(objectKey: string) {
-  assertR2Enabled("downloadR2Object")
   const client = createR2Client()
   let response
 
@@ -275,11 +285,11 @@ export async function downloadR2Object(objectKey: string) {
   return {
     buffer: Buffer.from(bytes),
     mimeType: response.ContentType || "application/octet-stream",
+    etag: response.ETag ?? null,
   }
 }
 
 export async function deleteR2Object(objectKey: string) {
-  assertR2Enabled("deleteR2Object")
   const client = createR2Client()
   try {
     await client.send(

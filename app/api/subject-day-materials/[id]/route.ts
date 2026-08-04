@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
@@ -10,7 +10,7 @@ import { getSubjectMaterialContainer } from "@/lib/material-containers"
 
 export const runtime = "nodejs"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 type SubjectDayMaterialRow = {
   id: number
@@ -153,7 +153,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     }
 
     if (!sql) {
-      return NextResponse.json({ error: "DATABASE_URL is not configured" }, { status: 503 })
+      return NextResponse.json({ error: "La persistencia SQL remota est� deshabilitada" }, { status: 503 })
     }
 
     const scopeRows = await sql`
@@ -253,7 +253,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
     }
 
     if (!sql) {
-      return NextResponse.json({ error: "DATABASE_URL is not configured" }, { status: 503 })
+      return NextResponse.json({ error: "La persistencia SQL remota est� deshabilitada" }, { status: 503 })
     }
 
     const materials = await sql`

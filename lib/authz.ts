@@ -1,12 +1,12 @@
 import { cookies } from "next/headers"
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { APP_AUTH_COOKIE_NAME, getAppAuthConfig, verifySessionToken, type AppSessionTokenPayload } from "@/lib/app-auth"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS, normalizeAllowedSubjectIds, getSubjectIdFromIndex } from "@/lib/subjects"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 const LOCAL_SESSION: AuthSession = {
   email: "local@app.local",

@@ -96,6 +96,24 @@
     translationPromptBackdrop: null,
     translationPromptInput: null,
     translationPromptError: null,
+    inscreenLoaded: false,
+    inscreenCapturedPages: new Set(),
+    inscreenPendingCaptures: new Map(),
+    inscreenConsumedAnnotationIds: new Set(),
+    inscreenPageTimer: null,
+    inscreenPositionTimer: null,
+    inscreenCurrentPage: 1,
+    inscreenRestoringPosition: false,
+    inscreenActionToast: null,
+    inscreenPencilButton: null,
+    inscreenNoteBackdrop: null,
+    inscreenNoteTitle: null,
+    inscreenNoteBody: null,
+    inscreenNoteError: null,
+    inscreenNoteSave: null,
+    inscreenNoteDraft: null,
+    inscreenAnnotationOrder: new Map(),
+    inscreenAnnotationCounter: 0,
   };
   const ENHANCED_PDF_CANVAS_FILTER = "grayscale(100%) contrast(150%) brightness(95%)";
   const DEFAULT_HIGHLIGHT_COLOR = [255, 240, 102];
@@ -104,6 +122,9 @@
   const MIN_SELECTABLE_TEXT = 24;
   const DEFAULT_TRANSLATION_PROMPT = "Traduce a español el texto, sin agregar de más: {texto}";
   const TRANSLATION_PROMPT_STORAGE_KEY = "pdfjs.translationPrompt.v1";
+  const INSCREEN_PAGE_READING_MS = 10_000;
+  const INSCREEN_FREETEXT_TYPE = 3;
+  const INSCREEN_HIGHLIGHT_TYPE = 9;
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -112,6 +133,8 @@
       materialId: Number.parseInt(params.get("materialId") || "", 10),
       subjectId: String(params.get("subjectId") || "").trim(),
       subjectName: String(params.get("subjectName") || "").trim(),
+      subjectActivationDate: String(params.get("subjectActivationDate") || "").trim(),
+      subjectTargetWeekday: Number.parseInt(params.get("subjectTargetWeekday") || "", 10),
       sessionDate: String(params.get("sessionDate") || "").trim(),
       weekNumber: Number.parseInt(params.get("weekNumber") || "", 10),
       weekdayIndex: Number.parseInt(params.get("weekdayIndex") || "", 10),
@@ -150,7 +173,8 @@
     if (
       target.closest(".pdfjs-custom-modal-backdrop[data-open='true']") ||
       target.closest(".pdfjs-custom-replacement-backdrop[data-open='true']") ||
-      target.closest(".pdfjs-custom-translation-prompt-backdrop[data-open='true']")
+      target.closest(".pdfjs-custom-translation-prompt-backdrop[data-open='true']") ||
+      target.closest(".pdfjs-custom-inscreen-note-backdrop[data-open='true']")
     ) {
       return true;
     }
@@ -187,6 +211,33 @@
       return false;
     }
     return !isCronogramaResource() && !isDraftMode() && Number.isInteger(state.query?.materialId);
+  }
+
+  function canUseInscreen() {
+    return (
+      !isCronogramaResource() &&
+      !isDraftMode() &&
+      !isPresentationMode() &&
+      Number.isInteger(state.query?.materialId) &&
+      Boolean(state.query?.subjectId) &&
+      Boolean(state.query?.subjectName) &&
+      Boolean(state.query?.fileName) &&
+      Number.isInteger(state.query?.weekdayIndex)
+    );
+  }
+
+  function getInscreenMaterialContext() {
+    return {
+      materialId: state.query.materialId,
+      subjectId: state.query.subjectId,
+      subjectName: state.query.subjectName,
+      fileName: state.query.fileName,
+      contentRevision: String(state.app?.pdfDocument?.fingerprints?.[0] || state.query?.key || "").trim(),
+      targetWeekday: Number.isInteger(state.query.subjectTargetWeekday)
+        ? state.query.subjectTargetWeekday
+        : state.query.weekdayIndex,
+      activationDate: state.query.subjectActivationDate,
+    };
   }
 
   function hasUnsyncedAnnotations() {
@@ -457,6 +508,22 @@
       }
     }
 
+    if (!state.inscreenPencilButton && canUseInscreen()) {
+      const toolbar = document.getElementById("toolbarViewerRight") || document.getElementById("toolbarViewer");
+      if (toolbar) {
+        const button = document.createElement("button");
+        button.id = "pdfjs-custom-inscreen-pencil";
+        button.className = "toolbarButton pdfjs-custom-inscreen-pencil";
+        button.type = "button";
+        button.title = "Crear lectura enfocada";
+        button.setAttribute("aria-label", "Crear lectura enfocada");
+        button.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg>';
+        button.addEventListener("click", () => void openInscreenFocusedNote());
+        toolbar.appendChild(button);
+        state.inscreenPencilButton = button;
+      }
+    }
+
     if (!state.toastStack) {
       state.toastStack = document.createElement("div");
       state.toastStack.className = "pdfjs-custom-toast-stack";
@@ -560,6 +627,34 @@
       state.translationPromptInput.addEventListener("input", () => {
         state.translationPromptError.textContent = "";
       });
+    }
+
+    if (!state.inscreenNoteBackdrop) {
+      const backdrop = document.createElement("div");
+      backdrop.className = "pdfjs-custom-inscreen-note-backdrop";
+      backdrop.innerHTML = [
+        '<section class="pdfjs-custom-inscreen-note" role="dialog" aria-modal="true" aria-labelledby="pdfjs-custom-inscreen-note-title-label">',
+        '<h2 id="pdfjs-custom-inscreen-note-title-label">Lectura enfocada</h2>',
+        '<input id="pdfjs-custom-inscreen-note-title" type="text" maxlength="300" aria-label="Titulo" />',
+        '<textarea id="pdfjs-custom-inscreen-note-body" aria-label="Texto de la lectura"></textarea>',
+        '<p id="pdfjs-custom-inscreen-note-error" role="alert"></p>',
+        '<div class="pdfjs-custom-modal-actions">',
+        '<button type="button" data-variant="ghost" id="pdfjs-custom-inscreen-note-cancel">Cancelar</button>',
+        '<button type="button" data-variant="primary" id="pdfjs-custom-inscreen-note-save">Guardar</button>',
+        "</div>",
+        "</section>",
+      ].join("");
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) closeInscreenFocusedNote();
+      });
+      backdrop.querySelector("#pdfjs-custom-inscreen-note-cancel").addEventListener("click", closeInscreenFocusedNote);
+      backdrop.querySelector("#pdfjs-custom-inscreen-note-save").addEventListener("click", () => void saveInscreenFocusedNote());
+      document.body.appendChild(backdrop);
+      state.inscreenNoteBackdrop = backdrop;
+      state.inscreenNoteTitle = backdrop.querySelector("#pdfjs-custom-inscreen-note-title");
+      state.inscreenNoteBody = backdrop.querySelector("#pdfjs-custom-inscreen-note-body");
+      state.inscreenNoteError = backdrop.querySelector("#pdfjs-custom-inscreen-note-error");
+      state.inscreenNoteSave = backdrop.querySelector("#pdfjs-custom-inscreen-note-save");
     }
 
     if (!state.busy) {
@@ -2329,6 +2424,350 @@
     };
   }
 
+  function clearInscreenPageTimer() {
+    if (state.inscreenPageTimer) {
+      window.clearTimeout(state.inscreenPageTimer);
+      state.inscreenPageTimer = null;
+    }
+  }
+
+  function closeInscreenActionToast() {
+    if (!state.inscreenActionToast) return;
+    state.inscreenActionToast.dataset.visible = "false";
+    const toast = state.inscreenActionToast;
+    state.inscreenActionToast = null;
+    window.setTimeout(() => toast.remove(), 180);
+  }
+
+  function showInscreenActionToast(message, actionLabel, action) {
+    ensureUi();
+    closeInscreenActionToast();
+    const toast = document.createElement("div");
+    toast.className = "pdfjs-custom-toast pdfjs-custom-action-toast";
+    toast.dataset.tone = "info";
+    toast.innerHTML = '<span></span><button type="button"></button>';
+    toast.querySelector("span").textContent = message;
+    const button = toast.querySelector("button");
+    button.textContent = actionLabel;
+    button.addEventListener("click", () => void action(button));
+    state.toastStack.appendChild(toast);
+    state.inscreenActionToast = toast;
+    requestAnimationFrame(() => {
+      toast.dataset.visible = "true";
+    });
+    return toast;
+  }
+
+  async function renderInscreenPagePng(pageNumber) {
+    const page = await state.app.pdfDocument.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 2, rotation: page.rotate || 0 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const canvasContext = canvas.getContext("2d", { alpha: false });
+    if (!canvasContext) throw new Error("No se pudo preparar la imagen de la pagina.");
+    await page.render({ canvasContext, viewport }).promise;
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("No se pudo crear el PNG.")), "image/png");
+    });
+    canvas.width = 1;
+    canvas.height = 1;
+    return blob;
+  }
+
+  async function completeInscreenTranscription(captureId, pageNumber, button) {
+    try {
+      button.disabled = true;
+      const clipboardText = String(await navigator.clipboard.readText()).trim();
+      if (!clipboardText) throw new Error("El portapapeles no contiene texto.");
+      const reviewed = window.prompt("Revisa la transcripcion antes de guardarla:", clipboardText);
+      if (reviewed == null) return;
+      const text = reviewed.trim();
+      if (!text) throw new Error("La transcripcion esta vacia.");
+      await requireOkJson(
+        await fetch(`/api/inscreen/page-captures/${captureId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...getInscreenMaterialContext(), text }),
+        }),
+        "No se pudo guardar la transcripcion."
+      );
+      state.inscreenCapturedPages.add(pageNumber);
+      state.inscreenPendingCaptures.delete(pageNumber);
+      closeInscreenActionToast();
+      showToast(`Pagina ${pageNumber} guardada.`, "success", 2200);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "No se pudo pegar la transcripcion.", "error", 4200);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function offerInscreenScannedPage(captureId, pageNumber) {
+    showInscreenActionToast(
+      `La pagina ${pageNumber} parece ser una imagen.`,
+      "Copiar pagina como PNG",
+      async (button) => {
+        try {
+          button.disabled = true;
+          if (!navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+            throw new Error("Este navegador no permite copiar imagenes desde el visor.");
+          }
+          const blob = await renderInscreenPagePng(pageNumber);
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          showInscreenActionToast(
+            "Trae la transcripcion; clic para pegarla.",
+            "Pegar transcripcion",
+            (nextButton) => completeInscreenTranscription(captureId, pageNumber, nextButton)
+          );
+        } catch (error) {
+          showToast(error instanceof Error ? error.message : "No se pudo copiar la pagina.", "error", 4200);
+        } finally {
+          button.disabled = false;
+        }
+      }
+    );
+  }
+
+  async function captureInscreenPage(pageNumber) {
+    if (
+      !canUseInscreen() ||
+      !state.inscreenLoaded ||
+      document.visibilityState !== "visible" ||
+      pageNumber !== state.inscreenCurrentPage ||
+      state.inscreenCapturedPages.has(pageNumber)
+    ) {
+      return;
+    }
+
+    try {
+      const pageModel = await getPageTextModel(pageNumber - 1);
+      if (pageNumber !== state.inscreenCurrentPage || document.visibilityState !== "visible") return;
+      const text = String(pageModel.text || "").replace(/\s+/g, " ").trim();
+      const payload = await requireOkJson(
+        await fetch("/api/inscreen/page-captures", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...getInscreenMaterialContext(),
+            pageNumber,
+            text,
+            sourceType: "pdf",
+          }),
+        }),
+        "No se pudo registrar la pagina leida."
+      );
+      if (payload.status === "complete" || payload.status === "duplicate") {
+        state.inscreenCapturedPages.add(pageNumber);
+        state.inscreenPendingCaptures.delete(pageNumber);
+        return;
+      }
+      if (payload.status === "needs-transcription" && String(payload.captureId || "").trim()) {
+        const captureId = String(payload.captureId);
+        state.inscreenPendingCaptures.set(pageNumber, captureId);
+        offerInscreenScannedPage(captureId, pageNumber);
+      }
+    } catch (error) {
+      console.error("Inscreen page capture failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudo guardar la pagina leida.", "error", 4200);
+    }
+  }
+
+  function scheduleInscreenPageCapture(pageNumber = state.inscreenCurrentPage) {
+    clearInscreenPageTimer();
+    if (
+      !canUseInscreen() ||
+      !state.inscreenLoaded ||
+      document.visibilityState !== "visible" ||
+      state.inscreenCapturedPages.has(pageNumber)
+    ) {
+      return;
+    }
+    state.inscreenPageTimer = window.setTimeout(() => {
+      state.inscreenPageTimer = null;
+      void captureInscreenPage(pageNumber);
+    }, INSCREEN_PAGE_READING_MS);
+  }
+
+  function saveInscreenReadingPosition(pageNumber, immediate = false) {
+    if (!canUseInscreen() || state.inscreenRestoringPosition || !Number.isInteger(pageNumber)) return;
+    if (state.inscreenPositionTimer) window.clearTimeout(state.inscreenPositionTimer);
+    const persist = () => {
+      state.inscreenPositionTimer = null;
+      try {
+        window.localStorage.setItem(
+          `inscreen:position:${state.query.materialId}:${getInscreenMaterialContext().contentRevision}`,
+          JSON.stringify({ pageNumber, updatedAt: new Date().toISOString() })
+        );
+      } catch (error) {
+        console.warn("Inscreen local position save failed:", error);
+      }
+    };
+    if (immediate) persist();
+    else state.inscreenPositionTimer = window.setTimeout(persist, 700);
+  }
+
+  async function loadInscreenState() {
+    if (!canUseInscreen()) return;
+    state.inscreenLoaded = false;
+    state.inscreenCapturedPages = new Set();
+    state.inscreenPendingCaptures = new Map();
+    state.inscreenConsumedAnnotationIds = new Set();
+    try {
+      const contextParams = new URLSearchParams(
+        Object.entries(getInscreenMaterialContext()).map(([key, value]) => [key, String(value || "")])
+      );
+      const payload = await requireOkJson(
+        await fetch(`/api/inscreen/material-state?${contextParams.toString()}`, { cache: "no-store" }),
+        "No se pudo cargar el estado de lectura."
+      );
+      state.inscreenCapturedPages = new Set(Array.isArray(payload.capturedPages) ? payload.capturedPages.map(Number) : []);
+      state.inscreenPendingCaptures = new Map(
+        Array.isArray(payload.pendingCaptures)
+          ? payload.pendingCaptures.map((capture) => [Number(capture.pageNumber), String(capture.id)])
+          : []
+      );
+      state.inscreenConsumedAnnotationIds = new Set(
+        Array.isArray(payload.consumedAnnotationIds) ? payload.consumedAnnotationIds.map(String) : []
+      );
+      let savedPosition = null;
+      try {
+        savedPosition = JSON.parse(
+          window.localStorage.getItem(
+            `inscreen:position:${state.query.materialId}:${getInscreenMaterialContext().contentRevision}`
+          ) || "null"
+        );
+      } catch (error) {
+        console.warn("Inscreen local position read failed:", error);
+      }
+      const lastPage = Math.min(Number(savedPosition?.pageNumber) || 0, state.app?.pdfDocument?.numPages || 0);
+      if (lastPage >= 1 && lastPage !== state.app.pdfViewer.currentPageNumber) {
+        state.inscreenRestoringPosition = true;
+        state.app.pdfViewer.currentPageNumber = lastPage;
+        state.inscreenCurrentPage = lastPage;
+        window.setTimeout(() => {
+          state.inscreenRestoringPosition = false;
+        }, 0);
+      }
+      state.inscreenLoaded = true;
+      scheduleInscreenPageCapture(state.inscreenCurrentPage);
+    } catch (error) {
+      console.error("Inscreen state load failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudo cargar el progreso de lectura.", "error", 4200);
+    }
+  }
+
+  function getInscreenAnnotationEntries() {
+    const map = state.app?.pdfDocument?.annotationStorage?.serializable?.map;
+    if (!(map instanceof Map)) return [];
+    const entries = [];
+    for (const [annotationId, value] of map.entries()) {
+      if (!value || value.deleted) continue;
+      const id = String(annotationId);
+      if (!state.inscreenAnnotationOrder.has(id)) {
+        state.inscreenAnnotationCounter += 1;
+        state.inscreenAnnotationOrder.set(id, state.inscreenAnnotationCounter);
+      }
+      entries.push({ id, value, order: state.inscreenAnnotationOrder.get(id) });
+    }
+    return entries;
+  }
+
+  async function buildInscreenFocusedDraft() {
+    const entries = getInscreenAnnotationEntries()
+      .filter((entry) => !state.inscreenConsumedAnnotationIds.has(entry.id))
+      .sort((left, right) => left.order - right.order);
+    const titles = entries.filter(
+      (entry) => Number(entry.value.annotationType) === INSCREEN_FREETEXT_TYPE && String(entry.value.value || "").trim()
+    );
+    const title = titles[titles.length - 1];
+    if (!title) throw new Error("Escribe primero un titulo con la herramienta de texto de PDF.js.");
+    const highlights = entries.filter(
+      (entry) => Number(entry.value.annotationType) === INSCREEN_HIGHLIGHT_TYPE && entry.order > title.order
+    );
+    if (!highlights.length) throw new Error("Remarca texto despues del titulo antes de usar el lapiz.");
+
+    const extracted = [];
+    for (const highlight of highlights) {
+      const pageIndex = Number(highlight.value.pageIndex);
+      const quadPoints = normalizeNumberArray(highlight.value.quadPoints);
+      if (!Number.isInteger(pageIndex) || !quadPoints.length) continue;
+      const pageModel = await getPageTextModel(pageIndex);
+      const quote = extractQuoteFromTokenIndexes(pageModel, getHighlightTokenIndexesFromQuads(pageModel, quadPoints));
+      if (quote?.exactQuote) {
+        extracted.push({ id: highlight.id, pageNumber: pageIndex + 1, text: quote.exactQuote });
+      }
+    }
+    if (!extracted.length) throw new Error("No se pudo extraer texto de los resaltados posteriores.");
+    return {
+      titleAnnotationId: title.id,
+      title: String(title.value.value || "").replace(/[\r\n]+/g, " ").trim(),
+      highlights: extracted,
+    };
+  }
+
+  async function openInscreenFocusedNote() {
+    if (!canUseInscreen()) return;
+    try {
+      if (!state.inscreenLoaded) await loadInscreenState();
+      const draft = await buildInscreenFocusedDraft();
+      state.inscreenNoteDraft = draft;
+      state.inscreenNoteTitle.value = draft.title;
+      state.inscreenNoteBody.value = draft.highlights.map((highlight) => highlight.text).join("\n\n");
+      state.inscreenNoteError.textContent = "";
+      state.inscreenNoteBackdrop.dataset.open = "true";
+      state.inscreenNoteTitle.focus();
+      state.inscreenNoteTitle.select();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "No se pudo preparar la lectura enfocada.", "info", 4200);
+    }
+  }
+
+  function closeInscreenFocusedNote() {
+    if (state.inscreenNoteBackdrop) state.inscreenNoteBackdrop.dataset.open = "false";
+    state.inscreenNoteDraft = null;
+  }
+
+  async function saveInscreenFocusedNote() {
+    const draft = state.inscreenNoteDraft;
+    const title = String(state.inscreenNoteTitle?.value || "").replace(/[\r\n]+/g, " ").trim();
+    const body = String(state.inscreenNoteBody?.value || "").trim();
+    if (!draft || !title || !body) {
+      state.inscreenNoteError.textContent = "Completa el titulo y el texto.";
+      return;
+    }
+    state.inscreenNoteSave.disabled = true;
+    state.inscreenNoteError.textContent = "";
+    try {
+      const payload = await requireOkJson(
+        await fetch("/api/inscreen/focused-notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: crypto.randomUUID(),
+            ...getInscreenMaterialContext(),
+            title,
+            body,
+            titleAnnotationId: draft.titleAnnotationId,
+            highlightAnnotationIds: draft.highlights.map((highlight) => highlight.id),
+            pageNumbers: Array.from(new Set(draft.highlights.map((highlight) => highlight.pageNumber))),
+          }),
+        }),
+        "No se pudo guardar la lectura enfocada."
+      );
+      if (payload.status === "complete" || payload.status === "duplicate") {
+        state.inscreenConsumedAnnotationIds.add(draft.titleAnnotationId);
+        draft.highlights.forEach((highlight) => state.inscreenConsumedAnnotationIds.add(highlight.id));
+      }
+      closeInscreenFocusedNote();
+      showToast("Lectura enfocada guardada.", "success", 2600);
+    } catch (error) {
+      state.inscreenNoteError.textContent = error instanceof Error ? error.message : "No se pudo guardar.";
+    } finally {
+      state.inscreenNoteSave.disabled = false;
+    }
+  }
+
   function buildSnapshotItem({
     annotationId,
     pageIndex,
@@ -3116,7 +3555,18 @@
   function handlePageHide() {
     state.pendingExitSync = false;
     clearExitSyncTimer();
+    clearInscreenPageTimer();
+    saveInscreenReadingPosition(state.inscreenCurrentPage, true);
     cleanupLocalWorkspaceObjectUrl();
+  }
+
+  function handleInscreenVisibilityChange() {
+    clearInscreenPageTimer();
+    if (document.visibilityState === "visible") {
+      scheduleInscreenPageCapture(state.inscreenCurrentPage);
+    } else {
+      saveInscreenReadingPosition(state.inscreenCurrentPage, true);
+    }
   }
 
   function handleParentMessage(event) {
@@ -3421,6 +3871,12 @@
     state.activeRegionTagName = "";
     cancelCutSelection();
     clearPageTextModels();
+    clearInscreenPageTimer();
+    closeInscreenActionToast();
+    state.inscreenLoaded = false;
+    state.inscreenAnnotationOrder = new Map();
+    state.inscreenAnnotationCounter = 0;
+    state.inscreenCurrentPage = state.app?.pdfViewer?.currentPageNumber || 1;
     closeReplacementModal();
     leaveSelectionMode();
     updateDraftOverlay();
@@ -3439,6 +3895,9 @@
     });
     if (isPresentationMode() && state.presentationPhase === "source") {
       requestPresentationRegions();
+    }
+    if (canUseInscreen()) {
+      void loadInscreenState();
     }
   }
 
@@ -3536,7 +3995,18 @@
       applyEnhancedPdfReadability();
       refreshSyncButtons();
     });
-    eventBus.on("pagechanging", refreshLayers);
+    eventBus.on("pagechanging", ({ pageNumber } = {}) => {
+      refreshLayers();
+      const nextPage = Number(pageNumber);
+      if (!Number.isInteger(nextPage)) return;
+      state.inscreenCurrentPage = nextPage;
+      closeInscreenActionToast();
+      scheduleInscreenPageCapture(nextPage);
+      saveInscreenReadingPosition(nextPage);
+    });
+    eventBus.on("annotationeditorstateschanged", () => {
+      getInscreenAnnotationEntries();
+    });
     eventBus.on("pagesinit", initializePresentationScale);
     eventBus.on("scalechanging", refreshLayers);
     eventBus.on("rotationchanging", refreshLayers);
@@ -3578,6 +4048,7 @@
     });
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("pagehide", handlePageHide);
+    document.addEventListener("visibilitychange", handleInscreenVisibilityChange);
     window.addEventListener("message", handleParentMessage);
 
     if (isLocalWorkspaceMode() && state.query?.workspaceFileId) {

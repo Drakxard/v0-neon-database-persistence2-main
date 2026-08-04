@@ -1,5 +1,4 @@
-import { neon, Pool, type PoolClient } from "@neondatabase/serverless"
-import { requireSql } from "@/lib/db"
+import { getLegacyDatabase, getLegacyPool, requireSql, type LegacyPoolClient } from "@/lib/db"
 import { NextResponse } from "next/server"
 
 import { deleteDriveFile } from "@/lib/google-drive"
@@ -10,19 +9,8 @@ import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 
 export const runtime = "nodejs"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
-const globalForPool = globalThis as typeof globalThis & { __subjectDayEntriesPool?: Pool }
-const pool =
-  globalForPool.__subjectDayEntriesPool ??
-  (process.env.DATABASE_URL
-    ? new Pool({
-        connectionString: process.env.DATABASE_URL,
-      })
-    : null)
-
-if (process.env.NODE_ENV !== "production" && pool) {
-  globalForPool.__subjectDayEntriesPool = pool
-}
+const sql = getLegacyDatabase()
+const pool = getLegacyPool()
 
 type EntryRow = {
   id: number
@@ -101,9 +89,7 @@ function normalizeSessionDateKey(sessionDate: string | Date) {
 
 function getDatabaseHost() {
   try {
-    const databaseUrl = process.env.DATABASE_URL
-    if (!databaseUrl) return "unknown"
-    return new URL(databaseUrl).host
+    return "disabled-local-workspace"
   } catch {
     return "invalid"
   }
@@ -168,7 +154,7 @@ function getOppositePairRole(role: "question" | "answer") {
   return role === "question" ? "answer" : "question"
 }
 
-async function fetchEntryByIdWithClient(client: PoolClient, entryId: number) {
+async function fetchEntryByIdWithClient(client: LegacyPoolClient, entryId: number) {
   const result = await client.query(
     `
       SELECT id, subject_day_material_id, subject_id, week_number, session_date, weekday_index, order_index, transcript_text, drive_file_id, drive_file_name, drive_mime_type, drive_web_view_link, answer_text, custom_title, practice_state, pair_id, pair_role, is_featured, created_at, updated_at
@@ -187,7 +173,7 @@ async function swapCompleteAudioPairRoleInTransaction(params: {
   pairId: string
   pairRole: "question" | "answer"
 }) {
-  if (!pool) throw new Error("DATABASE_URL is not configured.")
+  if (!pool) throw new Error("La persistencia SQL remota est� deshabilitada.")
   const client = await pool.connect()
   let began = false
 

@@ -35,6 +35,28 @@
   background: rgba(127, 29, 29, 0.96);
 }
 
+.pdfjs-custom-action-toast {
+  display: grid;
+  gap: 9px;
+  pointer-events: auto;
+}
+
+.pdfjs-custom-action-toast button {
+  justify-self: end;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: #f97316;
+  color: #111827;
+  font: 700 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pdfjs-custom-action-toast button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .pdfjs-custom-selection-layer {
   position: absolute;
   inset: 0;
@@ -230,6 +252,119 @@
 .pdfjs-custom-cut-button.is-active {
   color: #f97316;
   background-color: color-mix(in srgb, #f97316 18%, transparent);
+}
+
+.pdfjs-custom-inscreen-pencil {
+  background-image: none !important;
+  color: var(--toolbar-icon-color, #374151);
+}
+
+.pdfjs-custom-inscreen-pencil::before {
+  display: none;
+}
+
+.pdfjs-custom-inscreen-pencil svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.pdfjs-custom-inscreen-note-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1320;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.pdfjs-custom-inscreen-note-backdrop[data-open="true"] {
+  display: flex;
+}
+
+.pdfjs-custom-inscreen-note {
+  box-sizing: border-box;
+  width: min(760px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+  padding: 28px;
+  border-radius: 20px;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.38);
+  font-family: system-ui, sans-serif;
+}
+
+.pdfjs-custom-inscreen-note h2 {
+  margin: 0 0 18px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+#pdfjs-custom-inscreen-note-title {
+  box-sizing: border-box;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 8px 10px 14px;
+  outline: none;
+  color: #0f172a;
+  font: 700 28px/1.25 system-ui, sans-serif;
+  text-align: center;
+}
+
+#pdfjs-custom-inscreen-note-body {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 340px;
+  margin-top: 20px;
+  resize: vertical;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 18px;
+  outline: none;
+  color: #1e293b;
+  font: 16px/1.7 system-ui, sans-serif;
+}
+
+#pdfjs-custom-inscreen-note-title:focus,
+#pdfjs-custom-inscreen-note-body:focus {
+  border-color: #f97316;
+}
+
+#pdfjs-custom-inscreen-note-error {
+  min-height: 18px;
+  margin: 8px 0 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.pdfjs-custom-inscreen-note button {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: 700 13px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pdfjs-custom-inscreen-note button[data-variant="ghost"] {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.pdfjs-custom-inscreen-note button[data-variant="primary"] {
+  background: #f97316;
+  color: #111827;
 }
 
 #viewer .page[data-cut-boundary] {

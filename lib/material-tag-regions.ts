@@ -1,11 +1,11 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 
 import type { MaterialTagRegion } from "@/lib/study-types"
 
-const database = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const database = getLegacyDatabase()
 
 function getDatabase() {
-  if (!database) throw new Error("DATABASE_URL is not configured.")
+  if (!database) throw new Error("La persistencia SQL remota est� deshabilitada.")
   return database
 }
 

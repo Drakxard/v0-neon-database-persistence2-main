@@ -1,4 +1,4 @@
-const HOME_SUBJECT_WEEKDAY: Partial<Record<string, number>> = {
+export const HOME_SUBJECT_WEEKDAY: Partial<Record<string, number>> = {
   calculo2: 0,
   algebra: 0,
   calculo3: 0,

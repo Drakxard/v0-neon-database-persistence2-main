@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 
 import type { PracticeMaterialCoverageStatus, SubjectSixDayVector } from "@/lib/audio-coverage"
@@ -8,7 +8,7 @@ import { downloadR2Object, isR2ObjectKey } from "@/lib/r2"
 import { getSubjectById, isValidSubjectId } from "@/lib/subjects"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
 
 export type MobileReviewPair = {

@@ -58,6 +58,7 @@ export type WorkspaceState = {
   workspaceTabs: Record<string, WorkspaceTabState>
   activeWorkspaceTabId: string
   customSubjects: Record<string, CustomSubjectState>
+  subjectWeekdays: Record<string, number>
   isMainWorkspaceTabVisible: boolean
 }
 

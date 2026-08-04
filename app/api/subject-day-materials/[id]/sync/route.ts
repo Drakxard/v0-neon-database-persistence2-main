@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 import { NextResponse } from "next/server"
 
@@ -14,7 +14,7 @@ import { deleteSubjectDayMaterialRemoteFile } from "@/lib/subject-day-materials-
 
 export const runtime = "nodejs"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 type SubjectDayMaterialRow = {
   id: number

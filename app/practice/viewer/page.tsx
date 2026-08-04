@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 
 import { getRequestAuthSession, canAccessSubject } from "@/lib/authz"
 import { isLocalStorageMode } from "@/lib/storage-mode"
@@ -10,7 +10,7 @@ import { PracticeViewerClient } from "./practice-viewer-client"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 const SUBJECT_NAMES: Record<string, string> = {
   algebra: "Algebra 2",
@@ -33,6 +33,8 @@ type ViewerPageProps = {
     fileName?: string
     workspaceFileId?: string
     sourceRevision?: string
+    subjectActivationDate?: string
+    subjectTargetWeekday?: string
     returnToken?: string
     presentationTagIds?: string
   }>
@@ -59,6 +61,8 @@ type MaterialContext = {
   fileName: string
   workspaceFileId?: string | null
   sourceRevision?: string
+  subjectActivationDate?: string
+  subjectTargetWeekday?: number
   returnToken?: string
 }
 
@@ -113,6 +117,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
   const fileName = (params.fileName || "").trim()
   const workspaceFileId = (params.workspaceFileId || "").trim()
   const sourceRevision = (params.sourceRevision || "").trim()
+  const subjectActivationDate = (params.subjectActivationDate || "").trim()
+  const subjectTargetWeekday = Number.parseInt(params.subjectTargetWeekday || "", 10)
   const presentationTagIds = Array.from(new Set(
     String(params.presentationTagIds || "")
       .split(",")
@@ -210,6 +216,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
                 fileName,
                 workspaceFileId,
                 sourceRevision: sourceRevision || `${workspaceFileId}:current`,
+                subjectActivationDate,
+                subjectTargetWeekday: Number.isInteger(subjectTargetWeekday) ? subjectTargetWeekday : undefined,
                 returnToken,
               }
             : undefined

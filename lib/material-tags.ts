@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 
 import type { MaterialTagWorkspace, StudyTag } from "@/lib/study-types"
 import {
@@ -7,7 +7,7 @@ import {
   normalizeTagName,
 } from "@/lib/tag-utils"
 
-const database = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const database = getLegacyDatabase()
 
 type TagRow = {
   id: number | string
@@ -22,7 +22,7 @@ type TagRow = {
 
 function getDatabase() {
   if (!database) {
-    throw new Error("DATABASE_URL is not configured.")
+    throw new Error("La persistencia SQL remota est� deshabilitada.")
   }
   return database
 }

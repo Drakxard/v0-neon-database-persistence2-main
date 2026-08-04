@@ -1,9 +1,9 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 
 import { normalizeTagDisplayName, normalizeTagName } from "@/lib/tag-utils"
 import type { SubjectMaterialContainer, SubjectMaterialContainerKind } from "@/lib/study-types"
 
-const database = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const database = getLegacyDatabase()
 
 type ContainerRow = {
   id: number | string
@@ -19,7 +19,7 @@ type ContainerRow = {
 }
 
 function sqlClient() {
-  if (!database) throw new Error("DATABASE_URL is not configured.")
+  if (!database) throw new Error("La persistencia SQL remota est� deshabilitada.")
   return database
 }
 

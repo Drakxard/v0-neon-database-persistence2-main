@@ -132,6 +132,7 @@ export type LocalWorkspaceTabsState = {
   workspaceTabs: Record<string, LocalWorkspaceTabState>
   activeWorkspaceTabId: string
   customSubjects: Record<string, LocalCustomSubjectState>
+  subjectWeekdays: Record<string, number>
   isMainWorkspaceTabVisible: boolean
 }
 
@@ -457,6 +458,7 @@ function createEmptyWorkspaceTabsState(): LocalWorkspaceTabsState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    subjectWeekdays: {},
     isMainWorkspaceTabVisible: true,
   }
 }
@@ -513,7 +515,7 @@ function normalizeLocalCustomSubject(input: Partial<LocalCustomSubjectState> | n
   }
 
   const parsedWeekday = Number(input.targetWeekday)
-  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 6 ? parsedWeekday : 0
 
   return {
     id: input.id,
@@ -540,6 +542,15 @@ function normalizeLocalCustomSubjects(input: Partial<LocalWorkspaceTabsState>["c
 
 function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState> | null | undefined): LocalWorkspaceTabsState {
   const workspaceTabs = normalizeWorkspaceTabs(input?.workspaceTabs)
+  const customSubjects = normalizeLocalCustomSubjects(input?.customSubjects)
+  const subjectWeekdays = Object.entries(input?.subjectWeekdays ?? {}).reduce<Record<string, number>>((accumulator, [subjectId, value]) => {
+    const weekday = Number(value)
+    if (subjectId.trim() && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) accumulator[subjectId] = weekday
+    return accumulator
+  }, {})
+  for (const subject of Object.values(customSubjects)) {
+    if (!(subject.id in subjectWeekdays)) subjectWeekdays[subject.id] = subject.targetWeekday
+  }
   const isMainWorkspaceTabVisible = input?.isMainWorkspaceTabVisible !== false
   const activeCandidate =
     typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
@@ -562,7 +573,8 @@ function normalizeLocalWorkspaceTabsState(input: Partial<LocalWorkspaceTabsState
       : isMainWorkspaceTabVisible
         ? MAIN_WORKSPACE_TAB_ID
         : firstWorkspaceTabId ?? MAIN_WORKSPACE_TAB_ID,
-    customSubjects: normalizeLocalCustomSubjects(input?.customSubjects),
+    customSubjects,
+    subjectWeekdays,
     isMainWorkspaceTabVisible,
   }
 }
@@ -2152,7 +2164,7 @@ export async function setLocalSubjectMaterialContainerPinned(containerId: number
   const containers = await listLocalSubjectMaterialContainers(subjectId)
   const current = containers.find((container) => container.id === containerId)
   if (!current) return null
-  if (current.kind !== "custom") throw new Error("TeorÃ­a y PrÃ¡ctica son contenedores fijos.")
+  if (current.kind !== "custom") throw new Error("Teoría y Práctica son contenedores fijos.")
 
   for (const [key, stored] of Object.entries(manifest)) {
     manifest[key] = stored.map((container) =>

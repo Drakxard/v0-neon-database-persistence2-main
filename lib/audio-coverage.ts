@@ -1,10 +1,10 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 
 import { getSubjectById } from "@/lib/subjects"
 import { getSynthesisTheoryWeekday } from "@/lib/synthesis-schedule"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 const MOBILE_REVIEW_TIME_ZONE = "America/Buenos_Aires"
 
 export type PracticeMaterialCoverageStatus = "sin_tocar" | "tocado_sin_dupla" | "cubierto_minimo"

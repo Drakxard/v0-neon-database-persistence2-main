@@ -2,6 +2,7 @@ import { downloadR2Object, uploadR2Object } from "@/lib/r2"
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { readLocalState, updateLocalState, type WorkspaceState } from "@/lib/local-state-store"
 import { isLocalStorageMode } from "@/lib/storage-mode"
+import { HOME_SUBJECT_WEEKDAY } from "@/lib/home-schedule"
 
 const WORKSPACE_STATE_PREFIX = "manifests/workspace/"
 const MAIN_WORKSPACE_TAB_ID = "main"
@@ -11,6 +12,7 @@ function createEmptyWorkspaceState(): WorkspaceState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    subjectWeekdays: { ...HOME_SUBJECT_WEEKDAY } as Record<string, number>,
     isMainWorkspaceTabVisible: true,
   }
 }
@@ -45,7 +47,7 @@ function normalizeCustomSubjects(input: Partial<WorkspaceState>["customSubjects"
     }
 
     const parsedWeekday = Number(subject.targetWeekday)
-    const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+    const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 6 ? parsedWeekday : 0
 
     accumulator[subjectId] = {
       id: subject.id,
@@ -61,8 +63,27 @@ function normalizeCustomSubjects(input: Partial<WorkspaceState>["customSubjects"
   }, {})
 }
 
+function normalizeSubjectWeekdays(
+  input: Partial<WorkspaceState>["subjectWeekdays"],
+  customSubjects: WorkspaceState["customSubjects"]
+) {
+  const normalized = Object.entries(input ?? {}).reduce<Record<string, number>>((accumulator, [subjectId, value]) => {
+    const weekday = Number(value)
+    if (subjectId.trim() && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) {
+      accumulator[subjectId] = weekday
+    }
+    return accumulator
+  }, { ...HOME_SUBJECT_WEEKDAY } as Record<string, number>)
+
+  for (const subject of Object.values(customSubjects)) {
+    if (!(subject.id in normalized)) normalized[subject.id] = subject.targetWeekday
+  }
+  return normalized
+}
+
 function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefined): WorkspaceState {
   const isMainWorkspaceTabVisible = input?.isMainWorkspaceTabVisible !== false
+  const customSubjects = normalizeCustomSubjects(input?.customSubjects)
 
   return {
     workspaceTabs: input?.workspaceTabs && typeof input.workspaceTabs === "object" ? input.workspaceTabs : {},
@@ -70,7 +91,8 @@ function normalizeWorkspaceState(input: Partial<WorkspaceState> | null | undefin
       typeof input?.activeWorkspaceTabId === "string" && input.activeWorkspaceTabId.trim()
         ? input.activeWorkspaceTabId.trim()
         : MAIN_WORKSPACE_TAB_ID,
-    customSubjects: normalizeCustomSubjects(input?.customSubjects),
+    customSubjects,
+    subjectWeekdays: normalizeSubjectWeekdays(input?.subjectWeekdays, customSubjects),
     isMainWorkspaceTabVisible,
   }
 }
@@ -80,6 +102,9 @@ function hasWorkspaceStateContent(state: WorkspaceState) {
     state.activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID ||
     Object.keys(state.workspaceTabs).length > 0 ||
     Object.keys(state.customSubjects).length > 0 ||
+    Object.entries(state.subjectWeekdays).some(
+      ([subjectId, weekday]) => !state.customSubjects[subjectId] && HOME_SUBJECT_WEEKDAY[subjectId] !== weekday
+    ) ||
     !state.isMainWorkspaceTabVisible
   )
 }

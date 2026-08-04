@@ -23,6 +23,8 @@ type MaterialContext = {
   fileName: string
   workspaceFileId?: string | null
   sourceRevision?: string
+  subjectActivationDate?: string
+  subjectTargetWeekday?: number
   returnToken?: string
 }
 
@@ -176,6 +178,8 @@ function buildViewerSrc({
     params.set("sessionDate", material.sessionDate)
     params.set("weekNumber", String(material.weekNumber))
     params.set("weekdayIndex", String(material.weekdayIndex))
+    if (material.subjectActivationDate) params.set("subjectActivationDate", material.subjectActivationDate)
+    if (Number.isInteger(material.subjectTargetWeekday)) params.set("subjectTargetWeekday", String(material.subjectTargetWeekday))
     if (material.workspaceFileId) {
       params.set("workspaceFileId", material.workspaceFileId)
     }

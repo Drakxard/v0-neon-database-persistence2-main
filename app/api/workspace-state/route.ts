@@ -28,6 +28,7 @@ export async function PUT(request: Request) {
       workspaceTabs: body?.workspaceTabs,
       activeWorkspaceTabId: body?.activeWorkspaceTabId,
       customSubjects: body?.customSubjects,
+      subjectWeekdays: body?.subjectWeekdays,
       isMainWorkspaceTabVisible: body?.isMainWorkspaceTabVisible,
     })
 

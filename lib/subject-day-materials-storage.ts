@@ -1,10 +1,10 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 
 import { downloadDriveFile, getDriveFileMetadata } from "@/lib/google-drive"
 import { isRemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { downloadR2Object, getR2ObjectMetadata, isR2ObjectKey } from "@/lib/r2"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 export type SubjectDayMaterialStorageRecord = {
   id: number

@@ -27,7 +27,7 @@ import { uploadCronogramaPdf } from "@/lib/client/cronograma"
 import { buildCronogramaViewerHref } from "@/lib/client/cronograma-viewer"
 import { createPdfFileFromText } from "@/lib/client/text-to-pdf"
 import { saveDailySession } from "@/lib/daily-study-client"
-import { getHomeSubjectCountdown } from "@/lib/home-schedule"
+import { getHomeSubjectCountdown, HOME_SUBJECT_WEEKDAY } from "@/lib/home-schedule"
 import {
   cleanupLocalSubjectWeekIfEmpty,
   createObjectUrlForWorkspaceFile,
@@ -118,6 +118,7 @@ type WorkspaceTabsState = {
   workspaceTabs: Record<string, WorkspaceTab>
   activeWorkspaceTabId: string
   customSubjects: Record<string, CustomSubject>
+  subjectWeekdays: Record<string, number>
   isMainWorkspaceTabVisible: boolean
 }
 
@@ -161,6 +162,8 @@ const CUSTOM_SUBJECT_WEEKDAYS = [
   { label: "Miercoles", value: 2 },
   { label: "Jueves", value: 3 },
   { label: "Viernes", value: 4 },
+  { label: "Sabado", value: 5 },
+  { label: "Domingo", value: 6 },
 ] as const
 const LONG_PRESS_DELETE_MS = 800
 
@@ -260,9 +263,17 @@ function appendMaterialViewerParams(params: URLSearchParams, material: SubjectDa
   params.set("sourceRevision", `${material.drive_file_id}:${material.updated_at}`)
 }
 
-function buildMaterialViewerHref(material: SubjectDayMaterial, subjectName: string) {
+function buildMaterialViewerHref(
+  material: SubjectDayMaterial,
+  subjectName: string,
+  subject?: Subject | null,
+  subjectTargetWeekday?: number
+) {
   const params = new URLSearchParams()
   appendMaterialViewerParams(params, material, subjectName)
+  const createdAt = "createdAt" in (subject ?? {}) ? String((subject as CustomSubject).createdAt || "") : ""
+  if (/^\d{4}-\d{2}-\d{2}/.test(createdAt)) params.set("subjectActivationDate", createdAt.slice(0, 10))
+  if (Number.isInteger(subjectTargetWeekday)) params.set("subjectTargetWeekday", String(subjectTargetWeekday))
   return `/practice/viewer?${params.toString()}`
 }
 
@@ -543,6 +554,7 @@ function createEmptyWorkspaceTabsState(): WorkspaceTabsState {
     workspaceTabs: {},
     activeWorkspaceTabId: MAIN_WORKSPACE_TAB_ID,
     customSubjects: {},
+    subjectWeekdays: { ...HOME_SUBJECT_WEEKDAY } as Record<string, number>,
     isMainWorkspaceTabVisible: true,
   }
 }
@@ -569,7 +581,7 @@ function normalizeCustomSubject(subject: CustomSubject | (Subject & Partial<Cust
   }
 
   const parsedWeekday = Number(subject.targetWeekday)
-  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 4 ? parsedWeekday : 0
+  const targetWeekday = Number.isInteger(parsedWeekday) && parsedWeekday >= 0 && parsedWeekday <= 6 ? parsedWeekday : 0
 
   return {
     id: subject.id,
@@ -625,6 +637,19 @@ function normalizeWorkspaceTabsState(input: Partial<WorkspaceTabsState> | null |
   const firstWorkspaceTabId = sortWorkspaceTabs(workspaceTabs)[0]?.id ?? null
   const hasActiveCandidate =
     activeCandidate === MAIN_WORKSPACE_TAB_ID ? isMainWorkspaceTabVisible : Boolean(workspaceTabs[activeCandidate])
+  const customSubjects = normalizeCustomSubjects(
+    input?.customSubjects && typeof input.customSubjects === "object"
+      ? (input.customSubjects as Record<string, CustomSubject>)
+      : {}
+  )
+  const subjectWeekdays = Object.entries(input?.subjectWeekdays ?? {}).reduce<Record<string, number>>((accumulator, [subjectId, value]) => {
+    const weekday = Number(value)
+    if (subjectId.trim() && Number.isInteger(weekday) && weekday >= 0 && weekday <= 6) accumulator[subjectId] = weekday
+    return accumulator
+  }, { ...HOME_SUBJECT_WEEKDAY } as Record<string, number>)
+  for (const subject of Object.values(customSubjects)) {
+    if (!(subject.id in subjectWeekdays)) subjectWeekdays[subject.id] = subject.targetWeekday
+  }
 
   return {
     workspaceTabs,
@@ -633,11 +658,8 @@ function normalizeWorkspaceTabsState(input: Partial<WorkspaceTabsState> | null |
       : isMainWorkspaceTabVisible
         ? MAIN_WORKSPACE_TAB_ID
         : firstWorkspaceTabId ?? MAIN_WORKSPACE_TAB_ID,
-    customSubjects: normalizeCustomSubjects(
-      input?.customSubjects && typeof input.customSubjects === "object"
-        ? (input.customSubjects as Record<string, CustomSubject>)
-        : {}
-    ),
+    customSubjects,
+    subjectWeekdays,
     isMainWorkspaceTabVisible,
   }
 }
@@ -669,6 +691,9 @@ function hasWorkspaceTabsStateContent(state: WorkspaceTabsState) {
     state.activeWorkspaceTabId !== MAIN_WORKSPACE_TAB_ID ||
     Object.keys(state.workspaceTabs).length > 0 ||
     Object.keys(state.customSubjects).length > 0 ||
+    Object.entries(state.subjectWeekdays).some(
+      ([subjectId, weekday]) => !state.customSubjects[subjectId] && HOME_SUBJECT_WEEKDAY[subjectId] !== weekday
+    ) ||
     !state.isMainWorkspaceTabVisible
   )
 }
@@ -726,11 +751,12 @@ function isCustomSubject(subject: Subject): subject is CustomSubject {
   return "tabId" in subject && "targetWeekday" in subject
 }
 
-function getHomeCardCountdown(subject: Subject, referenceDate: Date) {
-  if (isCustomSubject(subject)) {
-    return getCountdownForWeekday(subject.targetWeekday, referenceDate)
+function getHomeCardCountdown(subject: Subject, referenceDate: Date, subjectWeekdays?: Record<string, number>) {
+  const configuredWeekday = subjectWeekdays?.[subject.id]
+  if (typeof configuredWeekday === "number" && Number.isInteger(configuredWeekday)) {
+    return getCountdownForWeekday(configuredWeekday, referenceDate)
   }
-
+  if (isCustomSubject(subject)) return getCountdownForWeekday(subject.targetWeekday, referenceDate)
   return getHomeSubjectCountdown(subject.id, referenceDate)
 }
 
@@ -1248,6 +1274,7 @@ export function SubjectWheel({
   const [workspaceTabs, setWorkspaceTabs] = useState<Record<string, WorkspaceTab>>(initialWorkspaceTabsState.workspaceTabs)
   const [activeWorkspaceTabId, setActiveWorkspaceTabId] = useState(initialWorkspaceTabsState.activeWorkspaceTabId)
   const [customSubjects, setCustomSubjects] = useState<Record<string, CustomSubject>>(initialWorkspaceTabsState.customSubjects)
+  const [subjectWeekdays, setSubjectWeekdays] = useState<Record<string, number>>(initialWorkspaceTabsState.subjectWeekdays)
   const [isMainWorkspaceTabVisible, setIsMainWorkspaceTabVisible] = useState(initialWorkspaceTabsState.isMainWorkspaceTabVisible)
   const [isCreateWorkspaceTabOpen, setIsCreateWorkspaceTabOpen] = useState(false)
   const [workspaceTabNameDraft, setWorkspaceTabNameDraft] = useState("")
@@ -1274,6 +1301,7 @@ export function SubjectWheel({
     workspaceTabs,
     activeWorkspaceTabId,
     customSubjects,
+    subjectWeekdays,
     isMainWorkspaceTabVisible,
   }
   const workspaceTabList = useMemo(
@@ -1329,6 +1357,7 @@ export function SubjectWheel({
       setWorkspaceTabs(normalizedState.workspaceTabs)
       setActiveWorkspaceTabId(normalizedState.activeWorkspaceTabId)
       setCustomSubjects(normalizedState.customSubjects)
+      setSubjectWeekdays(normalizedState.subjectWeekdays)
       setIsMainWorkspaceTabVisible(normalizedState.isMainWorkspaceTabVisible)
       saveWorkspaceTabsState(normalizedState)
     }
@@ -1412,6 +1441,7 @@ export function SubjectWheel({
       workspaceTabs,
       activeWorkspaceTabId,
       customSubjects,
+      subjectWeekdays,
       isMainWorkspaceTabVisible,
     }
 
@@ -1448,6 +1478,7 @@ export function SubjectWheel({
     hasResolvedPersistentWorkspaceState,
     isMainWorkspaceTabVisible,
     localWorkspaceReady,
+    subjectWeekdays,
     workspaceTabs,
   ])
 
@@ -1489,13 +1520,15 @@ export function SubjectWheel({
     setCustomSubjectWeekdayDraft(0)
   }, [])
 
-  const openCustomSubjectEditDialog = useCallback((subject: CustomSubject) => {
+  const openCustomSubjectEditDialog = useCallback((subject: Subject) => {
     setEditingCustomSubjectId(subject.id)
     setCustomSubjectNameDraft(subject.name)
     setCustomSubjectColorDraft(subject.color)
-    setCustomSubjectWeekdayDraft(subject.targetWeekday)
+    setCustomSubjectWeekdayDraft(
+      subjectWeekdays[subject.id] ?? (isCustomSubject(subject) ? subject.targetWeekday : HOME_SUBJECT_WEEKDAY[subject.id] ?? 0)
+    )
     setIsCreateCustomSubjectOpen(true)
-  }, [])
+  }, [subjectWeekdays])
 
   const saveCustomSubject = useCallback(async () => {
     const name = customSubjectNameDraft.trim()
@@ -1507,7 +1540,13 @@ export function SubjectWheel({
 
     if (editingCustomSubjectId) {
       const existingSubject = customSubjects[editingCustomSubjectId]
-      if (!existingSubject) return
+      if (!existingSubject) {
+        hasUserChangedWorkspaceStateRef.current = true
+        setSubjectWeekdays((previous) => ({ ...previous, [editingCustomSubjectId]: customSubjectWeekdayDraft }))
+        resetCustomSubjectDraft()
+        setIsCreateCustomSubjectOpen(false)
+        return
+      }
 
       const catalogSubject = await renameLocalCatalogSubject(editingCustomSubjectId, name).catch((error) => {
         setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo actualizar el catalogo de la materia.")
@@ -1533,6 +1572,12 @@ export function SubjectWheel({
         next[catalogSubject.id] = targetSubject
           ? { ...targetSubject, name: catalogSubject.name, storageKey: catalogSubject.storageKey }
           : nextSubject
+        return next
+      })
+      setSubjectWeekdays((previous) => {
+        const next = { ...previous }
+        if (catalogSubject.id !== editingCustomSubjectId) delete next[editingCustomSubjectId]
+        next[catalogSubject.id] = customSubjectWeekdayDraft
         return next
       })
       if (catalogSubject.id !== editingCustomSubjectId) {
@@ -1573,6 +1618,10 @@ export function SubjectWheel({
         ? { ...previous[id], ...(activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID ? { tabId: MAIN_WORKSPACE_TAB_ID } : {}) }
         : nextSubject,
     }))
+    setSubjectWeekdays((previous) => ({
+      ...previous,
+      [id]: existingSubject ? previous[id] ?? existingSubject.targetWeekday : customSubjectWeekdayDraft,
+    }))
     setWorkspaceTabs((previous) => {
       if (activeWorkspaceTabId === MAIN_WORKSPACE_TAB_ID) return previous
 
@@ -1597,6 +1646,7 @@ export function SubjectWheel({
     customSubjects,
     editingCustomSubjectId,
     resetCustomSubjectDraft,
+    setSubjectWeekdays,
     workspaceTabList.length,
   ])
 
@@ -6432,7 +6482,7 @@ export function SubjectWheel({
   const homeSubjectCards = useMemo(
     () =>
       visibleSubjects.map((subject) => {
-        const countdown = getHomeCardCountdown(subject, new Date())
+        const countdown = getHomeCardCountdown(subject, new Date(), subjectWeekdays)
 
         return {
           subject,
@@ -6440,7 +6490,7 @@ export function SubjectWheel({
           displayName: getHomeSubjectDisplayName(subject),
         }
       }),
-    [visibleSubjects]
+    [subjectWeekdays, visibleSubjects]
   )
   const currentSubjectPracticeCoverage = useMemo(() => {
     return buildMaterialCoverage(practiceMaterials, practiceEntriesByMaterialId)
@@ -6788,7 +6838,12 @@ export function SubjectWheel({
                         </div>
                       ) : (
                         <a
-                          href={buildMaterialViewerHref(material, getSubjectDisplayName(currentSubject))}
+                          href={buildMaterialViewerHref(
+                            material,
+                            getSubjectDisplayName(currentSubject),
+                            currentSubject,
+                            currentSubject ? subjectWeekdays[currentSubject.id] : undefined
+                          )}
                           target="_blank"
                           rel="noopener noreferrer"
                           draggable={false}
@@ -7538,6 +7593,7 @@ export function SubjectWheel({
             <Input
               value={customSubjectNameDraft}
               onChange={(event) => setCustomSubjectNameDraft(event.target.value)}
+              disabled={Boolean(editingCustomSubjectId && !customSubjects[editingCustomSubjectId])}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault()
@@ -7554,6 +7610,7 @@ export function SubjectWheel({
                   key={color}
                   type="button"
                   onClick={() => setCustomSubjectColorDraft(color)}
+                  disabled={Boolean(editingCustomSubjectId && !customSubjects[editingCustomSubjectId])}
                   className={cn(
                     "h-9 w-9 rounded-full border-2 transition-transform",
                     customSubjectColorDraft === color ? "scale-105 border-foreground" : "border-transparent"
@@ -8114,7 +8171,7 @@ export function SubjectWheel({
             <DialogHeader className="border-b border-border pb-3 sm:pb-4">
               <div className="space-y-3">
                 <div className="flex min-w-0 items-center gap-2">
-                  {currentSubject && isCustomSubject(currentSubject) ? (
+                  {currentSubject ? (
                     <DialogTitle asChild>
                       <button
                         type="button"
@@ -8611,7 +8668,12 @@ export function SubjectWheel({
                           onCheckedChange={(checked) => void toggleMaterialCheckup(currentContinueMaterial, Boolean(checked))}
                         />
                           <a
-                            href={buildMaterialViewerHref(currentContinueMaterial, getSubjectDisplayName(currentSubject))}
+                            href={buildMaterialViewerHref(
+                              currentContinueMaterial,
+                              getSubjectDisplayName(currentSubject),
+                              currentSubject,
+                              currentSubject ? subjectWeekdays[currentSubject.id] : undefined
+                            )}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="font-medium underline-offset-2 hover:underline"

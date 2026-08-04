@@ -1,11 +1,11 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 
 import { getSubjectById, SUBJECTS } from "@/lib/subjects"
 import { getWeekDates, getWeekdayIndexFromDateKey, WEEKDAY_NAMES, formatDateKey } from "@/lib/subject-utils"
 import { getR2ObjectMetadatas, isR2ObjectKey, listR2ObjectsByPrefix } from "@/lib/r2"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 export type MaterialType = "theory" | "practice"
 

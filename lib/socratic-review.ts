@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless"
+import { getLegacyDatabase } from "@/lib/db"
 import { requireSql } from "@/lib/db"
 
 import { listGroqGenerationModels, requireGroqClient, validateGroqModelId } from "@/lib/groq-models"
@@ -11,7 +11,7 @@ import type {
   SocraticReviewSettings,
 } from "@/lib/study-types"
 
-const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
+const sql = getLegacyDatabase()
 
 type PairRow = {
   pair_id: string
