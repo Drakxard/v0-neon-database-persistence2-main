@@ -2316,7 +2316,12 @@
   }
 
   function rectsIntersect(left, right) {
-    return !(left[2] < right[0] || right[2] < left[0] || left[3] < right[1] || right[3] < left[1]);
+    const overlapWidth = Math.min(left[2], right[2]) - Math.max(left[0], right[0]);
+    const overlapHeight = Math.min(left[3], right[3]) - Math.max(left[1], right[1]);
+    if (overlapWidth <= 0 || overlapHeight <= 0) return false;
+    const smallerWidth = Math.max(0.001, Math.min(left[2] - left[0], right[2] - right[0]));
+    const smallerHeight = Math.max(0.001, Math.min(left[3] - left[1], right[3] - right[1]));
+    return overlapWidth / smallerWidth >= 0.05 && overlapHeight / smallerHeight >= 0.35;
   }
 
   function getTokenRect(item) {
@@ -2669,6 +2674,7 @@
       }
       entries.push({ id, value, order: state.inscreenAnnotationOrder.get(id) });
     }
+    cacheInscreenHighlightTexts(entries);
     return entries;
   }
 
@@ -2678,23 +2684,211 @@
     return String(editor.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
   }
 
-  async function buildInscreenFocusedDraft() {
-    const entries = getInscreenAnnotationEntries()
-      .sort((left, right) => left.order - right.order);
+  function getInscreenHighlightTextCacheKey() {
+    if (!Number.isInteger(state.query?.materialId)) return "";
+    return `inscreen:highlight-text:${state.query.materialId}`;
+  }
+
+  function getInscreenHighlightGeometrySignature(pageIndex, value) {
+    const quadPoints = normalizeNumberArray(value?.quadPoints);
+    const geometry = quadPoints.length >= 8 ? quadPoints : normalizeNumberArray(value?.rect).slice(0, 4);
+    if (!Number.isInteger(Number(pageIndex)) || !geometry.length) return "";
+    return `${Number(pageIndex)}:${geometry.map((number) => Number(number).toFixed(2)).join(",")}`;
+  }
+
+  function readInscreenHighlightTextCache() {
+    const key = getInscreenHighlightTextCacheKey();
+    if (!key) return [];
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(key) || "[]");
+      return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item.text === "string") : [];
+    } catch (error) {
+      console.warn("Inscreen highlight text cache read failed:", error);
+      return [];
+    }
+  }
+
+  function cacheInscreenHighlightTexts(entries) {
+    const key = getInscreenHighlightTextCacheKey();
+    if (!key || !Array.isArray(entries)) return;
+    const cached = readInscreenHighlightTextCache();
+    let changed = false;
+    for (const entry of entries) {
+      if (Number(entry?.value?.annotationType) !== INSCREEN_HIGHLIGHT_TYPE) continue;
+      const text = getHighlightEditorSelectedText(entry.id);
+      const signature = getInscreenHighlightGeometrySignature(entry.value?.pageIndex, entry.value);
+      if (!text || !signature) continue;
+      const id = String(entry.id);
+      const existingIndex = cached.findIndex((item) => item.id === id || item.signature === signature);
+      const next = { id, signature, text, updatedAt: Date.now() };
+      if (existingIndex >= 0) cached.splice(existingIndex, 1, next);
+      else cached.push(next);
+      changed = true;
+    }
+    if (!changed) return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(cached.slice(-500)));
+    } catch (error) {
+      console.warn("Inscreen highlight text cache save failed:", error);
+    }
+  }
+
+  function getCachedInscreenHighlightText(entry) {
+    const id = String(entry?.id || "");
+    const signature = getInscreenHighlightGeometrySignature(entry?.pageIndex, entry?.value);
+    const cached = readInscreenHighlightTextCache();
+    return String(
+      cached.find((item) => id && item.id === id)?.text ||
+      cached.find((item) => signature && item.signature === signature)?.text ||
+      ""
+    ).replace(/\s+/g, " ").trim();
+  }
+
+  function hasCorruptedPdfText(value) {
+    const text = String(value || "");
+    const controlCharacters = text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g)?.length || 0;
+    if (controlCharacters > 0) return true;
+    const encodedFragments = text.match(/\b(?:GH|TXH|XQD|ODV|GHO|FRQ|SDUD|IXQFL|HFXDFL)[A-Za-zÀ-ÿ]*/g) || [];
+    return encodedFragments.length >= 3;
+  }
+
+  function getInscreenFreeText(value) {
+    const textContent = Array.isArray(value?.textContent) ? value.textContent.join("\n") : "";
+    return String(
+      value?.value ||
+      textContent ||
+      value?.contentsObj?.str ||
+      value?.richText?.str ||
+      value?.contents ||
+      ""
+    ).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function compareInscreenAnnotations(left, right) {
+    if (left.pageIndex !== right.pageIndex) return left.pageIndex - right.pageIndex;
+    const leftRect = normalizeNumberArray(left.value?.rect);
+    const rightRect = normalizeNumberArray(right.value?.rect);
+    const leftTop = leftRect.length >= 4 ? Math.max(leftRect[1], leftRect[3]) : 0;
+    const rightTop = rightRect.length >= 4 ? Math.max(rightRect[1], rightRect[3]) : 0;
+    if (leftTop !== rightTop) return rightTop - leftTop;
+    const leftX = leftRect.length ? Math.min(leftRect[0], leftRect[2] ?? leftRect[0]) : 0;
+    const rightX = rightRect.length ? Math.min(rightRect[0], rightRect[2] ?? rightRect[0]) : 0;
+    return leftX - rightX || left.id.localeCompare(right.id);
+  }
+
+  async function getInscreenDocumentAnnotationEntries() {
+    const pdfDocument = state.app?.pdfDocument;
+    if (!pdfDocument) return [];
+
+    const storageMap = pdfDocument.annotationStorage?.serializable?.map;
+    const storedEntries = storageMap instanceof Map ? Array.from(storageMap.entries()) : [];
+    const replacedDocumentIds = new Set();
+    const deletedIds = new Set();
+    const entries = [];
+
+    for (const [storageId, value] of storedEntries) {
+      if (!value) continue;
+      const documentId = value.id == null ? "" : String(value.id);
+      if (documentId) replacedDocumentIds.add(documentId);
+      if (value.deleted) {
+        if (documentId) deletedIds.add(documentId);
+        deletedIds.add(String(storageId));
+        continue;
+      }
+      const annotationType = Number(value.annotationType);
+      const pageIndex = Number(value.pageIndex);
+      if (![INSCREEN_FREETEXT_TYPE, INSCREEN_HIGHLIGHT_TYPE].includes(annotationType) || !Number.isInteger(pageIndex)) {
+        continue;
+      }
+      entries.push({
+        id: documentId || String(storageId),
+        domId: String(storageId),
+        pageIndex,
+        value,
+      });
+    }
+
+    const pages = await Promise.all(
+      Array.from({ length: pdfDocument.numPages || 0 }, (_, pageIndex) =>
+        pdfDocument.getPage(pageIndex + 1).then(async (page) => ({
+          pageIndex,
+          annotations: await page.getAnnotations(),
+        }))
+      )
+    );
+    for (const { pageIndex, annotations } of pages) {
+      for (const annotation of annotations) {
+        const id = String(annotation?.id || "");
+        if (!id || replacedDocumentIds.has(id) || deletedIds.has(id)) continue;
+        const subtype = String(annotation?.subtype || "").toLowerCase();
+        const annotationType = subtype === "freetext"
+          ? INSCREEN_FREETEXT_TYPE
+          : subtype === "highlight"
+            ? INSCREEN_HIGHLIGHT_TYPE
+            : null;
+        if (annotationType == null) continue;
+        entries.push({
+          id,
+          domId: id,
+          pageIndex,
+          value: { ...annotation, annotationType, pageIndex },
+        });
+      }
+    }
+
+    return entries
+      .filter((entry) => !state.inscreenConsumedAnnotationIds.has(entry.id))
+      .sort(compareInscreenAnnotations);
+  }
+
+  function chooseInscreenAnnotationGroup(entries) {
     const titles = entries.filter(
-      (entry) => Number(entry.value.annotationType) === INSCREEN_FREETEXT_TYPE && String(entry.value.value || "").trim()
+      (entry) => Number(entry.value.annotationType) === INSCREEN_FREETEXT_TYPE && getInscreenFreeText(entry.value)
     );
-    const title = titles[titles.length - 1];
-    if (!title) throw new Error("Escribe primero un titulo con la herramienta de texto de PDF.js.");
-    const highlights = entries.filter(
-      (entry) => Number(entry.value.annotationType) === INSCREEN_HIGHLIGHT_TYPE && entry.order > title.order
+    const allHighlights = entries.filter(
+      (entry) => Number(entry.value.annotationType) === INSCREEN_HIGHLIGHT_TYPE
     );
-    if (!highlights.length) throw new Error("Remarca texto despues del titulo antes de usar el lapiz.");
+    if (titles.length === 1) return { title: titles[0], highlights: allHighlights };
+
+    const groups = titles.map((title, titleIndex) => {
+      const start = entries.indexOf(title);
+      const end = titleIndex + 1 < titles.length ? entries.indexOf(titles[titleIndex + 1]) : entries.length;
+      return {
+        title,
+        highlights: entries.slice(start + 1, end).filter(
+          (entry) => Number(entry.value.annotationType) === INSCREEN_HIGHLIGHT_TYPE
+        ),
+      };
+    }).filter((group) => group.highlights.length > 0);
+    if (!groups.length) return { title: titles[0] || null, highlights: allHighlights };
+
+    const currentPageIndex = Math.max(0, Number(state.app?.pdfViewer?.currentPageNumber || 1) - 1);
+    groups.sort((left, right) => {
+      const leftDistance = Math.min(
+        Math.abs(left.title.pageIndex - currentPageIndex),
+        ...left.highlights.map((highlight) => Math.abs(highlight.pageIndex - currentPageIndex))
+      );
+      const rightDistance = Math.min(
+        Math.abs(right.title.pageIndex - currentPageIndex),
+        ...right.highlights.map((highlight) => Math.abs(highlight.pageIndex - currentPageIndex))
+      );
+      return leftDistance - rightDistance || compareInscreenAnnotations(right.title, left.title);
+    });
+    return groups[0];
+  }
+
+  async function buildInscreenFocusedDraft() {
+    const entries = await getInscreenDocumentAnnotationEntries();
+    const { title, highlights } = chooseInscreenAnnotationGroup(entries);
+    if (!title) throw new Error("Escribe primero un titulo visible con la herramienta de texto de PDF.js.");
+    if (!highlights.length) throw new Error("Remarca texto visible antes de usar el lapiz.");
 
     const extracted = [];
     for (const highlight of highlights) {
       const pageIndex = Number(highlight.value.pageIndex);
-      const selectedText = getHighlightEditorSelectedText(highlight.id);
+      const selectedText =
+        getHighlightEditorSelectedText(highlight.domId || highlight.id) ||
+        getCachedInscreenHighlightText(highlight);
       if (Number.isInteger(pageIndex) && selectedText) {
         extracted.push({ id: highlight.id, pageNumber: pageIndex + 1, text: selectedText });
         continue;
@@ -2707,10 +2901,10 @@
         extracted.push({ id: highlight.id, pageNumber: pageIndex + 1, text: quote.exactQuote });
       }
     }
-    if (!extracted.length) throw new Error("No se pudo extraer texto de los resaltados posteriores.");
+    if (!extracted.length) throw new Error("No se pudo extraer texto de los resaltados visibles.");
     return {
       titleAnnotationId: title.id,
-      title: String(title.value.value || "").replace(/[\r\n]+/g, " ").trim(),
+      title: getInscreenFreeText(title.value),
       highlights: extracted,
     };
   }
@@ -2743,6 +2937,12 @@
     const body = String(state.inscreenNoteBody?.value || "").trim();
     if (!draft || !title || !body) {
       state.inscreenNoteError.textContent = "Completa el titulo y el texto.";
+      return;
+    }
+    if (hasCorruptedPdfText(body)) {
+      state.inscreenNoteError.textContent =
+        "El PDF devolvio texto codificado incorrectamente. Corrige el texto del modal antes de guardarlo.";
+      state.inscreenNoteBody.focus();
       return;
     }
     state.inscreenNoteSave.disabled = true;
