@@ -2578,19 +2578,11 @@
   }
 
   function scheduleInscreenPageCapture(pageNumber = state.inscreenCurrentPage) {
+    // Desactivado temporalmente: la extracción/captura automática cada 10 s
+    // no está funcionando correctamente. Se conserva la función para poder
+    // reactivarla cuando se encuentre una solución; el guardado manual desde
+    // el lápiz y el modal sigue disponible.
     clearInscreenPageTimer();
-    if (
-      !canUseInscreen() ||
-      !state.inscreenLoaded ||
-      document.visibilityState !== "visible" ||
-      state.inscreenCapturedPages.has(pageNumber)
-    ) {
-      return;
-    }
-    state.inscreenPageTimer = window.setTimeout(() => {
-      state.inscreenPageTimer = null;
-      void captureInscreenPage(pageNumber);
-    }, INSCREEN_PAGE_READING_MS);
   }
 
   function saveInscreenReadingPosition(pageNumber, immediate = false) {
