@@ -99,6 +99,7 @@
     inscreenLoaded: false,
     inscreenCapturedPages: new Set(),
     inscreenPendingCaptures: new Map(),
+    inscreenMarkerRequests: new Set(),
     inscreenConsumedAnnotationIds: new Set(),
     inscreenPageTimer: null,
     inscreenPositionTimer: null,
@@ -2443,94 +2444,13 @@
     window.setTimeout(() => toast.remove(), 180);
   }
 
-  function showInscreenActionToast(message, actionLabel, action) {
-    ensureUi();
-    closeInscreenActionToast();
-    const toast = document.createElement("div");
-    toast.className = "pdfjs-custom-toast pdfjs-custom-action-toast";
-    toast.dataset.tone = "info";
-    toast.innerHTML = '<span></span><button type="button"></button>';
-    toast.querySelector("span").textContent = message;
-    const button = toast.querySelector("button");
-    button.textContent = actionLabel;
-    button.addEventListener("click", () => void action(button));
-    state.toastStack.appendChild(toast);
-    state.inscreenActionToast = toast;
-    requestAnimationFrame(() => {
-      toast.dataset.visible = "true";
-    });
-    return toast;
-  }
-
-  async function renderInscreenPagePng(pageNumber) {
-    const page = await state.app.pdfDocument.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2, rotation: page.rotate || 0 });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    const canvasContext = canvas.getContext("2d", { alpha: false });
-    if (!canvasContext) throw new Error("No se pudo preparar la imagen de la pagina.");
-    await page.render({ canvasContext, viewport }).promise;
-    const blob = await new Promise((resolve, reject) => {
-      canvas.toBlob((value) => value ? resolve(value) : reject(new Error("No se pudo crear el PNG.")), "image/png");
-    });
-    canvas.width = 1;
-    canvas.height = 1;
-    return blob;
-  }
-
-  async function completeInscreenTranscription(captureId, pageNumber, button) {
-    try {
-      button.disabled = true;
-      const clipboardText = String(await navigator.clipboard.readText()).trim();
-      if (!clipboardText) throw new Error("El portapapeles no contiene texto.");
-      const reviewed = window.prompt("Revisa la transcripcion antes de guardarla:", clipboardText);
-      if (reviewed == null) return;
-      const text = reviewed.trim();
-      if (!text) throw new Error("La transcripcion esta vacia.");
-      await requireOkJson(
-        await fetch(`/api/inscreen/page-captures/${captureId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...getInscreenMaterialContext(), text }),
-        }),
-        "No se pudo guardar la transcripcion."
-      );
-      state.inscreenCapturedPages.add(pageNumber);
-      state.inscreenPendingCaptures.delete(pageNumber);
-      closeInscreenActionToast();
-      showToast(`Pagina ${pageNumber} guardada.`, "success", 2200);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "No se pudo pegar la transcripcion.", "error", 4200);
-    } finally {
-      button.disabled = false;
-    }
-  }
-
-  function offerInscreenScannedPage(captureId, pageNumber) {
-    showInscreenActionToast(
-      `La pagina ${pageNumber} parece ser una imagen.`,
-      "Copiar pagina como PNG",
-      async (button) => {
-        try {
-          button.disabled = true;
-          if (!navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
-            throw new Error("Este navegador no permite copiar imagenes desde el visor.");
-          }
-          const blob = await renderInscreenPagePng(pageNumber);
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          showInscreenActionToast(
-            "Trae la transcripcion; clic para pegarla.",
-            "Pegar transcripcion",
-            (nextButton) => completeInscreenTranscription(captureId, pageNumber, nextButton)
-          );
-        } catch (error) {
-          showToast(error instanceof Error ? error.message : "No se pudo copiar la pagina.", "error", 4200);
-        } finally {
-          button.disabled = false;
-        }
-      }
-    );
+  async function buildInscreenPagePdf(pageNumber) {
+    if (!window.PDFLib?.PDFDocument) throw new Error("pdf-lib no esta disponible en este visor.");
+    const sourceDocument = await ensureSourcePdfDoc();
+    const outputDocument = await window.PDFLib.PDFDocument.create();
+    const [page] = await outputDocument.copyPages(sourceDocument, [pageNumber - 1]);
+    outputDocument.addPage(page);
+    return new Blob([await outputDocument.save()], { type: "application/pdf" });
   }
 
   async function captureInscreenPage(pageNumber) {
@@ -2539,15 +2459,24 @@
       !state.inscreenLoaded ||
       document.visibilityState !== "visible" ||
       pageNumber !== state.inscreenCurrentPage ||
-      state.inscreenCapturedPages.has(pageNumber)
+      state.inscreenCapturedPages.has(pageNumber) ||
+      state.inscreenMarkerRequests.has(pageNumber)
     ) {
       return;
     }
 
     try {
-      const pageModel = await getPageTextModel(pageNumber - 1);
+      state.inscreenMarkerRequests.add(pageNumber);
+      const pagePdf = await buildInscreenPagePdf(pageNumber);
       if (pageNumber !== state.inscreenCurrentPage || document.visibilityState !== "visible") return;
-      const text = String(pageModel.text || "").replace(/\s+/g, " ").trim();
+      const form = new FormData();
+      form.append("file", pagePdf, `pagina-${pageNumber}.pdf`);
+      const markerPayload = await requireOkJson(
+        await fetch("/api/inscreen/marker-transcribe", { method: "POST", body: form }),
+        "No se pudo transcribir la pagina con Marker."
+      );
+      const text = String(markerPayload.markdown || "").trim();
+      if (!text) throw new Error("Marker no devolvio texto para la pagina.");
       const payload = await requireOkJson(
         await fetch("/api/inscreen/page-captures", {
           method: "POST",
@@ -2556,7 +2485,7 @@
             ...getInscreenMaterialContext(),
             pageNumber,
             text,
-            sourceType: "pdf",
+            sourceType: "marker",
           }),
         }),
         "No se pudo registrar la pagina leida."
@@ -2566,14 +2495,11 @@
         state.inscreenPendingCaptures.delete(pageNumber);
         return;
       }
-      if (payload.status === "needs-transcription" && String(payload.captureId || "").trim()) {
-        const captureId = String(payload.captureId);
-        state.inscreenPendingCaptures.set(pageNumber, captureId);
-        offerInscreenScannedPage(captureId, pageNumber);
-      }
     } catch (error) {
       console.error("Inscreen page capture failed:", error);
       showToast(error instanceof Error ? error.message : "No se pudo guardar la pagina leida.", "error", 4200);
+    } finally {
+      state.inscreenMarkerRequests.delete(pageNumber);
     }
   }
 
@@ -2583,6 +2509,18 @@
     // reactivarla cuando se encuentre una solución; el guardado manual desde
     // el lápiz y el modal sigue disponible.
     clearInscreenPageTimer();
+    if (
+      !canUseInscreen() ||
+      !state.inscreenLoaded ||
+      document.visibilityState !== "visible" ||
+      pageNumber !== state.inscreenCurrentPage ||
+      state.inscreenCapturedPages.has(pageNumber) ||
+      state.inscreenMarkerRequests.has(pageNumber)
+    ) return;
+    state.inscreenPageTimer = window.setTimeout(() => {
+      state.inscreenPageTimer = null;
+      void captureInscreenPage(pageNumber);
+    }, INSCREEN_PAGE_READING_MS);
   }
 
   function saveInscreenReadingPosition(pageNumber, immediate = false) {
@@ -2608,6 +2546,7 @@
     state.inscreenLoaded = false;
     state.inscreenCapturedPages = new Set();
     state.inscreenPendingCaptures = new Map();
+    state.inscreenMarkerRequests = new Set();
     state.inscreenConsumedAnnotationIds = new Set();
     try {
       const contextParams = new URLSearchParams(

@@ -42,7 +42,7 @@ export type InscreenCapture = {
   stageNumber: number
   subjectSegment: string
   status: "pending" | "complete"
-  sourceType: "pdf" | "clipboard"
+  sourceType: "pdf" | "clipboard" | "marker"
   r2Key: string | null
   createdAt: string
   updatedAt: string

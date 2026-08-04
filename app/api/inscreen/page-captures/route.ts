@@ -21,7 +21,11 @@ export async function POST(request: Request) {
     const context = parseInscreenMaterialContext(body ?? {})
     const pageNumber = Number.parseInt(String(body?.pageNumber || ""), 10)
     const extractedText = normalizeInscreenPageText(String(body?.text || ""))
-    const sourceType = body?.sourceType === "clipboard" ? "clipboard" : "pdf"
+    const sourceType = body?.sourceType === "marker"
+      ? "marker"
+      : body?.sourceType === "clipboard"
+        ? "clipboard"
+        : "pdf"
     if (!Number.isInteger(pageNumber) || pageNumber < 1) {
       return Response.json({ error: "Invalid page number" }, { status: 400 })
     }
