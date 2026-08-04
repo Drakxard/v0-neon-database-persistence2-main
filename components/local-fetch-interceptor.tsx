@@ -769,6 +769,9 @@ export function LocalFetchInterceptor() {
       if (url.pathname === "/api/pdf-translate") {
         return originalFetch(input, init)
       }
+      if (url.pathname.startsWith("/api/inscreen/")) {
+        return originalFetch(input, init)
+      }
 
       try {
         const response = await handleLocalApiRequest(request)
