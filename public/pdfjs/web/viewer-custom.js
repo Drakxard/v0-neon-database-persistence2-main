@@ -338,14 +338,21 @@
 
   async function loadInscreenConfigFileHalf() {
     if (state.inscreenConfigHalf) return state.inscreenConfigHalf;
-    const rootHandle = await ensureWorkspaceRootHandle();
-    const configHandle = await rootHandle.getFileHandle("User.InScreen", { create: false });
-    const configFile = await configHandle.getFile();
-    const config = JSON.parse(await configFile.text());
-    const fileHalf = config?.version === 2 ? String(config.half || "").trim() : "";
-    if (!fileHalf) throw new Error("User.InScreen no contiene una Mitad A valida.");
-    state.inscreenConfigHalf = fileHalf;
-    return fileHalf;
+    try {
+      if (window.localStorage.getItem("inscreen.config-skipped.v1") === "1") throw new Error("skipped");
+      const rootHandle = await ensureWorkspaceRootHandle();
+      const configHandle = await rootHandle.getFileHandle("User.InScreen", { create: false });
+      const configFile = await configHandle.getFile();
+      const config = JSON.parse(await configFile.text());
+      const fileHalf = config?.version === 2 ? String(config.half || "").trim() : "";
+      if (!fileHalf) throw new Error("missing");
+      state.inscreenConfigHalf = fileHalf;
+      return fileHalf;
+    } catch {
+      const error = new Error("Las funciones de IA no estan configuradas. Pulsa | en el inicio para configurarlas.");
+      error.name = "InscreenConfigurationUnavailable";
+      throw error;
+    }
   }
 
   async function inscreenApiFetch(input, init = {}) {
@@ -2699,6 +2706,10 @@
       state.inscreenLoaded = true;
       scheduleInscreenPageCapture(state.inscreenCurrentPage);
     } catch (error) {
+      if (error?.name === "InscreenConfigurationUnavailable") {
+        console.info("InScreen remote services are disabled until configured.");
+        return;
+      }
       console.error("Inscreen state load failed:", error);
       showToast(error instanceof Error ? error.message : "No se pudo cargar el progreso de lectura.", "error", 4200);
     }

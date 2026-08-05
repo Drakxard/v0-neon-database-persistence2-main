@@ -60,6 +60,11 @@ produccion; JavaScript nunca recibe esa mitad. Cada operacion remota envia A y
 el navegador adjunta B solamente al mismo origen. Ninguna mitad contiene por si
 sola las API keys en texto plano.
 
+El asistente puede omitirse para usar la aplicacion sin Groq, Marker ni R2. La
+preferencia queda guardada en ese navegador y no vuelve a interrumpir las
+cargas. Para abrir nuevamente la configuracion, pulsa `|` desde la pantalla de
+inicio.
+
 Recommended Cloudflare R2 CORS configuration for operational hardening:
 
 - Origins: production Vercel domain and `http://localhost:3000`

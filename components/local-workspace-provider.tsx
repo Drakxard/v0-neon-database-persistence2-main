@@ -45,6 +45,23 @@ const EMPTY_INSCREEN_CONFIG: InscreenConfigValues = {
   R2_ENDPOINT: "",
 }
 
+const INSCREEN_CONFIG_SKIPPED_KEY = "inscreen.config-skipped.v1"
+
+function isInscreenConfigurationSkipped() {
+  try {
+    return window.localStorage.getItem(INSCREEN_CONFIG_SKIPPED_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function setInscreenConfigurationSkipped(skipped: boolean) {
+  try {
+    if (skipped) window.localStorage.setItem(INSCREEN_CONFIG_SKIPPED_KEY, "1")
+    else window.localStorage.removeItem(INSCREEN_CONFIG_SKIPPED_KEY)
+  } catch {}
+}
+
 const LocalWorkspaceContext = createContext<LocalWorkspaceContextValue | null>(null)
 
 function WorkspaceModal({
@@ -128,6 +145,7 @@ function InscreenConfigModal({
   onBack,
   onNext,
   onSave,
+  onSkip,
 }: {
   step: number
   values: InscreenConfigValues
@@ -137,6 +155,7 @@ function InscreenConfigModal({
   onBack: () => void
   onNext: () => void
   onSave: () => void
+  onSkip: () => void
 }) {
   const inputClass = "mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
   const secretField = (field: keyof InscreenConfigValues, label: string, placeholder = "") => (
@@ -188,7 +207,10 @@ function InscreenConfigModal({
         </div>
         {error ? <p className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         <div className="mt-7 flex items-center justify-between gap-3">
-          <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onSkip} disabled={saving} className="h-11 rounded-xl px-3 text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40">Omitir por ahora</button>
+            <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button>
+          </div>
           {step < 2 ? (
             <button type="button" onClick={onNext} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500">Siguiente</button>
           ) : (
@@ -288,6 +310,14 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
+        if (isInscreenConfigurationSkipped()) {
+          setReadyInscreenConfigHalf("")
+          setReadyWorkspaceHandle(storedHandle)
+          setRootHandle(storedHandle)
+          setPermissionState("granted")
+          setBootState("ready")
+          return
+        }
         const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
         if (!unlocked.ok) {
           setReadyWorkspaceHandle(null)
@@ -345,6 +375,27 @@ export function LocalWorkspaceProvider({
     }
   }, [enabled, rootHandle])
 
+  useEffect(() => {
+    if (!enabled || pathname !== "/" || bootState !== "ready" || !rootHandle || permissionState !== "granted") return
+
+    const reopenConfiguration = (event: KeyboardEvent) => {
+      if (event.key !== "|") return
+      const target = event.target
+      if (target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']")) return
+      event.preventDefault()
+      setInscreenConfigurationSkipped(false)
+      setReadyWorkspaceHandle(null)
+      setReadyInscreenConfigHalf("")
+      setConfigValues(EMPTY_INSCREEN_CONFIG)
+      setConfigStep(0)
+      setError("")
+      setBootState("configure")
+    }
+
+    window.addEventListener("keydown", reopenConfiguration)
+    return () => window.removeEventListener("keydown", reopenConfiguration)
+  }, [bootState, enabled, pathname, permissionState, rootHandle])
+
   const reselectWorkspace = async () => {
     try {
       setError("")
@@ -355,6 +406,11 @@ export function LocalWorkspaceProvider({
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
+      if (isInscreenConfigurationSkipped()) {
+        setReadyWorkspaceHandle(handle)
+        setBootState("ready")
+        return
+      }
       const unlocked = await unlockWorkspaceInscreenConfig(handle)
       if (!unlocked.ok) {
         setError(unlocked.error)
@@ -396,6 +452,14 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
+      if (isInscreenConfigurationSkipped()) {
+        setReadyInscreenConfigHalf("")
+        setReadyWorkspaceHandle(storedHandle)
+        setRootHandle(storedHandle)
+        setPermissionState("granted")
+        setBootState("ready")
+        return
+      }
       const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
       if (!unlocked.ok) {
         setReadyWorkspaceHandle(null)
@@ -452,6 +516,7 @@ export function LocalWorkspaceProvider({
       await persistInscreenFileHalf(rootHandle, sealedPayload.fileHalf)
       const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
       if (!unlocked.ok) throw new Error(unlocked.error)
+      setInscreenConfigurationSkipped(false)
       setConfigValues(EMPTY_INSCREEN_CONFIG)
       setReadyWorkspaceHandle(rootHandle)
       setBootState("ready")
@@ -460,6 +525,17 @@ export function LocalWorkspaceProvider({
     } finally {
       setSavingConfig(false)
     }
+  }
+
+  const skipInscreenConfiguration = () => {
+    if (!rootHandle) return
+    setInscreenConfigurationSkipped(true)
+    setReadyInscreenConfigHalf("")
+    setConfigValues(EMPTY_INSCREEN_CONFIG)
+    setConfigStep(0)
+    setError("")
+    setReadyWorkspaceHandle(rootHandle)
+    setBootState("ready")
   }
 
   const value = useMemo<LocalWorkspaceContextValue>(
@@ -492,6 +568,7 @@ export function LocalWorkspaceProvider({
           }}
           onNext={() => { nextConfigStep() }}
           onSave={() => { void saveInscreenConfiguration() }}
+          onSkip={skipInscreenConfiguration}
         />
       ) : null}
       {enabled && bootState !== "ready" && bootState !== "checking" && bootState !== "configure" ? (

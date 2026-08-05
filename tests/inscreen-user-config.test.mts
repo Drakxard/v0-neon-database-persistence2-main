@@ -81,6 +81,9 @@ test("el arranque busca las dos mitades y ofrece un asistente claro de tres paso
   assert.match(provider, /config\/seal/)
   assert.match(provider, /config\/unlock/)
   assert.match(provider, /fileHalf/)
+  assert.match(provider, /Omitir por ahora/)
+  assert.match(provider, /event\.key !== "\|"/)
+  assert.match(provider, /inscreen\.config-skipped\.v1/)
   assert.match(r2, /getInscreenRuntimeSecret/)
 })
 
@@ -91,6 +94,8 @@ test("la aplicacion y el iframe PDF.js envian la Mitad A en cada llamada protegi
   assert.match(interceptor, /x-inscreen-config-half/)
   assert.match(viewer, /loadInscreenConfigFileHalf/)
   assert.match(viewer, /x-inscreen-config-half/)
+  assert.match(viewer, /inscreen\.config-skipped\.v1/)
+  assert.match(viewer, /InscreenConfigurationUnavailable/)
   assert.match(viewer, /inscreenApiFetch\("\/api\/pdf-translate"/)
   assert.match(viewer, /inscreenApiFetch\("\/api\/inscreen\/marker-transcribe"/)
 })
