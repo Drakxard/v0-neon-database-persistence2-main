@@ -222,12 +222,12 @@ function InscreenConfigModal({
   )
 }
 
-async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle) {
+async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle): Promise<{ ok: boolean; missing?: boolean; error: string }> {
   await clearLegacyInscreenBrowserHalf()
   const fileHalf = await loadInscreenFileHalf(handle)
   if (!fileHalf) {
     setReadyInscreenConfigHalf("")
-    return { ok: false, error: "No se encontro una configuracion completa. Completa los tres pasos para crear User.InScreen." }
+    return { ok: false, missing: true, error: "No se encontro una configuracion completa. Completa los tres pasos para crear User.InScreen." }
   }
   const response = await fetch("/api/inscreen/config/unlock", {
     method: "POST",
@@ -310,15 +310,15 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
-        if (isInscreenConfigurationSkipped()) {
-          setReadyInscreenConfigHalf("")
+        const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
+        if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
+          if (isInscreenConfigurationSkipped() || unlocked.missing) setReadyInscreenConfigHalf("")
           setReadyWorkspaceHandle(storedHandle)
           setRootHandle(storedHandle)
           setPermissionState("granted")
           setBootState("ready")
           return
         }
-        const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
         if (!unlocked.ok) {
           setReadyWorkspaceHandle(null)
           setRootHandle(storedHandle)
@@ -406,12 +406,12 @@ export function LocalWorkspaceProvider({
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
-      if (isInscreenConfigurationSkipped()) {
+      const unlocked = await unlockWorkspaceInscreenConfig(handle)
+      if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
         setReadyWorkspaceHandle(handle)
         setBootState("ready")
         return
       }
-      const unlocked = await unlockWorkspaceInscreenConfig(handle)
       if (!unlocked.ok) {
         setError(unlocked.error)
         setConfigStep(0)
@@ -452,15 +452,15 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
-      if (isInscreenConfigurationSkipped()) {
-        setReadyInscreenConfigHalf("")
+      const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
+      if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
+        if (isInscreenConfigurationSkipped() || unlocked.missing) setReadyInscreenConfigHalf("")
         setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
         setPermissionState("granted")
         setBootState("ready")
         return
       }
-      const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
       if (!unlocked.ok) {
         setReadyWorkspaceHandle(null)
         setRootHandle(storedHandle)
