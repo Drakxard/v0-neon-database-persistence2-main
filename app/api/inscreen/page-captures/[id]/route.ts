@@ -9,10 +9,11 @@ import {
   uploadNextInscreenText,
 } from "@/lib/inscreen-server"
 import { deleteR2Object } from "@/lib/r2"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
-export async function PUT(request: Request, routeContext: { params: Promise<{ id: string }> }) {
+async function updatePageCapture(request: Request, routeContext: { params: Promise<{ id: string }> }) {
   let uploadedObjectKey = ""
   try {
     const auth = await requireAuthSession()
@@ -68,4 +69,8 @@ export async function PUT(request: Request, routeContext: { params: Promise<{ id
     console.error("PUT /api/inscreen/page-captures/[id] error:", error)
     return inscreenErrorResponse(error)
   }
+}
+
+export async function PUT(request: Request, routeContext: { params: Promise<{ id: string }> }) {
+  return withInscreenUserConfig(request, () => updatePageCapture(request, routeContext))
 }

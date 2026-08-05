@@ -10,6 +10,7 @@ import {
   uploadNextInscreenText,
 } from "@/lib/inscreen-server"
 import { deleteR2Object } from "@/lib/r2"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
@@ -25,7 +26,7 @@ function uniquePages(value: unknown) {
     : []
 }
 
-export async function POST(request: Request) {
+async function saveFocusedNote(request: Request) {
   let uploadedObjectKey = ""
   try {
     const auth = await requireAuthSession()
@@ -109,4 +110,8 @@ export async function POST(request: Request) {
     console.error("POST /api/inscreen/focused-notes error:", error)
     return inscreenErrorResponse(error)
   }
+}
+
+export async function POST(request: Request) {
+  return withInscreenUserConfig(request, () => saveFocusedNote(request))
 }

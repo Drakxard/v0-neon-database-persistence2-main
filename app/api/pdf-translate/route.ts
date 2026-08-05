@@ -1,10 +1,11 @@
 import { requireAuthSession } from "@/lib/authz"
 import { requireGroqClient } from "@/lib/groq-models"
 import { buildPdfTranslationPrompt, PDF_TRANSLATION_MODEL } from "@/lib/pdf-translation"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
-export async function POST(request: Request) {
+async function translate(request: Request) {
   try {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
@@ -41,4 +42,8 @@ export async function POST(request: Request) {
     console.error("POST /api/pdf-translate error:", error)
     return Response.json({ error: message || "No se pudo traducir el texto." }, { status: 502 })
   }
+}
+
+export async function POST(request: Request) {
+  return withInscreenUserConfig(request, () => translate(request))
 }

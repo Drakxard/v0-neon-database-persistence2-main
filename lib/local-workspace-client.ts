@@ -4,6 +4,8 @@ const WORKSPACE_DB_NAME = "local-workspace"
 const WORKSPACE_DB_VERSION = 1
 const WORKSPACE_STORE_NAME = "workspace"
 const WORKSPACE_ROOT_KEY = "root-handle"
+const LEGACY_INSCREEN_BROWSER_HALF_KEY = "inscreen-config-half"
+export const INSCREEN_CONFIG_FILE_NAME = "User.InScreen"
 
 type WorkspaceRecord = {
   id: string
@@ -13,6 +15,7 @@ type WorkspaceRecord = {
 let cachedWorkspaceHandle: FileSystemDirectoryHandle | null = null
 let workspaceHandleLoad: Promise<FileSystemDirectoryHandle | null> | null = null
 let readyWorkspaceHandle: FileSystemDirectoryHandle | null = null
+let readyInscreenConfigHalf = ""
 
 function openWorkspaceDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -85,6 +88,34 @@ export async function persistWorkspaceHandle(handle: FileSystemDirectoryHandle) 
   cachedWorkspaceHandle = handle
 }
 
+export async function clearLegacyInscreenBrowserHalf() {
+  await withStore<void>("readwrite", (store) => {
+    store.delete(LEGACY_INSCREEN_BROWSER_HALF_KEY)
+  })
+}
+
+export async function loadInscreenFileHalf(rootHandle: FileSystemDirectoryHandle) {
+  try {
+    const handle = await rootHandle.getFileHandle(INSCREEN_CONFIG_FILE_NAME)
+    const file = await handle.getFile()
+    const parsed = JSON.parse(await file.text()) as { version?: number; half?: string }
+    return parsed.version === 2 ? String(parsed.half || "") : ""
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotFoundError") return ""
+    throw error
+  }
+}
+
+export async function persistInscreenFileHalf(rootHandle: FileSystemDirectoryHandle, half: string) {
+  const handle = await rootHandle.getFileHandle(INSCREEN_CONFIG_FILE_NAME, { create: true })
+  const writable = await handle.createWritable()
+  try {
+    await writable.write(JSON.stringify({ version: 2, half }, null, 2))
+  } finally {
+    await writable.close()
+  }
+}
+
 export function getReadyWorkspaceHandle() {
   return readyWorkspaceHandle
 }
@@ -92,6 +123,15 @@ export function getReadyWorkspaceHandle() {
 export function setReadyWorkspaceHandle(handle: FileSystemDirectoryHandle | null) {
   readyWorkspaceHandle = handle
   if (handle) cachedWorkspaceHandle = handle
+  else readyInscreenConfigHalf = ""
+}
+
+export function getReadyInscreenConfigHalf() {
+  return readyInscreenConfigHalf
+}
+
+export function setReadyInscreenConfigHalf(value: string) {
+  readyInscreenConfigHalf = String(value || "")
 }
 
 export async function queryWorkspacePermission(handle: FileSystemDirectoryHandle, mode: FileSystemPermissionMode = "readwrite") {

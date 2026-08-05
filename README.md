@@ -39,6 +39,27 @@ R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 ```
 
+## Configuracion personal de InScreen
+
+En el despliegue solo debe configurarse una semilla privada del servidor:
+
+```bash
+INSCREEN_CONFIG_SEED=una-cadena-aleatoria-de-al-menos-32-caracteres
+```
+
+No compartas esa semilla ni la incluyas en Git. Debe conservarse estable: si se
+cambia, las configuraciones `User.InScreen` creadas anteriormente dejaran de
+poder descifrarse y el asistente solicitara las credenciales de nuevo.
+
+Al abrir el modo local por primera vez, la aplicacion pide una carpeta y luego
+muestra un asistente claro de tres pasos para Groq, Marker y Cloudflare R2. Las
+credenciales se cifran en el servidor. La Mitad A del sobre cifrado se guarda en
+`User.InScreen`, dentro de la carpeta elegida. La Mitad B vuelve directamente
+como una cookie persistente `HttpOnly`, `SameSite=Strict` y `Secure` en
+produccion; JavaScript nunca recibe esa mitad. Cada operacion remota envia A y
+el navegador adjunta B solamente al mismo origen. Ninguna mitad contiene por si
+sola las API keys en texto plano.
+
 Recommended Cloudflare R2 CORS configuration for operational hardening:
 
 - Origins: production Vercel domain and `http://localhost:3000`

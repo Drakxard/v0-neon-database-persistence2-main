@@ -3,11 +3,12 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
+import { getInscreenRuntimeSecret, type InscreenUserConfig } from "@/lib/inscreen-user-config"
 
 const R2_KEY_PREFIX = "r2/"
 
 function requireEnv(name: string) {
-  const value = process.env[name]?.trim()
+  const value = (getInscreenRuntimeSecret(name as keyof InscreenUserConfig) || process.env[name] || "").trim()
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`)
   }

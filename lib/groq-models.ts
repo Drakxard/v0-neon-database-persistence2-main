@@ -1,6 +1,7 @@
 import Groq from "groq-sdk"
 
 import type { GroqModelOption } from "@/lib/study-types"
+import { getInscreenRuntimeSecret } from "@/lib/inscreen-user-config"
 
 const groqApiKey = process.env.GROQ_API_KEY || ""
 const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null
@@ -31,6 +32,8 @@ function buildModelLabel(modelId: string, ownedBy: string) {
 }
 
 export function requireGroqClient() {
+  const runtimeApiKey = getInscreenRuntimeSecret("GROQ_API_KEY")
+  if (runtimeApiKey) return new Groq({ apiKey: runtimeApiKey })
   if (!groq) {
     throw new Error("Missing GROQ_API_KEY")
   }

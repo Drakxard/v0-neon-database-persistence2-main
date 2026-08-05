@@ -60,6 +60,7 @@
     enhancedPdfReadability: false,
     workspaceMode: "remote",
     workspaceRootHandle: null,
+    inscreenConfigHalf: "",
     localWorkspaceObjectUrl: "",
     isOpeningLocalWorkspaceDocument: false,
     tagButton: null,
@@ -333,6 +334,24 @@
 
     state.workspaceRootHandle = handle;
     return handle;
+  }
+
+  async function loadInscreenConfigFileHalf() {
+    if (state.inscreenConfigHalf) return state.inscreenConfigHalf;
+    const rootHandle = await ensureWorkspaceRootHandle();
+    const configHandle = await rootHandle.getFileHandle("User.InScreen", { create: false });
+    const configFile = await configHandle.getFile();
+    const config = JSON.parse(await configFile.text());
+    const fileHalf = config?.version === 2 ? String(config.half || "").trim() : "";
+    if (!fileHalf) throw new Error("User.InScreen no contiene una Mitad A valida.");
+    state.inscreenConfigHalf = fileHalf;
+    return fileHalf;
+  }
+
+  async function inscreenApiFetch(input, init = {}) {
+    const headers = new Headers(init.headers || {});
+    headers.set("x-inscreen-config-half", await loadInscreenConfigFileHalf());
+    return fetch(input, { ...init, headers });
   }
 
   function workspaceIdToSegments(workspaceId) {
@@ -1179,7 +1198,7 @@
     state.translationFlushPromise = (async () => {
       try {
         const payload = await requireOkJson(
-          await fetch("/api/inscreen/translation-batches", {
+          await inscreenApiFetch("/api/inscreen/translation-batches", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ...getInscreenMaterialContext(), batchId, entries }),
@@ -1215,7 +1234,7 @@
     state.translationRequestId = requestId;
     showTranslationPopover("Traduciendo...");
     try {
-      const response = await fetch("/api/pdf-translate", {
+      const response = await inscreenApiFetch("/api/pdf-translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: sourceText, promptTemplate: getTranslationPrompt() }),
@@ -2569,13 +2588,13 @@
       const form = new FormData();
       form.append("file", pagePdf, `pagina-${pageNumber}.pdf`);
       const markerPayload = await requireOkJson(
-        await fetch("/api/inscreen/marker-transcribe", { method: "POST", body: form }),
+        await inscreenApiFetch("/api/inscreen/marker-transcribe", { method: "POST", body: form }),
         "No se pudo transcribir la pagina con Marker."
       );
       const text = String(markerPayload.markdown || "").trim();
       if (!text) throw new Error("Marker no devolvio texto para la pagina.");
       const payload = await requireOkJson(
-        await fetch("/api/inscreen/page-captures", {
+        await inscreenApiFetch("/api/inscreen/page-captures", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2601,10 +2620,6 @@
   }
 
   function scheduleInscreenPageCapture(pageNumber = state.inscreenCurrentPage) {
-    // Desactivado temporalmente: la extracción/captura automática cada 10 s
-    // no está funcionando correctamente. Se conserva la función para poder
-    // reactivarla cuando se encuentre una solución; el guardado manual desde
-    // el lápiz y el modal sigue disponible.
     clearInscreenPageTimer();
     if (
       !canUseInscreen() ||
@@ -2650,7 +2665,7 @@
         Object.entries(getInscreenMaterialContext()).map(([key, value]) => [key, String(value ?? "")])
       );
       const payload = await requireOkJson(
-        await fetch(`/api/inscreen/material-state?${contextParams.toString()}`, { cache: "no-store" }),
+        await inscreenApiFetch(`/api/inscreen/material-state?${contextParams.toString()}`, { cache: "no-store" }),
         "No se pudo cargar el estado de lectura."
       );
       state.inscreenCapturedPages = new Set(Array.isArray(payload.capturedPages) ? payload.capturedPages.map(Number) : []);
@@ -2977,7 +2992,7 @@
     state.inscreenNoteError.textContent = "";
     try {
       const payload = await requireOkJson(
-        await fetch("/api/inscreen/focused-notes", {
+        await inscreenApiFetch("/api/inscreen/focused-notes", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

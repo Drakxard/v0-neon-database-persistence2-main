@@ -58,6 +58,15 @@ import {
   type LocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
 import { SUBJECT_IDS } from "@/lib/subjects"
+import { getReadyInscreenConfigHalf } from "@/lib/local-workspace-client"
+
+const INSCREEN_CONFIG_HALF_HEADER = "x-inscreen-config-half"
+
+function isProtectedInscreenRequest(pathname: string) {
+  return pathname === "/api/pdf-translate" || (
+    pathname.startsWith("/api/inscreen/") && !pathname.startsWith("/api/inscreen/config/")
+  )
+}
 
 function jsonResponse(payload: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(payload), {
@@ -766,10 +775,13 @@ export function LocalFetchInterceptor() {
       if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
         return originalFetch(input, init)
       }
-      if (url.pathname === "/api/pdf-translate") {
-        return originalFetch(input, init)
+      if (isProtectedInscreenRequest(url.pathname)) {
+        const configHalf = getReadyInscreenConfigHalf()
+        const headers = new Headers(request.headers)
+        if (configHalf) headers.set(INSCREEN_CONFIG_HALF_HEADER, configHalf)
+        return originalFetch(new Request(request, { headers }))
       }
-      if (url.pathname.startsWith("/api/inscreen/")) {
+      if (url.pathname.startsWith("/api/inscreen/config/")) {
         return originalFetch(input, init)
       }
 

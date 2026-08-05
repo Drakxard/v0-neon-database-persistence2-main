@@ -1,3 +1,5 @@
+import { getInscreenRuntimeSecret } from "./inscreen-user-config.ts"
+
 const DATALAB_CONVERT_URL = "https://www.datalab.to/api/v1/convert"
 const POLL_INTERVAL_MS = 1_000
 const MAX_POLL_ATTEMPTS = 45
@@ -15,7 +17,7 @@ type FetchLike = typeof fetch
 export class DatalabMarkerError extends Error {}
 
 export function getDatalabMarkerApiKey(env: NodeJS.ProcessEnv = process.env) {
-  return String(env.MARKER_API || env.marker_api || "").trim()
+  return String(getInscreenRuntimeSecret("MARKER_API") || env.MARKER_API || env.marker_api || "").trim()
 }
 
 function asResponse(value: unknown): DatalabResponse {

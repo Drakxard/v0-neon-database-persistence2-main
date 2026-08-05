@@ -9,6 +9,7 @@ import {
   uploadNextInscreenText,
 } from "@/lib/inscreen-server"
 import { deleteR2Object } from "@/lib/r2"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
@@ -32,7 +33,7 @@ function parseEntries(value: unknown): TranslationEntry[] {
   })
 }
 
-export async function POST(request: Request) {
+async function saveTranslationBatch(request: Request) {
   let uploadedObjectKey = ""
   try {
     const auth = await requireAuthSession()
@@ -99,4 +100,8 @@ export async function POST(request: Request) {
     console.error("POST /api/inscreen/translation-batches error:", error)
     return inscreenErrorResponse(error)
   }
+}
+
+export async function POST(request: Request) {
+  return withInscreenUserConfig(request, () => saveTranslationBatch(request))
 }

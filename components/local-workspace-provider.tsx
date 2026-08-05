@@ -5,11 +5,15 @@ import { usePathname } from "next/navigation"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
 import {
+  clearLegacyInscreenBrowserHalf,
   ensureWorkspaceSubdirectories,
+  loadInscreenFileHalf,
   loadWorkspaceHandle,
   pickWorkspaceRootHandle,
   queryWorkspacePermission,
   requestWorkspacePermission,
+  persistInscreenFileHalf,
+  setReadyInscreenConfigHalf,
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
@@ -21,7 +25,25 @@ type LocalWorkspaceContextValue = {
   reselectWorkspace: () => Promise<void>
 }
 
-type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported" | "ready"
+type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported" | "configure" | "ready"
+
+type InscreenConfigValues = {
+  GROQ_API_KEY: string
+  MARKER_API: string
+  R2_BUCKET_NAME: string
+  R2_ACCESS_KEY_ID: string
+  R2_SECRET_ACCESS_KEY: string
+  R2_ENDPOINT: string
+}
+
+const EMPTY_INSCREEN_CONFIG: InscreenConfigValues = {
+  GROQ_API_KEY: "",
+  MARKER_API: "",
+  R2_BUCKET_NAME: "",
+  R2_ACCESS_KEY_ID: "",
+  R2_SECRET_ACCESS_KEY: "",
+  R2_ENDPOINT: "",
+}
 
 const LocalWorkspaceContext = createContext<LocalWorkspaceContextValue | null>(null)
 
@@ -43,9 +65,9 @@ function WorkspaceModal({
   const isUnsupported = bootState === "unsupported"
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/70 px-6">
-      <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900 p-6 text-white shadow-2xl">
-        <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Modo local</p>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/25 px-6 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 text-slate-900 shadow-2xl">
+        <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Modo local</p>
         <h2 className="mt-3 text-2xl font-semibold">
           {isChecking
             ? "Recuperando carpeta local"
@@ -53,7 +75,7 @@ function WorkspaceModal({
               ? "Recuperar carpeta de trabajo"
               : "Elegi la carpeta de trabajo"}
         </h2>
-        <p className="mt-3 text-sm text-slate-300">
+        <p className="mt-3 text-sm text-slate-600">
           {isChecking
             ? "Comprobando si ya existe una carpeta local guardada y si conserva permisos de lectura y escritura."
             : isRecovering
@@ -61,12 +83,12 @@ function WorkspaceModal({
               : "La app va a guardar y reutilizar una carpeta raiz local. Dentro de esa carpeta se crean o reutilizan automaticamente las subcarpetas `cronograma/`, `teoria/`, `practica/`, `audio/` y `manifests/`."}
         </p>
         {isUnsupported ? (
-          <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <p className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             Este modo necesita un navegador Chromium con File System Access API.
           </p>
         ) : null}
         {error ? (
-          <p className="mt-4 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</p>
+          <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
         ) : null}
         <div className="mt-6 flex flex-wrap gap-3">
           {isRecovering ? (
@@ -85,7 +107,7 @@ function WorkspaceModal({
             disabled={isChecking || isUnsupported || !supportsWorkspacePicker()}
             className={
               isRecovering
-                ? "inline-flex h-11 items-center justify-center rounded-2xl border border-white/15 px-5 text-sm font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                ? "inline-flex h-11 items-center justify-center rounded-2xl border border-slate-300 px-5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 : "inline-flex h-11 items-center justify-center rounded-2xl bg-sky-500 px-5 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
             }
           >
@@ -95,6 +117,108 @@ function WorkspaceModal({
       </div>
     </div>
   )
+}
+
+function InscreenConfigModal({
+  step,
+  values,
+  error,
+  saving,
+  onChange,
+  onBack,
+  onNext,
+  onSave,
+}: {
+  step: number
+  values: InscreenConfigValues
+  error: string
+  saving: boolean
+  onChange: (field: keyof InscreenConfigValues, value: string) => void
+  onBack: () => void
+  onNext: () => void
+  onSave: () => void
+}) {
+  const inputClass = "mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+  const secretField = (field: keyof InscreenConfigValues, label: string, placeholder = "") => (
+    <label className="block text-sm font-medium text-slate-700">
+      {label}
+      <input type="password" autoComplete="off" value={values[field]} placeholder={placeholder} onChange={(event) => onChange(field, event.target.value)} className={inputClass} />
+    </label>
+  )
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/25 px-6 backdrop-blur-sm">
+      <div className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-7 text-slate-900 shadow-2xl">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Configuración InScreen</p>
+            <h2 className="mt-2 text-2xl font-semibold">Conecta tus servicios</h2>
+          </div>
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">Paso {step + 1} de 3</span>
+        </div>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          Tus credenciales se cifran en el servidor. `User.InScreen` conserva la Mitad A y Vercel instala la Mitad B como cookie HttpOnly, fuera del alcance del JavaScript.
+        </p>
+        <div className="mt-6 space-y-4">
+          {step === 0 ? (
+            <>
+              <h3 className="text-lg font-semibold">Groq</h3>
+              <p className="text-sm text-slate-600">Se usa para traducir el texto seleccionado en PDF.js.</p>
+              {secretField("GROQ_API_KEY", "GROQ_API_KEY")}
+            </>
+          ) : null}
+          {step === 1 ? (
+            <>
+              <h3 className="text-lg font-semibold">Marker de Datalab</h3>
+              <p className="text-sm text-slate-600">Extrae el contenido de la página después del tiempo de lectura.</p>
+              {secretField("MARKER_API", "marker_api / MARKER_API")}
+            </>
+          ) : null}
+          {step === 2 ? (
+            <>
+              <h3 className="text-lg font-semibold">Cloudflare R2</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-slate-700">R2_BUCKET_NAME<input value={values.R2_BUCKET_NAME} onChange={(event) => onChange("R2_BUCKET_NAME", event.target.value)} className={inputClass} /></label>
+                <label className="block text-sm font-medium text-slate-700">R2_ENDPOINT<input type="url" value={values.R2_ENDPOINT} placeholder="https://...r2.cloudflarestorage.com" onChange={(event) => onChange("R2_ENDPOINT", event.target.value)} className={inputClass} /></label>
+                {secretField("R2_ACCESS_KEY_ID", "R2_ACCESS_KEY_ID")}
+                {secretField("R2_SECRET_ACCESS_KEY", "R2_SECRET_ACCESS_KEY")}
+              </div>
+            </>
+          ) : null}
+        </div>
+        {error ? <p className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+        <div className="mt-7 flex items-center justify-between gap-3">
+          <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button>
+          {step < 2 ? (
+            <button type="button" onClick={onNext} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500">Siguiente</button>
+          ) : (
+            <button type="button" onClick={onSave} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">{saving ? "Protegiendo..." : "Guardar y continuar"}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle) {
+  await clearLegacyInscreenBrowserHalf()
+  const fileHalf = await loadInscreenFileHalf(handle)
+  if (!fileHalf) {
+    setReadyInscreenConfigHalf("")
+    return { ok: false, error: "No se encontro una configuracion completa. Completa los tres pasos para crear User.InScreen." }
+  }
+  const response = await fetch("/api/inscreen/config/unlock", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileHalf }),
+  })
+  const payload = await response.json().catch(() => null) as { error?: string } | null
+  if (!response.ok) {
+    setReadyInscreenConfigHalf("")
+    return { ok: false, error: payload?.error || "No se pudo desbloquear User.InScreen." }
+  }
+  setReadyInscreenConfigHalf(fileHalf)
+  return { ok: true, error: "" }
 }
 
 export function LocalWorkspaceProvider({
@@ -112,6 +236,9 @@ export function LocalWorkspaceProvider({
     enabled ? "prompt" : "granted"
   )
   const [error, setError] = useState("")
+  const [configStep, setConfigStep] = useState(0)
+  const [configValues, setConfigValues] = useState<InscreenConfigValues>(EMPTY_INSCREEN_CONFIG)
+  const [savingConfig, setSavingConfig] = useState(false)
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
@@ -161,6 +288,15 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
+        const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
+        if (!unlocked.ok) {
+          setReadyWorkspaceHandle(null)
+          setRootHandle(storedHandle)
+          setPermissionState("granted")
+          setError(unlocked.error)
+          setBootState("configure")
+          return
+        }
         setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
         setPermissionState("granted")
@@ -214,13 +350,23 @@ export function LocalWorkspaceProvider({
       setError("")
       setBootState("checking")
       const handle = await pickWorkspaceRootHandle()
-      setReadyWorkspaceHandle(handle)
+      setReadyWorkspaceHandle(null)
+      setReadyInscreenConfigHalf("")
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
+      const unlocked = await unlockWorkspaceInscreenConfig(handle)
+      if (!unlocked.ok) {
+        setError(unlocked.error)
+        setConfigStep(0)
+        setBootState("configure")
+        return
+      }
+      setReadyWorkspaceHandle(handle)
       setBootState("ready")
     } catch (workspaceError) {
       setReadyWorkspaceHandle(null)
+      setReadyInscreenConfigHalf("")
       setRootHandle(null)
       setPermissionState("prompt")
       setBootState(supportsWorkspacePicker() ? "prompt" : "unsupported")
@@ -241,6 +387,7 @@ export function LocalWorkspaceProvider({
       const permission = await requestWorkspacePermission(storedHandle, "readwrite")
       if (permission !== "granted") {
         setReadyWorkspaceHandle(null)
+        setReadyInscreenConfigHalf("")
         setRootHandle(null)
         setPermissionState(permission)
         setBootState("recover")
@@ -249,6 +396,16 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
+      const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
+      if (!unlocked.ok) {
+        setReadyWorkspaceHandle(null)
+        setRootHandle(storedHandle)
+        setPermissionState("granted")
+        setError(unlocked.error)
+        setConfigStep(0)
+        setBootState("configure")
+        return
+      }
       setReadyWorkspaceHandle(storedHandle)
       setRootHandle(storedHandle)
       setPermissionState("granted")
@@ -259,6 +416,49 @@ export function LocalWorkspaceProvider({
       setPermissionState("prompt")
       setBootState("recover")
       setError(workspaceError instanceof Error ? workspaceError.message : "No se pudo recuperar la carpeta local.")
+    }
+  }
+
+  const nextConfigStep = () => {
+    const requiredByStep: Array<Array<keyof InscreenConfigValues>> = [
+      ["GROQ_API_KEY"],
+      ["MARKER_API"],
+      ["R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT"],
+    ]
+    const missing = requiredByStep[configStep].find((field) => !configValues[field].trim())
+    if (missing) {
+      setError(`Completa ${missing} para continuar.`)
+      return false
+    }
+    setError("")
+    if (configStep < 2) setConfigStep((current) => current + 1)
+    return true
+  }
+
+  const saveInscreenConfiguration = async () => {
+    if (!rootHandle || !nextConfigStep()) return
+    try {
+      setSavingConfig(true)
+      setError("")
+      const sealedResponse = await fetch("/api/inscreen/config/seal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(configValues),
+      })
+      const sealedPayload = await sealedResponse.json().catch(() => null) as { fileHalf?: string; error?: string } | null
+      if (!sealedResponse.ok || !sealedPayload?.fileHalf) {
+        throw new Error(sealedPayload?.error || "No se pudo proteger la configuracion.")
+      }
+      await persistInscreenFileHalf(rootHandle, sealedPayload.fileHalf)
+      const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
+      if (!unlocked.ok) throw new Error(unlocked.error)
+      setConfigValues(EMPTY_INSCREEN_CONFIG)
+      setReadyWorkspaceHandle(rootHandle)
+      setBootState("ready")
+    } catch (configError) {
+      setError(configError instanceof Error ? configError.message : "No se pudo guardar la configuracion InScreen.")
+    } finally {
+      setSavingConfig(false)
     }
   }
 
@@ -276,7 +476,25 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
-      {enabled && bootState !== "ready" && bootState !== "checking" ? (
+      {enabled && bootState === "configure" ? (
+        <InscreenConfigModal
+          step={configStep}
+          values={configValues}
+          error={error}
+          saving={savingConfig}
+          onChange={(field, value) => {
+            setConfigValues((current) => ({ ...current, [field]: value }))
+            setError("")
+          }}
+          onBack={() => {
+            setError("")
+            setConfigStep((current) => Math.max(0, current - 1))
+          }}
+          onNext={() => { nextConfigStep() }}
+          onSave={() => { void saveInscreenConfiguration() }}
+        />
+      ) : null}
+      {enabled && bootState !== "ready" && bootState !== "checking" && bootState !== "configure" ? (
         <WorkspaceModal
           bootState={bootState}
           error={error}

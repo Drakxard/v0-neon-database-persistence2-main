@@ -1,12 +1,13 @@
 import { requireAuthSession } from "@/lib/authz"
 import { convertPdfPageWithDatalabMarker, DatalabMarkerError } from "@/lib/datalab-marker"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
 
 const MAX_PAGE_PDF_BYTES = 25 * 1024 * 1024
 
-export async function POST(request: Request) {
+async function transcribe(request: Request) {
   try {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
@@ -28,4 +29,8 @@ export async function POST(request: Request) {
     console.error("POST /api/inscreen/marker-transcribe error:", error)
     return Response.json({ error: message }, { status })
   }
+}
+
+export async function POST(request: Request) {
+  return withInscreenUserConfig(request, () => transcribe(request))
 }

@@ -4,10 +4,11 @@ import {
   parseInscreenMaterialContext,
   readInscreenMaterialManifest,
 } from "@/lib/inscreen-server"
+import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
-export async function GET(request: Request) {
+async function getMaterialState(request: Request) {
   try {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
@@ -28,4 +29,8 @@ export async function GET(request: Request) {
     console.error("GET /api/inscreen/material-state error:", error)
     return inscreenErrorResponse(error)
   }
+}
+
+export async function GET(request: Request) {
+  return withInscreenUserConfig(request, () => getMaterialState(request))
 }
