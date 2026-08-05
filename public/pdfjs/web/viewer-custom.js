@@ -125,6 +125,7 @@
   const MIN_SELECTABLE_TEXT = 24;
   const DEFAULT_TRANSLATION_PROMPT = "Traduce a español el texto, sin agregar de más: {texto}";
   const TRANSLATION_PROMPT_STORAGE_KEY = "pdfjs.translationPrompt.v1";
+  const INSCREEN_CONFIGURATION_MESSAGE = "Falta configurar la API. Presiona | para iniciar la configuración con API.";
   const INSCREEN_PAGE_READING_MS = 60_000;
   const INSCREEN_FREETEXT_TYPE = 3;
   const INSCREEN_HIGHLIGHT_TYPE = 9;
@@ -359,6 +360,23 @@
     const headers = new Headers(init.headers || {});
     headers.set("x-inscreen-config-half", await loadInscreenConfigFileHalf());
     return fetch(input, { ...init, headers });
+  }
+
+  function isInscreenConfigurationUnavailable(error) {
+    return error?.name === "InscreenConfigurationUnavailable" || /Falta una mitad|no estan configuradas/i.test(String(error?.message || ""));
+  }
+
+  async function assertInscreenConfigurationAvailable() {
+    const fileHalf = await loadInscreenConfigFileHalf();
+    const response = await fetch("/api/inscreen/config/status", {
+      headers: { "x-inscreen-config-half": fileHalf },
+      cache: "no-store",
+    });
+    if (response.ok) return;
+    const payload = await response.json().catch(() => null);
+    const error = new Error(payload?.error || INSCREEN_CONFIGURATION_MESSAGE);
+    error.name = "InscreenConfigurationUnavailable";
+    throw error;
   }
 
   function workspaceIdToSegments(workspaceId) {
@@ -1066,11 +1084,17 @@
     state.translateButton.setAttribute("aria-label", state.translateButton.title);
   }
 
-  function toggleTranslationMode() {
+  async function toggleTranslationMode() {
     if (state.translationMode) {
       state.translationMode = false;
       refreshTranslationButton();
       showToast("Traduccion consecutiva desactivada.", "info");
+      return;
+    }
+    try {
+      await assertInscreenConfigurationAvailable();
+    } catch {
+      showToast(INSCREEN_CONFIGURATION_MESSAGE, "error", 5000);
       return;
     }
     state.translationMode = true;
@@ -1232,6 +1256,13 @@
   }
 
   async function translateSelectedText() {
+    try {
+      await assertInscreenConfigurationAvailable();
+    } catch {
+      closeTranslationPopover();
+      showToast(INSCREEN_CONFIGURATION_MESSAGE, "error", 5000);
+      return;
+    }
     if (!state.selectedText || !state.selectedTextRect) {
       showToast("Selecciona texto del PDF para traducir.", "info");
       return;
@@ -2619,6 +2650,7 @@
         return;
       }
     } catch (error) {
+      if (isInscreenConfigurationUnavailable(error)) return;
       console.error("Inscreen page capture failed:", error);
       showToast(error instanceof Error ? error.message : "No se pudo guardar la pagina leida.", "error", 4200);
     } finally {
@@ -2668,6 +2700,7 @@
     state.inscreenMarkerRequests = new Set();
     state.inscreenConsumedAnnotationIds = new Set();
     try {
+      await assertInscreenConfigurationAvailable();
       const contextParams = new URLSearchParams(
         Object.entries(getInscreenMaterialContext()).map(([key, value]) => [key, String(value ?? "")])
       );
@@ -2707,7 +2740,6 @@
       scheduleInscreenPageCapture(state.inscreenCurrentPage);
     } catch (error) {
       if (error?.name === "InscreenConfigurationUnavailable") {
-        console.info("InScreen remote services are disabled until configured.");
         return;
       }
       console.error("Inscreen state load failed:", error);
