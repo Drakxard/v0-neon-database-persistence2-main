@@ -310,23 +310,8 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
-        const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
-        if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
-          if (isInscreenConfigurationSkipped() || unlocked.missing) setReadyInscreenConfigHalf("")
-          setReadyWorkspaceHandle(storedHandle)
-          setRootHandle(storedHandle)
-          setPermissionState("granted")
-          setBootState("ready")
-          return
-        }
-        if (!unlocked.ok) {
-          setReadyWorkspaceHandle(null)
-          setRootHandle(storedHandle)
-          setPermissionState("granted")
-          setError(unlocked.error)
-          setBootState("configure")
-          return
-        }
+        await unlockWorkspaceInscreenConfig(storedHandle)
+        if (isInscreenConfigurationSkipped()) setReadyInscreenConfigHalf("")
         setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
         setPermissionState("granted")
@@ -406,18 +391,7 @@ export function LocalWorkspaceProvider({
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
-      const unlocked = await unlockWorkspaceInscreenConfig(handle)
-      if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
-        setReadyWorkspaceHandle(handle)
-        setBootState("ready")
-        return
-      }
-      if (!unlocked.ok) {
-        setError(unlocked.error)
-        setConfigStep(0)
-        setBootState("configure")
-        return
-      }
+      await unlockWorkspaceInscreenConfig(handle)
       setReadyWorkspaceHandle(handle)
       setBootState("ready")
     } catch (workspaceError) {
@@ -452,24 +426,8 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
-      const unlocked = await unlockWorkspaceInscreenConfig(storedHandle)
-      if (isInscreenConfigurationSkipped() || unlocked.ok || unlocked.missing) {
-        if (isInscreenConfigurationSkipped() || unlocked.missing) setReadyInscreenConfigHalf("")
-        setReadyWorkspaceHandle(storedHandle)
-        setRootHandle(storedHandle)
-        setPermissionState("granted")
-        setBootState("ready")
-        return
-      }
-      if (!unlocked.ok) {
-        setReadyWorkspaceHandle(null)
-        setRootHandle(storedHandle)
-        setPermissionState("granted")
-        setError(unlocked.error)
-        setConfigStep(0)
-        setBootState("configure")
-        return
-      }
+      await unlockWorkspaceInscreenConfig(storedHandle)
+      if (isInscreenConfigurationSkipped()) setReadyInscreenConfigHalf("")
       setReadyWorkspaceHandle(storedHandle)
       setRootHandle(storedHandle)
       setPermissionState("granted")
