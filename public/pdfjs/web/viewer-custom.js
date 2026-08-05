@@ -372,8 +372,8 @@
       headers: { "x-inscreen-config-half": fileHalf },
       cache: "no-store",
     });
-    if (response.ok) return;
     const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.configured !== false) return;
     const error = new Error(payload?.error || INSCREEN_CONFIGURATION_MESSAGE);
     error.name = "InscreenConfigurationUnavailable";
     throw error;

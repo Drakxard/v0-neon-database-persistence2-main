@@ -234,8 +234,8 @@ async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fileHalf }),
   })
-  const payload = await response.json().catch(() => null) as { error?: string } | null
-  if (!response.ok) {
+  const payload = await response.json().catch(() => null) as { configured?: boolean; error?: string } | null
+  if (!response.ok || payload?.configured === false) {
     setReadyInscreenConfigHalf("")
     return { ok: false, error: payload?.error || "No se pudo desbloquear User.InScreen." }
   }

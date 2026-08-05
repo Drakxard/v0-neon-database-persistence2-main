@@ -13,8 +13,12 @@ export async function POST(request: Request) {
     openInscreenUserConfigParts(String(body?.fileHalf || ""), request)
     return Response.json({ configured: true }, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo desbloquear la configuracion."
+    if (message === "Falta una mitad de la configuracion InScreen.") {
+      return Response.json({ configured: false, error: message }, { headers: { "Cache-Control": "no-store" } })
+    }
     return Response.json(
-      { error: error instanceof Error ? error.message : "No se pudo desbloquear la configuracion.", configurationRequired: true },
+      { error: message, configurationRequired: true },
       { status: 400 }
     )
   }
