@@ -39,6 +39,40 @@ R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 ```
 
+### Lectura desde la APK
+
+El despliegue funciona como intermediario de solo lectura entre la APK y R2. Configura
+en Vercel las credenciales R2 anteriores y un token independiente de al menos 32 bytes:
+
+```bash
+INSCREEN_PROVIDER_TOKEN=un-token-aleatorio-largo-y-exclusivo-para-la-apk
+INSCREEN_PROVIDER_ACCOUNT_EMAIL=local@app.local
+```
+
+`INSCREEN_PROVIDER_ACCOUNT_EMAIL` es opcional y por defecto usa `local@app.local`, que
+es la cuenta del modo de almacenamiento local. El token del proveedor no es una
+credencial de R2 y debe enviarse en `Authorization: Bearer ...`.
+
+Las rutas disponibles son:
+
+```text
+GET /api/inscreen/provider/paginas-leidas?materia=algebra&dia=6
+GET /api/inscreen/provider/traducciones?materia=algebra&dia=6
+```
+
+`materia` usa los identificadores de `lib/subjects.ts` y `dia` acepta enteros de 6
+(dia de clase) a 0 (dia anterior a la clase siguiente). La respuesta contiene una
+envoltura JSON con `materia`, `etapa`, `dia`, `fecha` y `archivos`. Cada
+`archivos[].contenido` conserva exactamente el TXT guardado en R2; las paginas pueden
+incluir ademas `pageNumber`, obtenido de sus metadatos existentes.
+
+Ejemplo:
+
+```bash
+curl -H "Authorization: Bearer $INSCREEN_PROVIDER_TOKEN" \
+  "https://v0-lunas-moradas.vercel.app/api/inscreen/provider/paginas-leidas?materia=algebra&dia=6"
+```
+
 ## Configuracion personal de InScreen
 
 En el despliegue solo debe configurarse una semilla privada del servidor:

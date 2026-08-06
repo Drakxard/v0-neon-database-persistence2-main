@@ -72,7 +72,7 @@ export type InscreenMaterialManifest = {
   updatedAt: string
 }
 
-type InscreenStageManifest = {
+export type InscreenStageManifest = {
   version: 1
   subjectId: string
   targetWeekday: number
@@ -148,8 +148,12 @@ function materialManifestKey(context: InscreenMaterialContext) {
   return `${INSCREEN_MANIFEST_PREFIX}/materials/${material}/${revision}.json`
 }
 
+function stageManifestKeyForEmail(email: string, subjectId: string) {
+  return `${INSCREEN_MANIFEST_PREFIX}/stages/${sanitizeManifestSegment(email)}/${sanitizeManifestSegment(subjectId, "subject")}.json`
+}
+
 function stageManifestKey(session: AuthSession, subjectId: string) {
-  return `${INSCREEN_MANIFEST_PREFIX}/stages/${sanitizeManifestSegment(session.email)}/${sanitizeManifestSegment(subjectId, "subject")}.json`
+  return stageManifestKeyForEmail(session.email, subjectId)
 }
 
 function emptyMaterialManifest(context: InscreenMaterialContext): InscreenMaterialManifest {
@@ -266,6 +270,31 @@ export async function resolveInscreenStage(
       }
     },
   })
+}
+
+export async function readInscreenProviderStage(
+  accountEmail: string,
+  subjectId: string,
+  currentDate = getDateKeyInTimeZone()
+) {
+  const snapshot = await readInscreenJson<InscreenStageManifest | null>(
+    stageManifestKeyForEmail(accountEmail, subjectId),
+    null
+  )
+  if (!snapshot.value) {
+    throw new InscreenHttpError(404, "No existe una etapa de InScreen para la materia solicitada.")
+  }
+
+  const advanced = advanceInscreenStage({
+    currentStage: snapshot.value.currentStage,
+    nextTransitionDate: snapshot.value.nextTransitionDate,
+  }, currentDate)
+
+  return {
+    ...snapshot.value,
+    currentStage: advanced.currentStage,
+    nextTransitionDate: advanced.nextTransitionDate,
+  }
 }
 
 export async function uploadNextInscreenText(params: {

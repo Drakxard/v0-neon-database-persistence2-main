@@ -89,3 +89,11 @@ export function normalizeInscreenPageText(value: string) {
 export function normalizeInscreenTitle(value: string) {
   return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim()
 }
+
+export function resolveInscreenRelativeDayDate(nextTransitionDate: string, day: number) {
+  if (!Number.isInteger(day) || day < 0 || day > 6) {
+    throw new Error("INSCREEN_DAY_OUT_OF_RANGE")
+  }
+  const stageStartDate = addDateKeyDays(nextTransitionDate, -7)
+  return addDateKeyDays(stageStartDate, 6 - day)
+}

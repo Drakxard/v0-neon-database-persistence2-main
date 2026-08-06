@@ -8,6 +8,7 @@ import {
   firstWeekdayOnOrAfter,
   nextStrictWeekdayAfter,
   normalizeInscreenPageText,
+  resolveInscreenRelativeDayDate,
   normalizeInscreenSubjectSegment,
   normalizeInscreenTitle,
 } from "../lib/inscreen.ts"
@@ -63,6 +64,28 @@ test("cada materia usa su día elegido como inicio relativo de etapa", () => {
     currentStage: 2,
     nextTransitionDate: "2026-08-27",
   })
+})
+
+test("resuelve el día relativo 6 a 0 dentro de la etapa actual", () => {
+  assert.equal(resolveInscreenRelativeDayDate("2026-08-17", 6), "2026-08-10")
+  assert.equal(resolveInscreenRelativeDayDate("2026-08-17", 4), "2026-08-12")
+  assert.equal(resolveInscreenRelativeDayDate("2026-08-17", 0), "2026-08-16")
+  assert.throws(() => resolveInscreenRelativeDayDate("2026-08-17", -1), /INSCREEN_DAY_OUT_OF_RANGE/)
+  assert.throws(() => resolveInscreenRelativeDayDate("2026-08-17", 7), /INSCREEN_DAY_OUT_OF_RANGE/)
+})
+
+test("el proveedor expone GET protegidos y conserva los TXT como contenido", () => {
+  const provider = readFileSync(new URL("../lib/inscreen-provider.ts", import.meta.url), "utf8")
+  const pagesRoute = readFileSync(new URL("../app/api/inscreen/provider/paginas-leidas/route.ts", import.meta.url), "utf8")
+  const translationsRoute = readFileSync(new URL("../app/api/inscreen/provider/traducciones/route.ts", import.meta.url), "utf8")
+
+  assert.match(provider, /INSCREEN_PROVIDER_TOKEN/)
+  assert.match(provider, /authorization/)
+  assert.match(provider, /downloaded\.buffer\.toString\("utf8"\)/)
+  assert.match(provider, /"page-number"/)
+  assert.match(provider, /getDateKeyInTimeZone\(new Date\(object\.lastModified\)\)/)
+  assert.match(pagesRoute, /handleInscreenProviderGet\(request, "pagina"\)/)
+  assert.match(translationsRoute, /handleInscreenProviderGet\(request, "transcripcion"\)/)
 })
 
 test("el contrato incluye revisión, deduplicación y subida condicional", () => {
