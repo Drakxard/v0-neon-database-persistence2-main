@@ -1,16 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 
-import {
-  getDateKeyInTimeZone,
-  normalizeInscreenSubjectSegment,
-  resolveInscreenRelativeDayDate,
-} from "@/lib/inscreen"
-import {
-  InscreenHttpError,
-  listInscreenProviderStages,
-  type InscreenStageManifest,
-} from "@/lib/inscreen-server"
-import { downloadR2Object, getR2ObjectMetadata, listR2ObjectsByPrefix } from "@/lib/r2"
+import { InscreenHttpError } from "@/lib/inscreen-server"
+import { downloadR2Object, listR2ObjectsByPrefix } from "@/lib/r2"
 
 export type InscreenProviderKind = "pagina" | "transcripcion"
 
@@ -57,14 +48,6 @@ function authorizeProvider(request: Request) {
   return null
 }
 
-export function resolveProviderDayDate(nextTransitionDate: string, day: number) {
-  try {
-    return resolveInscreenRelativeDayDate(nextTransitionDate, day)
-  } catch {
-    throw new InscreenHttpError(400, "El dia debe ser un entero entre 0 y 6.")
-  }
-}
-
 function numericFileOrder(left: { key: string }, right: { key: string }) {
   const id = (key: string) => Number.parseInt(key.split("/").at(-1)?.replace(/\.txt$/i, "") || "", 10)
   const leftId = id(left.key)
@@ -81,35 +64,6 @@ async function loadProviderFile(object: { key: string }): Promise<ProviderFile> 
   }
 }
 
-async function findSubjectIdFromFolder(subjectSegment: string) {
-  const objects = (await listR2ObjectsByPrefix(`InSreen/${subjectSegment}/`))
-    .filter((object) => object.key.endsWith(".txt"))
-    .sort((left, right) => String(right.lastModified || "").localeCompare(String(left.lastModified || "")))
-  for (const object of objects) {
-    const metadata = await getR2ObjectMetadata(object.key)
-    const subjectId = String(metadata.metadata["subject-id"] || "").trim()
-    if (subjectId) return subjectId
-  }
-  return ""
-}
-
-async function resolveProviderStage(
-  accountEmail: string,
-  subjectSegment: string,
-  currentDate: string
-): Promise<InscreenStageManifest> {
-  const stages = await listInscreenProviderStages(accountEmail, currentDate)
-  const direct = stages.filter(
-    (stage) => normalizeInscreenSubjectSegment(stage.subjectId) === subjectSegment
-  )
-  if (direct.length === 1) return direct[0]
-
-  const metadataSubjectId = await findSubjectIdFromFolder(subjectSegment)
-  const resolved = stages.find((stage) => stage.subjectId === metadataSubjectId)
-  if (resolved) return resolved
-  throw new InscreenHttpError(404, "No existe una etapa para la materia solicitada.")
-}
-
 export async function handleInscreenProviderGet(request: Request, kind: InscreenProviderKind) {
   const unauthorized = authorizeProvider(request)
   if (unauthorized) return unauthorized
@@ -117,7 +71,8 @@ export async function handleInscreenProviderGet(request: Request, kind: Inscreen
   try {
     const url = new URL(request.url)
     const subjectSegment = String(url.searchParams.get("materia") || "").trim()
-    const day = Number.parseInt(String(url.searchParams.get("dia") || ""), 10)
+    const rawDay = String(url.searchParams.get("dia") || "").trim()
+    const day = Number(rawDay)
     if (!/^[a-z0-9]{1,300}$/.test(subjectSegment)) {
       throw new InscreenHttpError(400, "Materia invalida.")
     }
@@ -125,18 +80,13 @@ export async function handleInscreenProviderGet(request: Request, kind: Inscreen
       throw new InscreenHttpError(400, "El dia debe ser un entero entre 0 y 6.")
     }
 
-    const currentDate = getDateKeyInTimeZone()
-    const accountEmail = String(process.env.INSCREEN_PROVIDER_ACCOUNT_EMAIL || "").trim() || "local@app.local"
-    const stage = await resolveProviderStage(accountEmail, subjectSegment, currentDate)
-    const requestedDate = resolveProviderDayDate(stage.nextTransitionDate, day)
-    const prefix = `InSreen/${subjectSegment}/${stage.currentStage}/${kind}/`
+    const prefix = `InSreen/${subjectSegment}/${day}/${kind}/`
     const objects = (await listR2ObjectsByPrefix(prefix))
-      .filter((object) => object.key.endsWith(".txt"))
-      .filter((object) => object.lastModified && getDateKeyInTimeZone(new Date(object.lastModified)) === requestedDate)
+      .filter((object) => /^[1-9][0-9]*\.txt$/.test(object.key.slice(prefix.length)))
       .sort(numericFileOrder)
     const archivos = await Promise.all(objects.map(loadProviderFile))
 
-    return jsonResponse({ ok: true, etapa: stage.currentStage, archivos })
+    return jsonResponse({ ok: true, etapa: day, archivos })
   } catch (error) {
     if (error instanceof InscreenHttpError) {
       return providerErrorResponse(error.message, error.status)
