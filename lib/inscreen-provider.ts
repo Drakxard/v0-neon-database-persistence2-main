@@ -19,6 +19,10 @@ type ProviderFile = {
   contenido: string
 }
 
+function providerErrorResponse(error: string, status: number, extraHeaders?: HeadersInit) {
+  return jsonResponse({ ok: false, archivos: [], error }, status, extraHeaders)
+}
+
 function jsonResponse(body: unknown, status = 200, extraHeaders?: HeadersInit) {
   return Response.json(body, {
     status,
@@ -41,11 +45,11 @@ export function isValidInscreenProviderAuthorization(header: string | null, expe
 function authorizeProvider(request: Request) {
   const expectedToken = String(process.env.INSCREEN_PROVIDER_TOKEN || "").trim()
   if (Buffer.byteLength(expectedToken) < 32) {
-    return jsonResponse({ ok: false, archivos: [] }, 503)
+    return providerErrorResponse("Proveedor InScreen no configurado.", 503)
   }
   if (!isValidInscreenProviderAuthorization(request.headers.get("authorization"), expectedToken)) {
-    return jsonResponse(
-      { ok: false, archivos: [] },
+    return providerErrorResponse(
+      "No autorizado.",
       401,
       { "WWW-Authenticate": "Bearer" }
     )
@@ -132,12 +136,12 @@ export async function handleInscreenProviderGet(request: Request, kind: Inscreen
       .sort(numericFileOrder)
     const archivos = await Promise.all(objects.map(loadProviderFile))
 
-    return jsonResponse({ ok: true, archivos })
+    return jsonResponse({ ok: true, etapa: stage.currentStage, archivos })
   } catch (error) {
     if (error instanceof InscreenHttpError) {
-      return jsonResponse({ ok: false, archivos: [] }, error.status)
+      return providerErrorResponse(error.message, error.status)
     }
     console.error(`GET InScreen provider ${kind} error:`, error)
-    return jsonResponse({ ok: false, archivos: [] }, 500)
+    return providerErrorResponse("Error interno del proveedor InScreen.", 500)
   }
 }
