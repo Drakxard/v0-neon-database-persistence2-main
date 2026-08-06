@@ -56,21 +56,36 @@ credencial de R2 y debe enviarse en `Authorization: Bearer ...`.
 Las rutas disponibles son:
 
 ```text
-GET /api/inscreen/provider/paginas-leidas?materia=algebra&dia=6
-GET /api/inscreen/provider/traducciones?materia=algebra&dia=6
+GET /api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6
+GET /api/inscreen/provider/traducciones?materia=ecuordinarias&dia=6
 ```
 
-`materia` usa los identificadores de `lib/subjects.ts` y `dia` acepta enteros de 6
-(dia de clase) a 0 (dia anterior a la clase siguiente). La respuesta contiene una
-envoltura JSON con `materia`, `etapa`, `dia`, `fecha` y `archivos`. Cada
-`archivos[].contenido` conserva exactamente el TXT guardado en R2; las paginas pueden
-incluir ademas `pageNumber`, obtenido de sus metadatos existentes.
+`materia` es el nombre exacto de la carpeta normalizada bajo `InSreen/`, por ejemplo
+`ecuordinarias`. Se admiten materias creadas por el usuario y no solamente las del
+catalogo inicial. `dia` acepta enteros de 6 (dia de clase) a 0 (dia anterior a la
+clase siguiente). El proveedor resuelve internamente la etapa mediante sus manifiestos
+y el metadato `subject-id` existente.
+
+La respuesta publica contiene solamente `ok` y `archivos`. Cada archivo conserva su
+nombre y el contenido exacto del TXT guardado en R2:
+
+```json
+{
+  "ok": true,
+  "archivos": [
+    { "nombre": "1.txt", "contenido": "Contenido original del TXT" }
+  ]
+}
+```
+
+Sin resultados se devuelve `{ "ok": true, "archivos": [] }`; cualquier error devuelve
+`{ "ok": false, "archivos": [] }` con el codigo HTTP correspondiente.
 
 Ejemplo:
 
 ```bash
 curl -H "Authorization: Bearer $INSCREEN_PROVIDER_TOKEN" \
-  "https://v0-lunas-moradas.vercel.app/api/inscreen/provider/paginas-leidas?materia=algebra&dia=6"
+  "https://v0-lunas-moradas.vercel.app/api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6"
 ```
 
 ## Configuracion personal de InScreen

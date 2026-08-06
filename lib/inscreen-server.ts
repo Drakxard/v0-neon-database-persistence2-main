@@ -272,29 +272,40 @@ export async function resolveInscreenStage(
   })
 }
 
-export async function readInscreenProviderStage(
+export async function listInscreenProviderStages(
   accountEmail: string,
-  subjectId: string,
   currentDate = getDateKeyInTimeZone()
 ) {
-  const snapshot = await readInscreenJson<InscreenStageManifest | null>(
-    stageManifestKeyForEmail(accountEmail, subjectId),
-    null
-  )
-  if (!snapshot.value) {
-    throw new InscreenHttpError(404, "No existe una etapa de InScreen para la materia solicitada.")
-  }
-
-  const advanced = advanceInscreenStage({
-    currentStage: snapshot.value.currentStage,
-    nextTransitionDate: snapshot.value.nextTransitionDate,
-  }, currentDate)
-
-  return {
-    ...snapshot.value,
-    currentStage: advanced.currentStage,
-    nextTransitionDate: advanced.nextTransitionDate,
-  }
+  const prefix = `${INSCREEN_MANIFEST_PREFIX}/stages/${sanitizeManifestSegment(accountEmail)}/`
+  const objects = (await listR2ObjectsByPrefix(prefix)).filter((object) => object.key.endsWith(".json"))
+  const manifests = await Promise.all(objects.map(async (object) => {
+    try {
+      const downloaded = await downloadR2Object(object.key)
+      const value = JSON.parse(downloaded.buffer.toString("utf8")) as Partial<InscreenStageManifest>
+      if (
+        value.version !== 1 ||
+        typeof value.subjectId !== "string" ||
+        !value.subjectId.trim() ||
+        !Number.isInteger(value.currentStage) ||
+        Number(value.currentStage) < 1 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(String(value.nextTransitionDate || ""))
+      ) return null
+      const advanced = advanceInscreenStage({
+        currentStage: Number(value.currentStage),
+        nextTransitionDate: String(value.nextTransitionDate),
+      }, currentDate)
+      return {
+        ...value,
+        subjectId: value.subjectId.trim(),
+        currentStage: advanced.currentStage,
+        nextTransitionDate: advanced.nextTransitionDate,
+      } as InscreenStageManifest
+    } catch (error) {
+      console.warn(`No se pudo leer el manifiesto de etapa ${object.key}:`, error)
+      return null
+    }
+  }))
+  return manifests.filter((manifest): manifest is InscreenStageManifest => manifest !== null)
 }
 
 export async function uploadNextInscreenText(params: {

@@ -5,17 +5,18 @@ import {
   normalizeInscreenSubjectSegment,
   resolveInscreenRelativeDayDate,
 } from "@/lib/inscreen"
-import { InscreenHttpError, readInscreenProviderStage } from "@/lib/inscreen-server"
+import {
+  InscreenHttpError,
+  listInscreenProviderStages,
+  type InscreenStageManifest,
+} from "@/lib/inscreen-server"
 import { downloadR2Object, getR2ObjectMetadata, listR2ObjectsByPrefix } from "@/lib/r2"
-import { getSubjectById } from "@/lib/subjects"
 
 export type InscreenProviderKind = "pagina" | "transcripcion"
 
 type ProviderFile = {
   nombre: string
   contenido: string
-  actualizadoEn: string | null
-  pageNumber?: number
 }
 
 function jsonResponse(body: unknown, status = 200, extraHeaders?: HeadersInit) {
@@ -40,11 +41,11 @@ export function isValidInscreenProviderAuthorization(header: string | null, expe
 function authorizeProvider(request: Request) {
   const expectedToken = String(process.env.INSCREEN_PROVIDER_TOKEN || "").trim()
   if (Buffer.byteLength(expectedToken) < 32) {
-    return jsonResponse({ ok: false, error: "provider_not_configured" }, 503)
+    return jsonResponse({ ok: false, archivos: [] }, 503)
   }
   if (!isValidInscreenProviderAuthorization(request.headers.get("authorization"), expectedToken)) {
     return jsonResponse(
-      { ok: false, error: "unauthorized" },
+      { ok: false, archivos: [] },
       401,
       { "WWW-Authenticate": "Bearer" }
     )
@@ -68,21 +69,41 @@ function numericFileOrder(left: { key: string }, right: { key: string }) {
   return left.key.localeCompare(right.key)
 }
 
-async function loadProviderFile(
-  object: { key: string; lastModified: string | null },
-  kind: InscreenProviderKind
-): Promise<ProviderFile> {
-  const [downloaded, metadata] = await Promise.all([
-    downloadR2Object(object.key),
-    kind === "pagina" ? getR2ObjectMetadata(object.key) : Promise.resolve(null),
-  ])
-  const pageNumber = Number.parseInt(String(metadata?.metadata?.["page-number"] || ""), 10)
+async function loadProviderFile(object: { key: string }): Promise<ProviderFile> {
+  const downloaded = await downloadR2Object(object.key)
   return {
     nombre: object.key.split("/").at(-1) || object.key,
     contenido: downloaded.buffer.toString("utf8"),
-    actualizadoEn: object.lastModified,
-    ...(kind === "pagina" && Number.isInteger(pageNumber) && pageNumber > 0 ? { pageNumber } : {}),
   }
+}
+
+async function findSubjectIdFromFolder(subjectSegment: string) {
+  const objects = (await listR2ObjectsByPrefix(`InSreen/${subjectSegment}/`))
+    .filter((object) => object.key.endsWith(".txt"))
+    .sort((left, right) => String(right.lastModified || "").localeCompare(String(left.lastModified || "")))
+  for (const object of objects) {
+    const metadata = await getR2ObjectMetadata(object.key)
+    const subjectId = String(metadata.metadata["subject-id"] || "").trim()
+    if (subjectId) return subjectId
+  }
+  return ""
+}
+
+async function resolveProviderStage(
+  accountEmail: string,
+  subjectSegment: string,
+  currentDate: string
+): Promise<InscreenStageManifest> {
+  const stages = await listInscreenProviderStages(accountEmail, currentDate)
+  const direct = stages.filter(
+    (stage) => normalizeInscreenSubjectSegment(stage.subjectId) === subjectSegment
+  )
+  if (direct.length === 1) return direct[0]
+
+  const metadataSubjectId = await findSubjectIdFromFolder(subjectSegment)
+  const resolved = stages.find((stage) => stage.subjectId === metadataSubjectId)
+  if (resolved) return resolved
+  throw new InscreenHttpError(404, "No existe una etapa para la materia solicitada.")
 }
 
 export async function handleInscreenProviderGet(request: Request, kind: InscreenProviderKind) {
@@ -91,42 +112,32 @@ export async function handleInscreenProviderGet(request: Request, kind: Inscreen
 
   try {
     const url = new URL(request.url)
-    const subjectId = String(url.searchParams.get("materia") || "").trim()
+    const subjectSegment = String(url.searchParams.get("materia") || "").trim()
     const day = Number.parseInt(String(url.searchParams.get("dia") || ""), 10)
-    const subject = getSubjectById(subjectId)
-    if (!subject) throw new InscreenHttpError(400, "Materia invalida.")
+    if (!/^[a-z0-9]{1,300}$/.test(subjectSegment)) {
+      throw new InscreenHttpError(400, "Materia invalida.")
+    }
     if (!Number.isInteger(day) || day < 0 || day > 6) {
       throw new InscreenHttpError(400, "El dia debe ser un entero entre 0 y 6.")
     }
 
     const currentDate = getDateKeyInTimeZone()
     const accountEmail = String(process.env.INSCREEN_PROVIDER_ACCOUNT_EMAIL || "").trim() || "local@app.local"
-    const stage = await readInscreenProviderStage(accountEmail, subjectId, currentDate)
+    const stage = await resolveProviderStage(accountEmail, subjectSegment, currentDate)
     const requestedDate = resolveProviderDayDate(stage.nextTransitionDate, day)
-    const subjectSegment = normalizeInscreenSubjectSegment(subject.name, subject.id)
     const prefix = `InSreen/${subjectSegment}/${stage.currentStage}/${kind}/`
     const objects = (await listR2ObjectsByPrefix(prefix))
       .filter((object) => object.key.endsWith(".txt"))
       .filter((object) => object.lastModified && getDateKeyInTimeZone(new Date(object.lastModified)) === requestedDate)
       .sort(numericFileOrder)
-    const archivos = await Promise.all(objects.map((object) => loadProviderFile(object, kind)))
+    const archivos = await Promise.all(objects.map(loadProviderFile))
 
-    return jsonResponse({
-      ok: true,
-      materia: subjectId,
-      etapa: stage.currentStage,
-      dia: day,
-      fecha: requestedDate,
-      archivos,
-    })
+    return jsonResponse({ ok: true, archivos })
   } catch (error) {
     if (error instanceof InscreenHttpError) {
-      return jsonResponse({ ok: false, error: error.message }, error.status)
+      return jsonResponse({ ok: false, archivos: [] }, error.status)
     }
     console.error(`GET InScreen provider ${kind} error:`, error)
-    return jsonResponse({
-      ok: false,
-      error: error instanceof Error ? error.message : "No se pudieron leer los datos de R2.",
-    }, 500)
+    return jsonResponse({ ok: false, archivos: [] }, 500)
   }
 }
