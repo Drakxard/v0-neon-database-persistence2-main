@@ -12,6 +12,7 @@ import {
   normalizeInscreenSubjectSegment,
   normalizeInscreenTitle,
 } from "../lib/inscreen.ts"
+import { selectIncrementalProviderObjects } from "../lib/inscreen-provider-selection.ts"
 
 test("normaliza la materia para la ruta InSreen", () => {
   assert.equal(normalizeInscreenSubjectSegment("Álgebra 2"), "algebra2")
@@ -82,18 +83,47 @@ test("el proveedor expone GET protegidos y conserva los TXT como contenido", () 
   assert.match(provider, /INSCREEN_PROVIDER_TOKEN/)
   assert.match(provider, /authorization/)
   assert.match(provider, /downloaded\.buffer\.toString\("utf8"\)/)
-  assert.doesNotMatch(provider, /listInscreenProviderStages/)
+  assert.match(provider, /selectIncrementalProviderObjects/)
   assert.doesNotMatch(provider, /metadata\.metadata\["subject-id"\]/)
   assert.doesNotMatch(provider, /getSubjectById/)
   assert.doesNotMatch(provider, /object\.lastModified/)
   assert.match(provider, /`InSreen\/\$\{subjectSegment\}\/\$\{day\}\/\$\{kind\}\/`/)
   assert.match(provider, /\^\[1-9\]\[0-9\]\*\\\.txt\$/)
-  assert.match(provider, /return jsonResponse\(\{ ok: true, etapa: day, archivos \}\)/)
+  assert.match(provider, /hayNuevos/)
+  assert.match(provider, /nuevaEtapa/)
   assert.match(provider, /\{ ok: false, archivos: \[\], error \}/)
   assert.match(provider, /providerErrorResponse\(error\.message, error\.status\)/)
   assert.match(provider, /providerErrorResponse\("Error interno del proveedor InScreen\."\s*, 500\)/)
   assert.match(pagesRoute, /handleInscreenProviderGet\(request, "pagina"\)/)
   assert.match(translationsRoute, /handleInscreenProviderGet\(request, "transcripcion"\)/)
+})
+
+test("el proveedor separa pendientes y una nueva etapa semanal", () => {
+  const keys = [
+    "InSreen/ingles/2/transcripcion/1.txt",
+    "InSreen/ingles/2/transcripcion/3.txt",
+    "InSreen/ingles/2/transcripcion/4.txt",
+    "InSreen/ingles/3/transcripcion/1.txt",
+    "InSreen/ingles/3/transcripcion/2.txt",
+  ].map((key) => ({ key }))
+
+  const initial = selectIncrementalProviderObjects(keys, "ingles", "transcripcion", null)
+  assert.deepEqual(initial.files, [])
+  assert.equal(initial.newStage?.stage, 3)
+  assert.deepEqual(initial.newStage?.files.map((file) => file.key), keys.slice(3).map((file) => file.key))
+
+  const current = selectIncrementalProviderObjects(keys, "ingles", "transcripcion", "1.txt")
+  assert.equal(current.newStage, null)
+  assert.deepEqual(current.files.map((file) => file.key), [keys[4].key])
+
+  const rollover = selectIncrementalProviderObjects(keys, "ingles", "transcripcion", "3.txt")
+  assert.deepEqual(rollover.files.map((file) => file.key), [keys[2].key])
+  assert.equal(rollover.newStage?.stage, 3)
+  assert.deepEqual(rollover.newStage?.files.map((file) => file.key), keys.slice(3).map((file) => file.key))
+
+  const caughtUp = selectIncrementalProviderObjects(keys, "ingles", "transcripcion", "2.txt")
+  assert.deepEqual(caughtUp.files, [])
+  assert.equal(caughtUp.newStage, null)
 })
 
 test("el contrato incluye revisión, deduplicación y subida condicional", () => {

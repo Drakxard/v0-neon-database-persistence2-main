@@ -58,6 +58,7 @@ Las rutas disponibles son:
 ```text
 GET /api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6
 GET /api/inscreen/provider/traducciones?materia=ecuordinarias&dia=6
+GET /api/inscreen/provider/traducciones?materia=ecuordinarias&ultimo=6.txt
 ```
 
 `materia` es el nombre exacto de la carpeta normalizada bajo `InSreen/`, por ejemplo
@@ -66,19 +67,32 @@ catalogo inicial. `dia` acepta enteros de 6 (dia de clase) a 0 (dia anterior a l
 clase siguiente). El proveedor resuelve internamente la etapa mediante sus manifiestos
 y el metadato `subject-id` existente.
 
-La respuesta publica contiene solamente `ok` y `archivos`. Cada archivo conserva su
+En el modo incremental se omite `dia`. `ultimo` contiene el último TXT conocido por la
+APK; sin ese parámetro se devuelve completa la etapa semanal más reciente dentro de
+`nuevaEtapa`. Los archivos posteriores de la semana conocida permanecen en `archivos` y
+el reinicio en `1.txt` se entrega por separado en `nuevaEtapa`. Sin novedades se devuelve
+`hayNuevos: false`, `archivos: []` y `nuevaEtapa: null`.
+
+La respuesta incremental contiene `ok`, `hayNuevos`, `archivos` y `nuevaEtapa`. Cada archivo conserva su
 nombre y el contenido exacto del TXT guardado en R2:
 
 ```json
 {
   "ok": true,
+  "hayNuevos": true,
   "archivos": [
-    { "nombre": "1.txt", "contenido": "Contenido original del TXT" }
-  ]
+    { "nombre": "7.txt", "contenido": "Contenido de la etapa conocida" }
+  ],
+  "nuevaEtapa": {
+    "etapa": 15,
+    "archivos": [
+      { "nombre": "1.txt", "contenido": "Contenido de la nueva etapa" }
+    ]
+  }
 }
 ```
 
-Sin resultados se devuelve `{ "ok": true, "archivos": [] }`; cualquier error devuelve
+Sin resultados se devuelve `{ "ok": true, "hayNuevos": false, "archivos": [], "nuevaEtapa": null }`; cualquier error devuelve
 `{ "ok": false, "archivos": [] }` con el codigo HTTP correspondiente.
 
 Ejemplo:
