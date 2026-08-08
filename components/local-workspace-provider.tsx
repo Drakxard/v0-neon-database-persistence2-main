@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { usePathname } from "next/navigation"
+import QRCode from "qrcode"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
 import {
@@ -146,6 +147,12 @@ function InscreenConfigModal({
   onNext,
   onSave,
   onSkip,
+  qrDataUrl,
+  pairingExpiresAt,
+  devices,
+  onRegenerateQr,
+  onRevokeDevice,
+  onFinish,
 }: {
   step: number
   values: InscreenConfigValues
@@ -156,6 +163,12 @@ function InscreenConfigModal({
   onNext: () => void
   onSave: () => void
   onSkip: () => void
+  qrDataUrl: string
+  pairingExpiresAt: string
+  devices: Array<{ deviceId: string; enabled: boolean; createdAt: string }>
+  onRegenerateQr: () => void
+  onRevokeDevice: (deviceId: string) => void
+  onFinish: () => void
 }) {
   const inputClass = "mt-2 h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
   const secretField = (field: keyof InscreenConfigValues, label: string, placeholder = "") => (
@@ -173,7 +186,7 @@ function InscreenConfigModal({
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Configuración InScreen</p>
             <h2 className="mt-2 text-2xl font-semibold">Conecta tus servicios</h2>
           </div>
-          <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">Paso {step + 1} de 3</span>
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">Paso {step + 1} de 4</span>
         </div>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Tus credenciales se cifran en el servidor. `User.InScreen` conserva la Mitad A y Vercel instala la Mitad B como cookie HttpOnly, fuera del alcance del JavaScript.
@@ -204,18 +217,36 @@ function InscreenConfigModal({
               </div>
             </>
           ) : null}
+          {step === 3 ? (
+            <>
+              <h3 className="text-lg font-semibold">Vincular telefono</h3>
+              <p className="text-sm text-slate-600">Abri InScreen en Android y escanea este QR. Vence en cinco minutos y no contiene credenciales legibles.</p>
+              <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                {qrDataUrl ? <img src={qrDataUrl} alt="QR para vincular InScreen Android" className="h-60 w-60" /> : <p className="text-sm text-slate-500">Generando QR seguro...</p>}
+              </div>
+              {pairingExpiresAt ? <p className="text-center text-xs text-slate-500">Valido hasta {new Date(pairingExpiresAt).toLocaleTimeString()}</p> : null}
+              <button type="button" onClick={onRegenerateQr} disabled={saving} className="h-10 w-full rounded-xl border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Generar otro QR</button>
+              {devices.length ? <div className="space-y-2">
+                <p className="text-sm font-semibold text-slate-700">Dispositivos</p>
+                {devices.map((device) => <div key={device.deviceId} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 text-xs">
+                  <span>{device.deviceId.slice(0, 8)} · {device.enabled ? "Activo" : "Revocado"}</span>
+                  {device.enabled ? <button type="button" onClick={() => onRevokeDevice(device.deviceId)} className="font-semibold text-red-600">Revocar</button> : null}
+                </div>)}
+              </div> : null}
+            </>
+          ) : null}
         </div>
         {error ? <p className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         <div className="mt-7 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onSkip} disabled={saving} className="h-11 rounded-xl px-3 text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40">Omitir por ahora</button>
-            <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button>
+            {step < 3 ? <button type="button" onClick={onSkip} disabled={saving} className="h-11 rounded-xl px-3 text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40">Omitir por ahora</button> : null}
+            {step < 3 ? <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button> : null}
           </div>
           {step < 2 ? (
             <button type="button" onClick={onNext} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500">Siguiente</button>
-          ) : (
+          ) : step === 2 ? (
             <button type="button" onClick={onSave} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">{saving ? "Protegiendo..." : "Guardar y continuar"}</button>
-          )}
+          ) : <button type="button" onClick={onFinish} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">Finalizar</button>}
         </div>
       </div>
     </div>
@@ -261,6 +292,9 @@ export function LocalWorkspaceProvider({
   const [configStep, setConfigStep] = useState(0)
   const [configValues, setConfigValues] = useState<InscreenConfigValues>(EMPTY_INSCREEN_CONFIG)
   const [savingConfig, setSavingConfig] = useState(false)
+  const [qrDataUrl, setQrDataUrl] = useState("")
+  const [pairingExpiresAt, setPairingExpiresAt] = useState("")
+  const [providerDevices, setProviderDevices] = useState<Array<{ deviceId: string; enabled: boolean; createdAt: string }>>([])
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
@@ -457,6 +491,30 @@ export function LocalWorkspaceProvider({
     return true
   }
 
+  const loadProviderDevices = async () => {
+    const response = await fetch("/api/inscreen/provider/devices", { cache: "no-store" })
+    const payload = await response.json().catch(() => null) as { devices?: Array<{ deviceId: string; enabled: boolean; createdAt: string }> } | null
+    if (response.ok) setProviderDevices(payload?.devices ?? [])
+  }
+
+  const createPairingQr = async () => {
+    setSavingConfig(true)
+    setError("")
+    try {
+      const response = await fetch("/api/inscreen/provider/pairing/create", { method: "POST" })
+      const payload = await response.json().catch(() => null) as { pairingUri?: string; expiresAt?: string; error?: string } | null
+      if (!response.ok || !payload?.pairingUri || !payload.expiresAt) throw new Error(payload?.error || "No se pudo crear el QR.")
+      setQrDataUrl(await QRCode.toDataURL(payload.pairingUri, { width: 480, margin: 2, errorCorrectionLevel: "M" }))
+      setPairingExpiresAt(payload.expiresAt)
+      await loadProviderDevices()
+    } catch (pairingError) {
+      setQrDataUrl("")
+      setError(pairingError instanceof Error ? pairingError.message : "No se pudo crear el QR.")
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
   const saveInscreenConfiguration = async () => {
     if (!rootHandle || !nextConfigStep()) return
     try {
@@ -475,9 +533,9 @@ export function LocalWorkspaceProvider({
       const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
       if (!unlocked.ok) throw new Error(unlocked.error)
       setInscreenConfigurationSkipped(false)
-      setConfigValues(EMPTY_INSCREEN_CONFIG)
       setReadyWorkspaceHandle(rootHandle)
-      setBootState("ready")
+      setConfigStep(3)
+      await createPairingQr()
     } catch (configError) {
       setError(configError instanceof Error ? configError.message : "No se pudo guardar la configuracion InScreen.")
     } finally {
@@ -494,6 +552,29 @@ export function LocalWorkspaceProvider({
     setError("")
     setReadyWorkspaceHandle(rootHandle)
     setBootState("ready")
+  }
+
+  const finishInscreenConfiguration = () => {
+    setConfigValues(EMPTY_INSCREEN_CONFIG)
+    setQrDataUrl("")
+    setPairingExpiresAt("")
+    setError("")
+    setBootState("ready")
+  }
+
+  const revokeProviderDevice = async (deviceId: string) => {
+    setSavingConfig(true)
+    setError("")
+    try {
+      const response = await fetch(`/api/inscreen/provider/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" })
+      const payload = await response.json().catch(() => null) as { error?: string } | null
+      if (!response.ok) throw new Error(payload?.error || "No se pudo revocar el dispositivo.")
+      await loadProviderDevices()
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "No se pudo revocar el dispositivo.")
+    } finally {
+      setSavingConfig(false)
+    }
   }
 
   const value = useMemo<LocalWorkspaceContextValue>(
@@ -527,6 +608,12 @@ export function LocalWorkspaceProvider({
           onNext={() => { nextConfigStep() }}
           onSave={() => { void saveInscreenConfiguration() }}
           onSkip={skipInscreenConfiguration}
+          qrDataUrl={qrDataUrl}
+          pairingExpiresAt={pairingExpiresAt}
+          devices={providerDevices}
+          onRegenerateQr={() => { void createPairingQr() }}
+          onRevokeDevice={(deviceId) => { void revokeProviderDevice(deviceId) }}
+          onFinish={finishInscreenConfiguration}
         />
       ) : null}
       {enabled && bootState !== "ready" && bootState !== "checking" && bootState !== "configure" ? (

@@ -13,6 +13,11 @@ export type InscreenUserConfig = {
   R2_ENDPOINT: string
 }
 
+export type InscreenR2Config = Pick<
+  InscreenUserConfig,
+  "R2_BUCKET_NAME" | "R2_ACCESS_KEY_ID" | "R2_SECRET_ACCESS_KEY" | "R2_ENDPOINT"
+>
+
 const runtimeConfig = new AsyncLocalStorage<InscreenUserConfig>()
 const CONFIG_FIELDS = [
   "GROQ_API_KEY",
@@ -36,8 +41,34 @@ export function normalizeInscreenUserConfig(value: unknown): InscreenUserConfig 
     if (!config[field]) throw new Error(`Falta configurar ${field}.`)
   }
   const endpoint = new URL(config.R2_ENDPOINT)
-  if (endpoint.protocol !== "https:") throw new Error("R2_ENDPOINT debe usar HTTPS.")
+  if (
+    endpoint.protocol !== "https:" ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.port ||
+    endpoint.pathname !== "/" ||
+    endpoint.search ||
+    endpoint.hash ||
+    !/^[a-z0-9]{32}(?:\.(?:eu|fedramp))?\.r2\.cloudflarestorage\.com$/i.test(endpoint.hostname)
+  ) {
+    throw new Error("R2_ENDPOINT debe ser un endpoint S3 oficial de Cloudflare R2.")
+  }
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(config.R2_BUCKET_NAME)) {
+    throw new Error("R2_BUCKET_NAME invalido.")
+  }
+  for (const field of CONFIG_FIELDS) {
+    if (Buffer.byteLength(config[field], "utf8") > 4096) throw new Error(`${field} es demasiado largo.`)
+  }
   return config
+}
+
+export function getInscreenR2Config(config: InscreenUserConfig): InscreenR2Config {
+  return {
+    R2_BUCKET_NAME: config.R2_BUCKET_NAME,
+    R2_ACCESS_KEY_ID: config.R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY: config.R2_SECRET_ACCESS_KEY,
+    R2_ENDPOINT: config.R2_ENDPOINT,
+  }
 }
 
 export function sealInscreenUserConfig(value: unknown) {
@@ -106,6 +137,14 @@ export async function withInscreenUserConfig(request: Request, handler: () => Pr
       { status: 428 }
     )
   }
+}
+
+export function withInscreenRuntimeConfig<T>(config: InscreenUserConfig | InscreenR2Config, handler: () => T) {
+  return runtimeConfig.run({
+    GROQ_API_KEY: "",
+    MARKER_API: "",
+    ...config,
+  }, handler)
 }
 
 export function getInscreenRuntimeSecret(name: keyof InscreenUserConfig) {
