@@ -39,19 +39,34 @@ R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 ```
 
-### Lectura desde la APK
+### Vinculacion de la APK sin base central
 
-El despliegue funciona como intermediario de solo lectura entre la APK y R2. Configura
-en Vercel las credenciales R2 anteriores y un token independiente de al menos 32 bytes:
+El despliegue funciona como intermediario sin estado entre cada APK y el R2 de su
+propietario. No se guardan usuarios ni credenciales en Neon y no se crean variables de
+entorno por persona. En Vercel configura una unica semilla adicional y estable:
 
 ```bash
-INSCREEN_PROVIDER_TOKEN=un-token-aleatorio-largo-y-exclusivo-para-la-apk
-INSCREEN_PROVIDER_ACCOUNT_EMAIL=local@app.local
+INSCREEN_PROVIDER_CAPSULE_SECRET=otra-cadena-aleatoria-de-al-menos-32-caracteres
 ```
 
-`INSCREEN_PROVIDER_ACCOUNT_EMAIL` es opcional y por defecto usa `local@app.local`, que
-es la cuenta del modo de almacenamiento local. El token del proveedor no es una
-credencial de R2 y debe enviarse en `Authorization: Bearer ...`.
+Al terminar los pasos Groq, Marker y R2, la web muestra un cuarto paso con un QR valido
+durante cinco minutos. El QR contiene un paquete AES-256-GCM opaco, nunca las claves
+legibles. Android lo canjea una sola vez y recibe por HTTPS la clave Groq y una capsula
+R2 propia del dispositivo. Groq queda protegido con Android Keystore; las claves R2
+permanecen dentro de la capsula y solo se abren en memoria en Vercel.
+
+El estado se distribuye en el R2 de cada usuario:
+
+```text
+manifests/inscreen/provider/pairings/<pairingId>.json
+manifests/inscreen/provider/devices/<deviceId>.json
+```
+
+Cada consulta envia la capsula en `Authorization: Bearer ...`. El proveedor obtiene de
+ella el R2 correcto, verifica en ese mismo R2 que el dispositivo siga activo y devuelve
+los TXT. La pantalla final permite generar otro QR y revocar telefonos individualmente.
+Cambiar `INSCREEN_PROVIDER_CAPSULE_SECRET` invalida todas las vinculaciones; cambiar las
+credenciales R2 exige revocar y volver a vincular los dispositivos.
 
 Las rutas disponibles son:
 
@@ -95,12 +110,8 @@ nombre y el contenido exacto del TXT guardado en R2:
 Sin resultados se devuelve `{ "ok": true, "hayNuevos": false, "archivos": [], "nuevaEtapa": null }`; cualquier error devuelve
 `{ "ok": false, "archivos": [] }` con el codigo HTTP correspondiente.
 
-Ejemplo:
-
-```bash
-curl -H "Authorization: Bearer $INSCREEN_PROVIDER_TOKEN" \
-  "https://v0-lunas-moradas.vercel.app/api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6"
-```
+Las rutas no aceptan ya un token global compilado. Una APK sin vincular responde
+`provider_not_configured` y debe escanear el QR del despliegue que genero su configuracion.
 
 ## Configuracion personal de InScreen
 

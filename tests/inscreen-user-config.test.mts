@@ -16,7 +16,7 @@ const config = {
   R2_BUCKET_NAME: "bucket",
   R2_ACCESS_KEY_ID: "access-key",
   R2_SECRET_ACCESS_KEY: "r2-secret",
-  R2_ENDPOINT: "https://account.r2.cloudflarestorage.com",
+  R2_ENDPOINT: "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
 }
 
 test("User.InScreen cifra todas las credenciales y solo abre con la semilla del despliegue", () => {
@@ -68,7 +68,7 @@ test("la Mitad B se entrega como cookie HttpOnly y solo el servidor puede unir a
   }
 })
 
-test("el arranque busca las dos mitades y ofrece un asistente claro de tres pasos", () => {
+test("el arranque busca las dos mitades y ofrece vinculacion por QR como cuarto paso", () => {
   const provider = readFileSync(new URL("../components/local-workspace-provider.tsx", import.meta.url), "utf8")
   const client = readFileSync(new URL("../lib/local-workspace-client.ts", import.meta.url), "utf8")
   const r2 = readFileSync(new URL("../lib/r2.ts", import.meta.url), "utf8")
@@ -76,7 +76,9 @@ test("el arranque busca las dos mitades y ofrece un asistente claro de tres paso
   assert.match(client, /User\.InScreen/)
   assert.match(client, /version === 2/)
   assert.doesNotMatch(client, /persistInscreenBrowserHalf/)
-  assert.match(provider, /Paso \{step \+ 1\} de 3/)
+  assert.match(provider, /Paso \{step \+ 1\} de 4/)
+  assert.match(provider, /provider\/pairing\/create/)
+  assert.match(provider, /QRCode\.toDataURL/)
   assert.match(provider, /bg-white/)
   assert.match(provider, /config\/seal/)
   assert.match(provider, /config\/unlock/)
