@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Pin, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
+import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Pin, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus, QrCode } from "lucide-react"
+import QRCode from "qrcode"
 import { useTheme } from "next-themes"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
@@ -1288,6 +1289,9 @@ export function SubjectWheel({
   const [isPreparingPermanentDelete, setIsPreparingPermanentDelete] = useState(false)
   const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false)
   const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
+  const [subjectExportQr, setSubjectExportQr] = useState("")
+  const [subjectExportTabName, setSubjectExportTabName] = useState("")
+  const [isExportingSubjects, setIsExportingSubjects] = useState(false)
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const hasUserChangedWorkspaceStateRef = useRef(false)
@@ -1326,6 +1330,29 @@ export function SubjectWheel({
       .filter((subject): subject is CustomSubject => Boolean(subject))
   }, [activeWorkspaceTab, builtInVisibleSubjects, customSubjects])
   const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
+
+  const exportActiveWorkspaceTab = useCallback(async () => {
+    if (visibleSubjects.length === 0 || isExportingSubjects) return
+    setIsExportingSubjects(true)
+    try {
+      const response = await fetch("/api/inscreen/provider/subject-export/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tabName: activeWorkspaceTab.name,
+          subjects: visibleSubjects.map(({ id, name, color }) => ({ id, name, color })),
+        }),
+      })
+      const payload = await response.json().catch(() => null) as { exportUri?: string; expiresAt?: string; error?: string } | null
+      if (!response.ok || !payload?.exportUri) throw new Error(payload?.error || "No se pudo crear el QR de exportacion.")
+      setSubjectExportTabName(activeWorkspaceTab.name)
+      setSubjectExportQr(await QRCode.toDataURL(payload.exportUri, { width: 480, margin: 2, errorCorrectionLevel: "M" }))
+    } catch (error) {
+      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo crear el QR de exportacion.")
+    } finally {
+      setIsExportingSubjects(false)
+    }
+  }, [activeWorkspaceTab.name, isExportingSubjects, visibleSubjects])
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
@@ -7294,6 +7321,17 @@ export function SubjectWheel({
           </div>
 
           <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
+                aria-label="Exportar materias"
+                title="Exportar materias de la pestaña al APK"
+                onClick={() => void exportActiveWorkspaceTab()}
+                disabled={isExportingSubjects || visibleSubjects.length === 0}
+              >
+                {isExportingSubjects ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -7342,6 +7380,23 @@ export function SubjectWheel({
           </div>
         </div>
       </header>
+
+      <Dialog open={Boolean(subjectExportQr)} onOpenChange={(open) => { if (!open) setSubjectExportQr("") }}>
+        <DialogContent className="max-w-sm rounded-3xl border-border bg-card">
+          <DialogHeader>
+            <DialogTitle>Exportar materias</DialogTitle>
+            <DialogDescription>
+              Escaneá este QR desde InScreen Android para importar las materias de “{subjectExportTabName}”. El QR es temporal y de un solo uso.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-center rounded-2xl bg-white p-4">
+            <img src={subjectExportQr} alt="QR para exportar materias al APK" className="h-64 w-64" />
+          </div>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cerrar</Button></DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Main Content */}
       <main className="absolute inset-0 overflow-y-auto px-4 py-12 sm:px-6">

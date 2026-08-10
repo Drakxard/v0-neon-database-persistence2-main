@@ -12,6 +12,8 @@ import { downloadR2Object, listR2ObjectsByPrefix, uploadR2Object } from "@/lib/r
 const PAIRING_PREFIX = "manifests/inscreen/provider/pairings"
 const DEVICE_PREFIX = "manifests/inscreen/provider/devices"
 const PAIRING_TTL_MS = 5 * 60 * 1000
+const SUBJECT_EXPORT_PREFIX = "manifests/inscreen/provider/subject-exports"
+const SUBJECT_EXPORT_TTL_MS = 5 * 60 * 1000
 
 type BootstrapPayload = {
   version: 1
@@ -28,6 +30,21 @@ type ProviderPayload = {
   deviceId: string
   issuedAt: string
   r2: InscreenR2Config
+}
+
+export type SubjectExportItem = {
+  id: string
+  name: string
+  color: string
+}
+
+type SubjectExportState = {
+  version: 1
+  exportId: string
+  tabName: string
+  subjects: SubjectExportItem[]
+  expiresAt: string
+  usedAt: string | null
 }
 
 type PairingState = {
@@ -50,7 +67,7 @@ export type ProviderDevice = {
   revokedAt: string | null
 }
 
-function secretFor(purpose: "bootstrap" | "provider") {
+function secretFor(purpose: "bootstrap" | "provider" | "subject-export") {
   const secret = String(process.env.INSCREEN_PROVIDER_CAPSULE_SECRET || "").trim()
   if (Buffer.byteLength(secret, "utf8") < 32) {
     throw new Error("INSCREEN_PROVIDER_CAPSULE_SECRET debe tener al menos 32 caracteres.")
@@ -58,7 +75,7 @@ function secretFor(purpose: "bootstrap" | "provider") {
   return createHash("sha256").update(`inscreen:${purpose}:v1\0`).update(secret).digest()
 }
 
-function seal(prefix: "ipb1" | "ipc1", purpose: "bootstrap" | "provider", payload: unknown) {
+function seal(prefix: "ipb1" | "ipc1" | "ise1", purpose: "bootstrap" | "provider" | "subject-export", payload: unknown) {
   const iv = randomBytes(12)
   const cipher = createCipheriv("aes-256-gcm", secretFor(purpose), iv)
   cipher.setAAD(Buffer.from(prefix))
@@ -66,7 +83,7 @@ function seal(prefix: "ipb1" | "ipc1", purpose: "bootstrap" | "provider", payloa
   return [prefix, iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), encrypted.toString("base64url")].join(".")
 }
 
-function open<T>(token: string, prefix: "ipb1" | "ipc1", purpose: "bootstrap" | "provider"): T {
+function open<T>(token: string, prefix: "ipb1" | "ipc1" | "ise1", purpose: "bootstrap" | "provider" | "subject-export"): T {
   const [version, iv, tag, ciphertext] = String(token || "").split(".")
   if (version !== prefix || !iv || !tag || !ciphertext || token.length > 16_000) throw new Error("Credencial de proveedor invalida.")
   try {
@@ -92,6 +109,10 @@ function pairingKey(id: string) {
 
 function deviceKey(id: string) {
   return `${DEVICE_PREFIX}/${id}.json`
+}
+
+function subjectExportKey(id: string) {
+  return `${SUBJECT_EXPORT_PREFIX}/${id}.json`
 }
 
 async function readJson<T>(key: string): Promise<{ value: T; etag: string | null }> {
@@ -225,6 +246,77 @@ export async function revokeProviderDevice(config: InscreenUserConfig, deviceId:
       enabled: false,
       revokedAt: new Date().toISOString(),
     } satisfies ProviderDevice, { ifMatch: current.etag || undefined })
+  })
+}
+
+function normalizeSubjectExportItems(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    throw new ProviderPairingError(400, "La exportacion debe contener entre 1 y 100 materias.")
+  }
+  const ids = new Set<string>()
+  return value.map((item) => {
+    const candidate = item && typeof item === "object" ? item as Record<string, unknown> : {}
+    const id = String(candidate.id || "").trim()
+    const name = String(candidate.name || "").replace(/\s+/g, " ").trim()
+    const color = String(candidate.color || "").trim()
+    if (!/^[a-zA-Z0-9_-]{1,180}$/.test(id) || !name || name.length > 300 || !/^#[0-9a-fA-F]{6}$/.test(color) || ids.has(id)) {
+      throw new ProviderPairingError(400, "La exportacion contiene una materia invalida.")
+    }
+    ids.add(id)
+    return { id, name, color }
+  })
+}
+
+export async function createSubjectExport(
+  config: InscreenUserConfig,
+  tabName: string,
+  subjects: unknown,
+  origin: string,
+) {
+  const exportId = randomUUID().replaceAll("-", "")
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + SUBJECT_EXPORT_TTL_MS).toISOString()
+  const state: SubjectExportState = {
+    version: 1,
+    exportId,
+    tabName: String(tabName || "").replace(/\s+/g, " ").trim().slice(0, 200) || "Pestana",
+    subjects: normalizeSubjectExportItems(subjects),
+    expiresAt,
+    usedAt: null,
+  }
+  const r2 = getInscreenR2Config(config)
+  await withInscreenRuntimeConfig(r2, () => writeJson(subjectExportKey(exportId), state, { ifNoneMatch: "*" }))
+  const token = seal("ise1", "subject-export", {
+    version: 1,
+    exportId,
+    expiresAt,
+    r2,
+  })
+  return {
+    exportUri: `inscreen://subject-export?${new URLSearchParams({ base_url: origin, token }).toString()}`,
+    expiresAt,
+    subjectCount: state.subjects.length,
+  }
+}
+
+export async function redeemSubjectExport(token: string) {
+  const payload = open<{ version: 1; exportId: string; expiresAt: string; r2: InscreenR2Config }>(token, "ise1", "subject-export")
+  if (payload.version !== 1 || !validId(payload.exportId)) throw new ProviderPairingError(400, "QR de materias invalido.")
+  if (Date.parse(payload.expiresAt) <= Date.now()) throw new ProviderPairingError(410, "El QR de materias vencio.")
+
+  return withInscreenRuntimeConfig(payload.r2, async () => {
+    let current: { value: SubjectExportState; etag: string | null }
+    try {
+      current = await readJson<SubjectExportState>(subjectExportKey(payload.exportId))
+    } catch (error) {
+      if (error instanceof RemoteFileNotFoundError) throw new ProviderPairingError(410, "El QR de materias ya no esta disponible.")
+      throw error
+    }
+    if (current.value.usedAt || current.value.expiresAt !== payload.expiresAt) {
+      throw new ProviderPairingError(409, "El QR de materias ya fue utilizado.")
+    }
+    await writeJson(subjectExportKey(payload.exportId), { ...current.value, usedAt: new Date().toISOString() }, { ifMatch: current.etag || undefined })
+    return { version: 1, tabName: current.value.tabName, subjects: current.value.subjects }
   })
 }
 
