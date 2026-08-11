@@ -397,22 +397,37 @@ export function LocalWorkspaceProvider({
   useEffect(() => {
     if (!enabled || pathname !== "/" || bootState !== "ready" || !rootHandle || permissionState !== "granted") return
 
-    const reopenConfiguration = (event: KeyboardEvent) => {
+    const reopenConfiguration = async (event: KeyboardEvent) => {
       if (event.key !== "|") return
       const target = event.target
       if (target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']")) return
       event.preventDefault()
       setInscreenConfigurationSkipped(false)
-      setReadyWorkspaceHandle(null)
-      setReadyInscreenConfigHalf("")
       setConfigValues(EMPTY_INSCREEN_CONFIG)
-      setConfigStep(0)
+      setQrDataUrl("")
+      setPairingExpiresAt("")
       setError("")
+
+      const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
+      if (unlocked.ok) {
+        setConfigStep(3)
+        setBootState("configure")
+        await createPairingQr()
+        return
+      }
+
+      setReadyWorkspaceHandle(null)
+      setConfigStep(0)
+      setError(unlocked.error)
       setBootState("configure")
     }
 
-    window.addEventListener("keydown", reopenConfiguration)
-    return () => window.removeEventListener("keydown", reopenConfiguration)
+    const handleKeyDown = (event: KeyboardEvent) => {
+      void reopenConfiguration(event)
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
   }, [bootState, enabled, pathname, permissionState, rootHandle])
 
   const reselectWorkspace = async () => {
