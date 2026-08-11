@@ -52,8 +52,9 @@ INSCREEN_PROVIDER_CAPSULE_SECRET=otra-cadena-aleatoria-de-al-menos-32-caracteres
 Al terminar los pasos Groq, Marker y R2, la web muestra un cuarto paso con un QR valido
 durante cinco minutos. El QR contiene un paquete AES-256-GCM opaco, nunca las claves
 legibles. Android lo canjea una sola vez y recibe por HTTPS la clave Groq y una capsula
-R2 propia del dispositivo. Groq queda protegido con Android Keystore; las claves R2
-permanecen dentro de la capsula y solo se abren en memoria en Vercel.
+propia del dispositivo que contiene R2 y Marker. Groq queda protegido con Android
+Keystore; R2 y Marker permanecen cifrados dentro de la capsula y solo se abren en memoria
+en Vercel. La clave Marker nunca se devuelve como un campo legible al APK.
 
 El estado se distribuye en el R2 de cada usuario:
 
@@ -74,7 +75,13 @@ Las rutas disponibles son:
 GET /api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6
 GET /api/inscreen/provider/traducciones?materia=ecuordinarias&dia=6
 GET /api/inscreen/provider/traducciones?materia=ecuordinarias&ultimo=6.txt
+POST /api/inscreen/provider/marker-transcribe
 ```
+
+`marker-transcribe` recibe un único JPG, PNG o WebP en el campo multipart `file`, exige
+la misma cápsula Bearer y devuelve `{ ok: true, markdown }`. El límite por imagen es
+4 MiB. Una cápsula emitida antes de incluir Marker conserva acceso a las rutas R2, pero
+esta ruta responde `428` con `provider_repair_required` hasta volver a vincular el APK.
 
 `materia` es el nombre exacto de la carpeta normalizada bajo `InSreen/`, por ejemplo
 `ecuordinarias`. Se admiten materias creadas por el usuario y no solamente las del

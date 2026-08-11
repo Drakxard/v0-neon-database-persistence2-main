@@ -32,7 +32,7 @@ function sleep(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
 }
 
-export async function convertPdfPageWithDatalabMarker(params: {
+export async function convertFileWithDatalabMarker(params: {
   file: File
   apiKey?: string
   fetchImpl?: FetchLike
@@ -86,4 +86,14 @@ export async function convertPdfPageWithDatalabMarker(params: {
   }
 
   throw new DatalabMarkerError("Datalab tardo demasiado en convertir la pagina.")
+}
+
+export function convertPdfPageWithDatalabMarker(params: {
+  file: File
+  apiKey?: string
+  fetchImpl?: FetchLike
+  wait?: (milliseconds: number) => Promise<void>
+  maxPollAttempts?: number
+}) {
+  return convertFileWithDatalabMarker(params)
 }

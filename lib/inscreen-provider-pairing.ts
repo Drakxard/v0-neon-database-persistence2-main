@@ -23,6 +23,7 @@ type BootstrapPayload = {
   expiresAt: string
   r2: InscreenR2Config
   groqApiKey: string
+  markerApiKey: string
 }
 
 type ProviderPayload = {
@@ -30,6 +31,7 @@ type ProviderPayload = {
   deviceId: string
   issuedAt: string
   r2: InscreenR2Config
+  markerApiKey?: string
 }
 
 export type SubjectExportItem = {
@@ -154,6 +156,7 @@ export async function createProviderPairing(config: InscreenUserConfig, origin: 
     expiresAt,
     r2,
     groqApiKey: config.GROQ_API_KEY,
+    markerApiKey: config.MARKER_API,
   } satisfies BootstrapPayload)
   const pairingUri = `inscreen://provider-pair?${new URLSearchParams({ base_url: origin, token }).toString()}`
   return { pairingUri, expiresAt }
@@ -205,6 +208,7 @@ export async function redeemProviderPairing(token: string, installationId: strin
       deviceId: payload.deviceId,
       issuedAt: new Date().toISOString(),
       r2: payload.r2,
+      markerApiKey: String(payload.markerApiKey || "").trim(),
     } satisfies ProviderPayload)
     return { providerBaseUrl: origin, providerToken, groqApiKey: payload.groqApiKey }
   })
@@ -213,7 +217,10 @@ export async function redeemProviderPairing(token: string, installationId: strin
 export async function authorizeProviderToken(token: string, handler: () => Promise<Response>) {
   const payload = open<ProviderPayload>(token, "ipc1", "provider")
   if (payload.version !== 1 || !validId(payload.deviceId)) throw new ProviderPairingError(401, "No autorizado.")
-  return withInscreenRuntimeConfig(payload.r2, async () => {
+  return withInscreenRuntimeConfig({
+    ...payload.r2,
+    MARKER_API: String(payload.markerApiKey || "").trim(),
+  }, async () => {
     try {
       const { value } = await readJson<ProviderDevice>(deviceKey(payload.deviceId))
       if (!value.enabled || value.deviceId !== payload.deviceId) throw new ProviderPairingError(401, "Dispositivo revocado.")

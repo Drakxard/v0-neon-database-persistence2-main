@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { convertPdfPageWithDatalabMarker, getDatalabMarkerApiKey } from "../lib/datalab-marker.ts"
+import { convertFileWithDatalabMarker, convertPdfPageWithDatalabMarker, getDatalabMarkerApiKey } from "../lib/datalab-marker.ts"
 
 const pagePdf = new File(["%PDF-1.4"], "pagina-2.pdf", { type: "application/pdf" })
 
@@ -29,6 +29,28 @@ test("envia la pagina a Datalab y espera el markdown", async () => {
   assert.equal(requests[0].url, "https://www.datalab.to/api/v1/convert")
   assert.equal(new Headers(requests[0].init?.headers).get("X-API-Key"), "test-key")
   assert.equal(requests[1].url, "https://www.datalab.to/api/v1/convert/request-1")
+})
+
+test("acepta una imagen directamente sin envolverla en PDF", async () => {
+  const image = new File(["jpeg"], "nota.jpg", { type: "image/jpeg" })
+  let submittedBody: FormData | null = null
+  const markdown = await convertFileWithDatalabMarker({
+    file: image,
+    apiKey: "key",
+    wait: async () => undefined,
+    fetchImpl: async (input, init) => {
+      if (String(input).endsWith("/convert")) {
+        submittedBody = init?.body as FormData
+        return Response.json({ success: true, request_check_url: "https://www.datalab.to/api/v1/convert/image-1" })
+      }
+      return Response.json({ status: "complete", success: true, markdown: "Texto" })
+    },
+  })
+  const submittedFile = (submittedBody as FormData | null)?.get("file") as File | null
+  assert.equal(submittedFile?.name, "nota.jpg")
+  assert.equal(submittedFile?.type, "image/jpeg")
+  assert.equal(submittedFile?.size, image.size)
+  assert.equal(markdown, "Texto")
 })
 
 test("informa clave ausente, fallo remoto y agotamiento de espera", async () => {
