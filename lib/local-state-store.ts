@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs"
 import path from "node:path"
+import type { SubjectShortcuts } from "@/lib/study-types"
 
 type LocalStateShape = {
   aiPrompt: string
@@ -19,12 +20,7 @@ type LocalStateShape = {
     created_at: string
     updated_at: string
   }>
-  subjectShortcuts: Record<string, {
-    subjectId: string
-    eFich: string | null
-    figma: string | null
-    nlm: string | null
-  }>
+  subjectShortcuts: Record<string, SubjectShortcuts>
   subjectOpenCounts: Record<string, {
     id: number
     week_number: number

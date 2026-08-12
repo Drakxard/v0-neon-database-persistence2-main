@@ -83,7 +83,7 @@ import type {
   SubjectMaterialSynthesisRecord,
   SubjectMaterialContainer,
   SubjectDayMaterialType,
-  SubjectShortcutKey,
+  SubjectShortcutButton,
   SubjectShortcuts,
   SubjectSynthesisDerivedSummary,
   SubjectSynthesisRecord,
@@ -897,8 +897,8 @@ function mergeSubjectDayMaterials(...materialGroups: SubjectDayMaterial[][]) {
   return sortSubjectDayMaterials(Array.from(materialMap.values()))
 }
 
-function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutKey: SubjectShortcutKey) {
-  return shortcutKey === "e_fich" ? shortcuts.eFich : shortcutKey === "figma" ? shortcuts.figma : shortcuts.nlm
+function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutId: string) {
+  return shortcuts.buttons.find((button) => button.id === shortcutId)?.url ?? null
 }
 
 function buildMaterialRegionPresentationHref(material: SubjectDayMaterial, subjectName: string, tagIds: number[]) {
@@ -1973,9 +1973,11 @@ export function SubjectWheel({
   const [isSavingLink, setIsSavingLink] = useState(false)
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false)
   const [shortcutDraft, setShortcutDraft] = useState("")
-  const [shortcutDialogKey, setShortcutDialogKey] = useState<SubjectShortcutKey | null>(null)
+  const [shortcutDialogButton, setShortcutDialogButton] = useState<SubjectShortcutButton | null>(null)
   const [shortcutDialogMode, setShortcutDialogMode] = useState<"create" | "edit">("create")
   const [isSavingShortcut, setIsSavingShortcut] = useState(false)
+  const [isShortcutNameDialogOpen, setIsShortcutNameDialogOpen] = useState(false)
+  const [shortcutNameDraft, setShortcutNameDraft] = useState("")
   const [isContinueOpen, setIsContinueOpen] = useState(false)
   const [isContinueLoading, setIsContinueLoading] = useState(false)
   const [continueError, setContinueError] = useState("")
@@ -2241,6 +2243,8 @@ export function SubjectWheel({
     loadPracticeEntries: loadSubjectPracticeEntries,
     loadSubjectShortcuts: loadSubjectShortcutsData,
     saveSubjectShortcut: persistSubjectShortcut,
+    addSubjectShortcut: persistNewSubjectShortcut,
+    removeSubjectShortcut: persistRemovedSubjectShortcut,
   } = useSubjectEntries()
   const { isUploadingMaterialType, uploadMaterials } = useMaterialUploads()
   const materialTags = useMaterialTags({
@@ -3254,7 +3258,7 @@ export function SubjectWheel({
     setSubjectShortcuts(getEmptySubjectShortcuts())
     setIsShortcutDialogOpen(false)
     setShortcutDraft("")
-    setShortcutDialogKey(null)
+    setShortcutDialogButton(null)
     setShortcutDialogMode("create")
     setIsSavingShortcut(false)
     setPracticeSectionView("theory")
@@ -4718,27 +4722,26 @@ export function SubjectWheel({
   const closeShortcutDialog = () => {
     setIsShortcutDialogOpen(false)
     setShortcutDraft("")
-    setShortcutDialogKey(null)
+    setShortcutDialogButton(null)
     setShortcutDialogMode("create")
   }
 
-  const openShortcutDialog = (shortcutKey: SubjectShortcutKey, mode: "create" | "edit") => {
-    const currentUrl = getShortcutUrl(subjectShortcuts, shortcutKey) ?? ""
-    setShortcutDialogKey(shortcutKey)
+  const openShortcutDialog = (button: SubjectShortcutButton, mode: "create" | "edit") => {
+    setShortcutDialogButton(button)
     setShortcutDialogMode(mode)
-    setShortcutDraft(currentUrl)
+    setShortcutDraft(button.url ?? "")
     setIsShortcutDialogOpen(true)
   }
 
   const saveSubjectShortcut = async () => {
     const subjectId = activeShortcutSubject?.id
-    if (!subjectId || !shortcutDialogKey) return
+    if (!subjectId || !shortcutDialogButton) return
 
     setIsSavingShortcut(true)
     try {
       await persistSubjectShortcut({
         subjectId,
-        shortcutKey: shortcutDialogKey,
+        id: shortcutDialogButton.id,
         url: shortcutDraft.trim(),
       })
       closeShortcutDialog()
@@ -4757,12 +4760,12 @@ export function SubjectWheel({
     }
   }
 
-  const handleShortcutPointerDown = (shortcutKey: SubjectShortcutKey) => {
+  const handleShortcutPointerDown = (button: SubjectShortcutButton) => {
     shouldSuppressShortcutClickRef.current = false
     clearShortcutLongPressTimer()
     shortcutLongPressTimerRef.current = window.setTimeout(() => {
       shouldSuppressShortcutClickRef.current = true
-      openShortcutDialog(shortcutKey, getShortcutUrl(subjectShortcuts, shortcutKey) ? "edit" : "create")
+      openShortcutDialog(button, button.url ? "edit" : "create")
       shortcutLongPressTimerRef.current = null
     }, 700)
   }
@@ -4776,19 +4779,45 @@ export function SubjectWheel({
     shouldSuppressShortcutClickRef.current = false
   }
 
-  const handleShortcutClick = (shortcutKey: SubjectShortcutKey) => {
+  const handleShortcutClick = (button: SubjectShortcutButton) => {
     if (shouldSuppressShortcutClickRef.current) {
       shouldSuppressShortcutClickRef.current = false
       return
     }
 
-    const url = getShortcutUrl(subjectShortcuts, shortcutKey)
+    const url = button.url
     if (url) {
       window.open(url, "_blank", "noopener,noreferrer")
       return
     }
 
-    openShortcutDialog(shortcutKey, "create")
+    openShortcutDialog(button, "create")
+  }
+
+  const createSubjectShortcut = async () => {
+    const subjectId = activeShortcutSubject?.id
+    const label = shortcutNameDraft.trim()
+    if (!subjectId || !label) return
+    setIsSavingShortcut(true)
+    try {
+      await persistNewSubjectShortcut({ subjectId, label })
+      setIsShortcutNameDialogOpen(false)
+      setShortcutNameDraft("")
+    } catch (error) {
+      setEntriesError(error instanceof Error ? error.message : "No se pudo crear el acceso directo.")
+    } finally { setIsSavingShortcut(false) }
+  }
+
+  const deleteCurrentSubjectShortcut = async () => {
+    const subjectId = activeShortcutSubject?.id
+    if (!subjectId || !shortcutDialogButton) return
+    setIsSavingShortcut(true)
+    try {
+      await persistRemovedSubjectShortcut({ subjectId, id: shortcutDialogButton.id })
+      closeShortcutDialog()
+    } catch (error) {
+      setEntriesError(error instanceof Error ? error.message : "No se pudo borrar el acceso directo.")
+    } finally { setIsSavingShortcut(false) }
   }
 
   const handleCronogramaButtonClick = useCallback(async () => {
@@ -8244,20 +8273,16 @@ export function SubjectWheel({
                   )}
                   {currentSubject ? (
                     <div className="ml-auto flex shrink-0 items-center gap-1">
-                      {([
-                        { key: "e_fich" as const, label: "E-Fich" },
-                        { key: "figma" as const, label: "Figma" },
-                        { key: "nlm" as const, label: "nlm" },
-                      ]).map((shortcut) => {
-                        const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                      {subjectShortcuts.buttons.map((shortcut) => {
+                        const url = shortcut.url
                         const commonProps = {
-                          onPointerDown: () => handleShortcutPointerDown(shortcut.key),
+                          onPointerDown: () => handleShortcutPointerDown(shortcut),
                           onPointerUp: handleShortcutPointerUp,
                           onPointerLeave: handleShortcutPointerCancel,
                           onPointerCancel: handleShortcutPointerCancel,
                         }
                         return url && !isSavingShortcut && !isSubjectShortcutsLoading ? (
-                          <Button key={shortcut.key} asChild variant="outline" className="h-8 px-2 text-[0.68rem] sm:text-xs">
+                          <Button key={shortcut.id} asChild variant="outline" className="h-8 px-2 text-[0.68rem] sm:text-xs">
                             <a
                               href={url}
                               target="_blank"
@@ -8275,18 +8300,29 @@ export function SubjectWheel({
                           </Button>
                         ) : (
                           <Button
-                            key={shortcut.key}
+                            key={shortcut.id}
                             type="button"
                             variant="outline"
                             disabled={isSavingShortcut || isSubjectShortcutsLoading}
                             className="h-8 px-2 text-[0.68rem] text-muted-foreground sm:text-xs"
-                            onClick={() => handleShortcutClick(shortcut.key)}
+                            onClick={() => handleShortcutClick(shortcut)}
                             {...commonProps}
                           >
                             {shortcut.label}
                           </Button>
                         )
                       })}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-8 w-8 px-0 text-base"
+                        aria-label="Agregar acceso directo"
+                        title="Agregar acceso directo"
+                        disabled={isSavingShortcut || isSubjectShortcutsLoading}
+                        onClick={() => { setShortcutNameDraft(""); setIsShortcutNameDialogOpen(true) }}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
                     </div>
                   ) : null}
                   <button
@@ -9424,7 +9460,7 @@ export function SubjectWheel({
               <div className="space-y-1">
                 <DialogTitle>
                   {shortcutDialogMode === "edit" ? "Editar" : "Agregar"}{" "}
-                  {shortcutDialogKey === "figma" ? "Figma" : "E-Fich"}
+                  {shortcutDialogButton?.label}
                 </DialogTitle>
                 <DialogDescription>
                   Este enlace queda guardado para toda la materia en el cursado.
@@ -9452,12 +9488,32 @@ export function SubjectWheel({
           </div>
 
           <DialogFooter>
+            <Button variant="destructive" onClick={() => void deleteCurrentSubjectShortcut()} disabled={isSavingShortcut}>
+              Borrar
+            </Button>
             <Button variant="outline" onClick={closeShortcutDialog} disabled={isSavingShortcut}>
               Cancelar
             </Button>
             <Button onClick={() => void saveSubjectShortcut()} disabled={isSavingShortcut || !shortcutDraft.trim()}>
               {isSavingShortcut ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isShortcutNameDialogOpen} onOpenChange={(open) => { if (!open && !isSavingShortcut) setIsShortcutNameDialogOpen(false) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Nuevo acceso directo</DialogTitle>
+            <DialogDescription>Elegí el nombre que se mostrará en el botón de esta materia.</DialogDescription>
+          </DialogHeader>
+          <Input value={shortcutNameDraft} onChange={(event) => setShortcutNameDraft(event.target.value)} placeholder="Nombre" autoFocus />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsShortcutNameDialogOpen(false)} disabled={isSavingShortcut}>Cancelar</Button>
+            <Button onClick={() => void createSubjectShortcut()} disabled={isSavingShortcut || !shortcutNameDraft.trim()}>
+              {isSavingShortcut ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Crear
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -9902,11 +9958,8 @@ export function SubjectWheel({
               </div>
               <div className="flex items-center gap-2">
                 {activePracticeShortcutSubject
-                  ? ([
-                      { key: "e_fich" as const, label: "E-Fich" },
-                      { key: "figma" as const, label: "Figma" },
-                    ]).map((shortcut) => {
-                      const url = getShortcutUrl(subjectShortcuts, shortcut.key)
+                  ? subjectShortcuts.buttons.filter((button) => button.label === "E-Fich" || button.label === "Figma").map((shortcut) => {
+                      const url = shortcut.url
                       const title = isSubjectShortcutsLoading
                         ? `Cargando ${shortcut.label}`
                         : url
@@ -9916,7 +9969,7 @@ export function SubjectWheel({
                       if (url && !isSavingShortcut && !isSubjectShortcutsLoading) {
                         return (
                           <Button
-                            key={shortcut.key}
+                            key={shortcut.id}
                             asChild
                             variant="outline"
                             className="h-9 border-border px-3 text-xs text-foreground"
@@ -9927,7 +9980,7 @@ export function SubjectWheel({
                               href={url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                              onPointerDown={() => handleShortcutPointerDown(shortcut)}
                               onPointerUp={handleShortcutPointerUp}
                               onPointerLeave={handleShortcutPointerCancel}
                               onPointerCancel={handleShortcutPointerCancel}
@@ -9946,14 +9999,14 @@ export function SubjectWheel({
 
                       return (
                         <Button
-                          key={shortcut.key}
+                          key={shortcut.id}
                           type="button"
                           variant="outline"
-                          onPointerDown={() => handleShortcutPointerDown(shortcut.key)}
+                          onPointerDown={() => handleShortcutPointerDown(shortcut)}
                           onPointerUp={handleShortcutPointerUp}
                           onPointerLeave={handleShortcutPointerCancel}
                           onPointerCancel={handleShortcutPointerCancel}
-                          onClick={() => handleShortcutClick(shortcut.key)}
+                          onClick={() => handleShortcutClick(shortcut)}
                           disabled={isSavingShortcut || isSubjectShortcutsLoading}
                           className="h-9 border-border px-3 text-xs text-muted-foreground"
                           aria-label={shortcut.label}

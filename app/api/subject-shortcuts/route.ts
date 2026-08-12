@@ -1,181 +1,118 @@
-import { getLegacyDatabase } from "@/lib/db"
-import { requireSql } from "@/lib/db"
-import { NextResponse } from "next/server"
-
+import { getLegacyDatabase, requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { readLocalState, updateLocalState } from "@/lib/local-state-store"
+import { getDefaultSubjectShortcuts } from "@/lib/subject-shortcuts"
 import { parseRequiredString } from "@/lib/server/request-parsing"
 import { isLocalStorageMode } from "@/lib/storage-mode"
+import type { SubjectShortcutButton, SubjectShortcuts } from "@/lib/study-types"
+import { NextResponse } from "next/server"
 
 export const runtime = "nodejs"
 
 const sql = getLegacyDatabase()
 
-type ShortcutKey = "e_fich" | "figma" | "nlm"
+type ShortcutRow = { id: number; label: string; url: string | null; order_index: number }
 
-type ShortcutRow = {
-  subject_id: string
-  shortcut_key: ShortcutKey
-  url: string
+function badRequest(message: string) { return NextResponse.json({ error: message }, { status: 400 }) }
+function isMissingTable(error: unknown) { return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01") }
+function toResponse(subjectId: string, rows: ShortcutRow[]): SubjectShortcuts {
+  return { subjectId, buttons: rows.map((row) => ({ id: String(row.id), label: row.label, url: row.url, orderIndex: row.order_index })) }
 }
+function localFallback(subjectId: string) { return getDefaultSubjectShortcuts(subjectId) }
 
-function isMissingSubjectShortcutsTable(error: unknown) {
-  return Boolean(
-    error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "42P01"
-  )
+async function selectButtons(subjectId: string) {
+  return await requireSql(sql)`SELECT id, label, url, order_index FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} ORDER BY order_index, id` as ShortcutRow[]
 }
-
-function badRequest(message: string) {
-  return NextResponse.json({ error: message }, { status: 400 })
-}
-
-function normalizeShortcutResponse(subjectId: string, rows: ShortcutRow[]) {
-  const response = {
-    subjectId,
-    eFich: null as string | null,
-    figma: null as string | null,
-    nlm: null as string | null,
-  }
-
-  for (const row of rows) {
-    if (row.shortcut_key === "e_fich") {
-      response.eFich = row.url
-    } else if (row.shortcut_key === "figma") {
-      response.figma = row.url
-    } else if (row.shortcut_key === "nlm") {
-      response.nlm = row.url
+async function ensureRemoteButtons(subjectId: string) {
+  const initialized = await requireSql(sql)`INSERT INTO subject_shortcut_button_sets (subject_id) VALUES (${subjectId}) ON CONFLICT (subject_id) DO NOTHING RETURNING subject_id`
+  if (initialized.length > 0) {
+    const defaults = getDefaultSubjectShortcuts(subjectId).buttons
+    for (const button of defaults) {
+      await requireSql(sql)`INSERT INTO subject_shortcut_buttons (subject_id, label, url, order_index) VALUES (${subjectId}, ${button.label}, NULL, ${button.orderIndex})`
     }
   }
-
-  return response
+  return toResponse(subjectId, await selectButtons(subjectId))
 }
-
-async function selectSubjectShortcuts(subjectId: string) {
-  return await requireSql(sql)`
-    SELECT subject_id, shortcut_key, url
-    FROM subject_shortcuts
-    WHERE subject_id = ${subjectId}
-    ORDER BY shortcut_key ASC
-  ` as ShortcutRow[]
+function normalizeLocalShortcut(subjectId: string, value: unknown): SubjectShortcuts {
+  if (value && typeof value === "object" && Array.isArray((value as SubjectShortcuts).buttons)) return value as SubjectShortcuts
+  const legacy = value as { eFich?: string | null; figma?: string | null; nlm?: string | null } | undefined
+  const next = localFallback(subjectId)
+  next.buttons = next.buttons.map((button, index) => ({ ...button, url: index === 0 ? legacy?.eFich ?? null : index === 1 ? legacy?.figma ?? null : legacy?.nlm ?? null }))
+  return next
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const subjectId = parseRequiredString(searchParams.get("subjectId"))
-
+  const subjectId = parseRequiredString(new URL(request.url).searchParams.get("subjectId"))
   try {
-    const auth = await requireAuthSession()
-    if (auth.response) return auth.response
-
-    if (!subjectId) {
-      return badRequest("Missing subjectId")
-    }
-
-    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
-    if (forbidden) return forbidden
-
+    const auth = await requireAuthSession(); if (auth.response) return auth.response
+    if (!subjectId) return badRequest("Missing subjectId")
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId); if (forbidden) return forbidden
     if (isLocalStorageMode()) {
       const state = await readLocalState()
-      const shortcut = state.subjectShortcuts[subjectId]
-      return NextResponse.json(
-        shortcut ?? {
-          subjectId,
-          eFich: null,
-          figma: null,
-          nlm: null,
-        }
-      )
+      return NextResponse.json(normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId]))
     }
-
-    const rows = await selectSubjectShortcuts(subjectId)
-    return NextResponse.json(normalizeShortcutResponse(subjectId, rows))
+    return NextResponse.json(await ensureRemoteButtons(subjectId))
   } catch (error) {
     console.error("GET /api/subject-shortcuts error:", error)
-    if (isMissingSubjectShortcutsTable(error)) {
-      return NextResponse.json(normalizeShortcutResponse(subjectId, []))
-    }
+    if (isMissingTable(error)) return NextResponse.json(localFallback(subjectId))
     return NextResponse.json({ error: "Failed to fetch subject shortcuts" }, { status: 500 })
   }
 }
 
+export async function POST(request: Request) {
+  return mutate(request, async (subjectId, body) => {
+    const label = parseRequiredString(body?.label); if (!label) return badRequest("Missing label")
+    if (isLocalStorageMode()) return updateLocalState((state) => {
+      const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
+      state.subjectShortcuts[subjectId] = { ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label, url: null, orderIndex: current.buttons.length }] }
+      return state.subjectShortcuts[subjectId]
+    })
+    await ensureRemoteButtons(subjectId)
+    const rows = await selectButtons(subjectId)
+    await requireSql(sql)`INSERT INTO subject_shortcut_buttons (subject_id, label, url, order_index) VALUES (${subjectId}, ${label}, NULL, ${rows.length})`
+    return ensureRemoteButtons(subjectId)
+  })
+}
+
 export async function PUT(request: Request) {
+  return mutate(request, async (subjectId, body) => {
+    const id = parseRequiredString(body?.id); const url = parseRequiredString(body?.url)
+    if (!id) return badRequest("Missing id"); if (!url) return badRequest("Missing url")
+    let normalizedUrl: string; try { normalizedUrl = new URL(url).toString() } catch { return badRequest("Invalid url") }
+    if (isLocalStorageMode()) return updateLocalState((state) => {
+      const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
+      state.subjectShortcuts[subjectId] = { ...current, buttons: current.buttons.map((button) => button.id === id ? { ...button, url: normalizedUrl } : button) }
+      return state.subjectShortcuts[subjectId]
+    })
+    await requireSql(sql)`UPDATE subject_shortcut_buttons SET url = ${normalizedUrl}, updated_at = NOW() WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
+    return ensureRemoteButtons(subjectId)
+  })
+}
+
+export async function DELETE(request: Request) {
+  return mutate(request, async (subjectId, body) => {
+    const id = parseRequiredString(body?.id); if (!id) return badRequest("Missing id")
+    if (isLocalStorageMode()) return updateLocalState((state) => {
+      const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
+      state.subjectShortcuts[subjectId] = { ...current, buttons: current.buttons.filter((button) => button.id !== id).map((button, orderIndex) => ({ ...button, orderIndex })) }
+      return state.subjectShortcuts[subjectId]
+    })
+    await requireSql(sql)`DELETE FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
+    return ensureRemoteButtons(subjectId)
+  })
+}
+
+async function mutate(request: Request, action: (subjectId: string, body: any) => Promise<SubjectShortcuts | NextResponse>) {
   try {
-    const auth = await requireAuthSession()
-    if (auth.response) return auth.response
-
-    const body = await request.json()
-    const subjectId = parseRequiredString(body?.subjectId)
-    const shortcutKey =
-      body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" || body?.shortcutKey === "nlm"
-        ? body.shortcutKey
-        : null
-    const url = parseRequiredString(body?.url)
-
-    if (!subjectId) {
-      return badRequest("Missing subjectId")
-    }
-
-    if (!shortcutKey) {
-      return badRequest("Invalid shortcutKey")
-    }
-
-    if (!url) {
-      return badRequest("Missing url")
-    }
-
-    const forbidden = ensureSubjectAccess(auth.session!, subjectId)
-    if (forbidden) return forbidden
-
-    let normalizedUrl = url
-    try {
-      normalizedUrl = new URL(url).toString()
-    } catch {
-      return badRequest("Invalid url")
-    }
-
-    if (isLocalStorageMode()) {
-      const nextShortcut = await updateLocalState((state) => {
-        const current = state.subjectShortcuts[subjectId] ?? {
-          subjectId,
-          eFich: null,
-          figma: null,
-          nlm: null,
-        }
-
-        const updated = {
-          ...current,
-          eFich: shortcutKey === "e_fich" ? normalizedUrl : current.eFich,
-          figma: shortcutKey === "figma" ? normalizedUrl : current.figma,
-          nlm: shortcutKey === "nlm" ? normalizedUrl : current.nlm,
-        }
-        state.subjectShortcuts[subjectId] = updated
-        return updated
-      })
-      return NextResponse.json(nextShortcut)
-    }
-
-    await requireSql(sql)`
-      INSERT INTO subject_shortcuts (subject_id, shortcut_key, url)
-      VALUES (${subjectId}, ${shortcutKey}, ${normalizedUrl})
-      ON CONFLICT (subject_id, shortcut_key)
-      DO UPDATE SET
-        url = EXCLUDED.url,
-        updated_at = NOW()
-    `
-
-    const rows = await selectSubjectShortcuts(subjectId)
-    return NextResponse.json(normalizeShortcutResponse(subjectId, rows))
+    const auth = await requireAuthSession(); if (auth.response) return auth.response
+    const body = await request.json(); const subjectId = parseRequiredString(body?.subjectId)
+    if (!subjectId) return badRequest("Missing subjectId")
+    const forbidden = ensureSubjectAccess(auth.session!, subjectId); if (forbidden) return forbidden
+    const result = await action(subjectId, body)
+    return result instanceof NextResponse ? result : NextResponse.json(result)
   } catch (error) {
-    console.error("PUT /api/subject-shortcuts error:", error)
-    if (isMissingSubjectShortcutsTable(error)) {
-      return NextResponse.json(
-        { error: "Falta crear la tabla subject_shortcuts. Ejecuta scripts/014-create-subject-shortcuts.sql en Neon." },
-        { status: 503 }
-      )
-    }
+    console.error("/api/subject-shortcuts mutation error:", error)
+    if (isMissingTable(error)) return NextResponse.json({ error: "Falta ejecutar la migración de accesos directos." }, { status: 503 })
     return NextResponse.json({ error: "Failed to save subject shortcut" }, { status: 500 })
   }
 }

@@ -3,8 +3,8 @@
 import { useCallback, useRef, useState } from "react"
 
 import { fetchFeaturedReviewEntries, fetchPracticeWeekEntries } from "@/lib/entries-client"
-import { fetchSubjectShortcuts, getEmptySubjectShortcuts, updateSubjectShortcut } from "@/lib/subject-shortcuts-client"
-import type { SubjectDayEntry, SubjectShortcutKey, SubjectShortcuts } from "@/lib/study-types"
+import { createSubjectShortcut, deleteSubjectShortcut, fetchSubjectShortcuts, getEmptySubjectShortcuts, updateSubjectShortcut } from "@/lib/subject-shortcuts-client"
+import type { SubjectDayEntry, SubjectShortcuts } from "@/lib/study-types"
 import { SUBJECT_ID_TO_INDEX } from "@/lib/subjects"
 
 export function useSubjectEntries() {
@@ -114,10 +114,22 @@ export function useSubjectEntries() {
 
   const saveSubjectShortcut = useCallback(async (input: {
     subjectId: string
-    shortcutKey: SubjectShortcutKey
+    id: string
     url: string
   }) => {
     const payload = await updateSubjectShortcut(input)
+    setSubjectShortcuts(payload)
+    return payload
+  }, [])
+
+  const addSubjectShortcut = useCallback(async (input: { subjectId: string; label: string }) => {
+    const payload = await createSubjectShortcut(input)
+    setSubjectShortcuts(payload)
+    return payload
+  }, [])
+
+  const removeSubjectShortcut = useCallback(async (input: { subjectId: string; id: string }) => {
+    const payload = await deleteSubjectShortcut(input)
     setSubjectShortcuts(payload)
     return payload
   }, [])
@@ -140,5 +152,7 @@ export function useSubjectEntries() {
     loadPracticeEntries,
     loadSubjectShortcuts,
     saveSubjectShortcut,
+    addSubjectShortcut,
+    removeSubjectShortcut,
   }
 }

@@ -14,9 +14,9 @@ import type {
   StudyTag,
   SubjectMaterialSynthesisRecord,
   SubjectMaterialContainer,
-  SubjectShortcutKey,
   SubjectShortcuts,
 } from "@/lib/study-types"
+import { getDefaultSubjectShortcuts } from "@/lib/subject-shortcuts"
 import {
   normalizeTagColor,
   normalizeTagDisplayName,
@@ -442,6 +442,19 @@ async function readShortcutsManifest() {
 
 async function writeShortcutsManifest(value: Record<string, SubjectShortcuts>) {
   await writeJsonFile([MANIFESTS_DIR, "subject-shortcuts.json"], value)
+}
+
+function normalizeShortcutRecord(subjectId: string, value: unknown): SubjectShortcuts {
+  if (value && typeof value === "object" && Array.isArray((value as SubjectShortcuts).buttons)) {
+    return { ...(value as SubjectShortcuts), subjectId }
+  }
+  const legacy = value as { eFich?: string | null; figma?: string | null; nlm?: string | null } | undefined
+  const migrated = getDefaultSubjectShortcuts(subjectId)
+  migrated.buttons = migrated.buttons.map((button, index) => ({
+    ...button,
+    url: index === 0 ? legacy?.eFich ?? null : index === 1 ? legacy?.figma ?? null : legacy?.nlm ?? null,
+  }))
+  return migrated
 }
 
 async function readAiPromptValue() {
@@ -925,10 +938,8 @@ async function migrateSubjectPlan(plan: SubjectFolderMigrationPlan) {
   if (shortcutRecords.length > 0) {
     shortcuts[plan.targetStorageKey] = shortcutRecords.reduce<SubjectShortcuts>((merged, record) => ({
       subjectId: plan.targetStorageKey,
-      eFich: merged.eFich ?? record.eFich,
-      figma: merged.figma ?? record.figma,
-      nlm: merged.nlm ?? record.nlm,
-    }), { subjectId: plan.targetStorageKey, eFich: null, figma: null, nlm: null })
+      buttons: merged.buttons.length > 0 ? merged.buttons : normalizeShortcutRecord(plan.targetStorageKey, record).buttons,
+    }), { subjectId: plan.targetStorageKey, buttons: [] })
   }
   for (const source of sources) delete shortcuts[source]
 
@@ -2589,37 +2600,30 @@ export async function deleteLocalSubjectCompletion(date: string, subjectId: stri
 
 export async function getLocalSubjectShortcuts(subjectId: string) {
   const shortcuts = await readShortcutsManifest()
-  const sourceIds = await resolveLocalSubjectSourceIds(subjectId)
-  const records = [subjectId, ...sourceIds].map((id) => shortcuts[id]).filter(Boolean)
-  return records.reduce<SubjectShortcuts>((merged, record) => ({
-    subjectId,
-    eFich: merged.eFich ?? record.eFich,
-    figma: merged.figma ?? record.figma,
-    nlm: merged.nlm ?? record.nlm,
-  }), { subjectId, eFich: null, figma: null, nlm: null })
+  const storageKey = await resolveLocalSubjectStorageKey(subjectId)
+  const migrated = normalizeShortcutRecord(storageKey, shortcuts[storageKey])
+  shortcuts[storageKey] = migrated
+  await writeShortcutsManifest(shortcuts)
+  return { ...migrated, subjectId }
 }
 
-export async function saveLocalSubjectShortcut(input: {
-  subjectId: string
-  shortcutKey: SubjectShortcutKey
-  url: string
-}) {
-  const storageKey = await resolveLocalSubjectStorageKey(input.subjectId)
+async function mutateLocalSubjectShortcuts(subjectId: string, mutate: (current: SubjectShortcuts) => SubjectShortcuts) {
+  const storageKey = await resolveLocalSubjectStorageKey(subjectId)
+  const current = await getLocalSubjectShortcuts(storageKey)
   const shortcuts = await readShortcutsManifest()
-  const current = shortcuts[storageKey] ?? {
-    subjectId: storageKey,
-    eFich: null,
-    figma: null,
-    nlm: null,
-  }
-  const next = {
-    ...current,
-    [input.shortcutKey === "e_fich" ? "eFich" : input.shortcutKey === "figma" ? "figma" : "nlm"]:
-      input.url.trim() || null,
-  } satisfies SubjectShortcuts
+  const next = mutate({ ...current, subjectId: storageKey })
   shortcuts[storageKey] = next
   await writeShortcutsManifest(shortcuts)
-  return next
+  return { ...next, subjectId }
+}
+export async function createLocalSubjectShortcut(input: { subjectId: string; label: string }) {
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label: input.label.trim(), url: null, orderIndex: current.buttons.length }] }))
+}
+export async function updateLocalSubjectShortcut(input: { subjectId: string; id: string; url: string }) {
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.map((button) => button.id === input.id ? { ...button, url: input.url.trim() || null } : button) }))
+}
+export async function deleteLocalSubjectShortcut(input: { subjectId: string; id: string }) {
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.filter((button) => button.id !== input.id).map((button, orderIndex) => ({ ...button, orderIndex })) }))
 }
 
 export async function getLocalCronograma() {

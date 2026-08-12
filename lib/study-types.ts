@@ -137,13 +137,16 @@ export type VectorOverview = {
   }>
 }
 
-export type SubjectShortcutKey = "e_fich" | "figma" | "nlm"
+export type SubjectShortcutButton = {
+  id: string
+  label: string
+  url: string | null
+  orderIndex: number
+}
 
 export type SubjectShortcuts = {
   subjectId: string
-  eFich: string | null
-  figma: string | null
-  nlm: string | null
+  buttons: SubjectShortcutButton[]
 }
 
 export type DailySessionRecord = {

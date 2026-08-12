@@ -8,6 +8,7 @@ import {
   completeLocalAudioEntryUpload,
   completeLocalCronogramaUpload,
   completeLocalMaterialUpload,
+  createLocalSubjectShortcut,
   createLocalSubjectMaterialContainer,
   createLocalCronogramaUploadSession,
   createLocalEntryUploadSession,
@@ -19,6 +20,7 @@ import {
   deleteLocalMaterial,
   deleteLocalSubjectMaterialContainer,
   deleteLocalSubjectCompletion,
+  deleteLocalSubjectShortcut,
   getLocalAiPrompt,
   getLocalCronograma,
   getLocalDailySession,
@@ -43,7 +45,7 @@ import {
   saveLocalEntryAudioPosition,
   saveLocalEntryLink,
   saveLocalSubjectCompletion,
-  saveLocalSubjectShortcut,
+  updateLocalSubjectShortcut,
   saveLocalWorkspaceTabsState,
   syncLocalCronogramaPdf,
   syncLocalMaterialPdf,
@@ -264,20 +266,23 @@ async function handleLocalApiRequest(request: Request) {
       if (!subjectId) return errorResponse("Missing subjectId")
       return jsonResponse(await getLocalSubjectShortcuts(subjectId))
     }
+    const body = await parseRequestJson<{ subjectId: string; id: string; label: string; url: string }>(request)
+    const subjectId = String(body?.subjectId || "").trim()
+    if (!subjectId) return errorResponse("Missing subjectId")
+    if (method === "POST") {
+      const label = String(body?.label || "").trim()
+      if (!label) return errorResponse("Missing label")
+      return jsonResponse(await createLocalSubjectShortcut({ subjectId, label }))
+    }
     if (method === "PUT") {
-      const body = await parseRequestJson<{ subjectId: string; shortcutKey: "e_fich" | "figma" | "nlm"; url: string }>(request)
-      const shortcutKey =
-        body?.shortcutKey === "e_fich" || body?.shortcutKey === "figma" || body?.shortcutKey === "nlm"
-          ? body.shortcutKey
-          : null
-      if (!shortcutKey) return errorResponse("Invalid shortcutKey")
-      return jsonResponse(
-        await saveLocalSubjectShortcut({
-          subjectId: String(body?.subjectId || "").trim(),
-          shortcutKey,
-          url: String(body?.url || ""),
-        })
-      )
+      const id = String(body?.id || "").trim()
+      if (!id) return errorResponse("Missing id")
+      return jsonResponse(await updateLocalSubjectShortcut({ subjectId, id, url: String(body?.url || "") }))
+    }
+    if (method === "DELETE") {
+      const id = String(body?.id || "").trim()
+      if (!id) return errorResponse("Missing id")
+      return jsonResponse(await deleteLocalSubjectShortcut({ subjectId, id }))
     }
   }
 
