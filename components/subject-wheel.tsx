@@ -3391,8 +3391,7 @@ export function SubjectWheel({
   const moveWeek = async (direction: -1 | 1) => {
     await flushPendingFeaturedUpdate()
     const nextWeekNumber = dialogSelectedWeekNumber + direction
-    const maxNavigableWeekNumber = currentCalendarWeek + 1
-    if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
+    if (nextWeekNumber < 0) return
 
     if (LOCAL_STORAGE_MODE && currentSubject) {
       const cleanedCurrentWeekNumbers = await loadCurrentSubjectWeekState(currentSubject.id)
@@ -3444,8 +3443,7 @@ export function SubjectWheel({
   const openTransientNextWeekFromHold = useCallback(async () => {
     await flushPendingFeaturedUpdate()
     const nextWeekNumber = dialogSelectedWeekNumber + 1
-    const maxNavigableWeekNumber = currentCalendarWeek + 1
-    if (nextWeekNumber < 0 || nextWeekNumber > maxNavigableWeekNumber) return
+    if (nextWeekNumber < 0) return
 
     if (LOCAL_STORAGE_MODE && currentSubject) {
       const cleanedCurrentWeekNumbers = await loadCurrentSubjectWeekState(currentSubject.id)
@@ -3473,7 +3471,6 @@ export function SubjectWheel({
     setDialogDateKey(formatDateKey(nextWeekStart))
     setSelectedPracticeMaterialId(null)
   }, [
-    currentCalendarWeek,
     currentSubject,
     dialogSelectedWeekNumber,
     flushPendingFeaturedUpdate,
@@ -3559,7 +3556,7 @@ export function SubjectWheel({
   const hasNextWeeklyContent = LOCAL_STORAGE_MODE
     ? currentSubjectContentWeeks.some((weekNumber) => weekNumber > dialogSelectedWeekNumber)
     : dialogSelectedWeekNumber < currentCalendarWeek
-  const canCreateTransientNextWeek = isWeeklyAdvanceContext && dialogSelectedWeekNumber < currentCalendarWeek + 1
+  const canCreateTransientNextWeek = isWeeklyAdvanceContext
   const isPreviousWeekAdvanceDisabled = isWeeklyAdvanceContext
     ? !hasPreviousWeeklyContent
     : subjectDialogDayIndex <= 0
