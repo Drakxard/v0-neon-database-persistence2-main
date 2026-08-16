@@ -110,13 +110,6 @@
     inscreenCurrentPage: 1,
     inscreenRestoringPosition: false,
     inscreenActionToast: null,
-    inscreenPencilButton: null,
-    inscreenNoteBackdrop: null,
-    inscreenNoteTitle: null,
-    inscreenNoteBody: null,
-    inscreenNoteError: null,
-    inscreenNoteSave: null,
-    inscreenNoteDraft: null,
     inscreenAnnotationOrder: new Map(),
     inscreenAnnotationCounter: 0,
   };
@@ -179,8 +172,7 @@
     if (
       target.closest(".pdfjs-custom-modal-backdrop[data-open='true']") ||
       target.closest(".pdfjs-custom-replacement-backdrop[data-open='true']") ||
-      target.closest(".pdfjs-custom-translation-prompt-backdrop[data-open='true']") ||
-      target.closest(".pdfjs-custom-inscreen-note-backdrop[data-open='true']")
+      target.closest(".pdfjs-custom-translation-prompt-backdrop[data-open='true']")
     ) {
       return true;
     }
@@ -606,22 +598,6 @@
       }
     }
 
-    if (!state.inscreenPencilButton && canUseInscreen()) {
-      const toolbar = document.getElementById("toolbarViewerRight") || document.getElementById("toolbarViewer");
-      if (toolbar) {
-        const button = document.createElement("button");
-        button.id = "pdfjs-custom-inscreen-pencil";
-        button.className = "toolbarButton pdfjs-custom-inscreen-pencil";
-        button.type = "button";
-        button.title = "Crear lectura enfocada";
-        button.setAttribute("aria-label", "Crear lectura enfocada");
-        button.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"></path></svg>';
-        button.addEventListener("click", () => void openInscreenFocusedNote());
-        toolbar.appendChild(button);
-        state.inscreenPencilButton = button;
-      }
-    }
-
     if (!state.toastStack) {
       state.toastStack = document.createElement("div");
       state.toastStack.className = "pdfjs-custom-toast-stack";
@@ -725,33 +701,6 @@
       state.translationPromptInput.addEventListener("input", () => {
         state.translationPromptError.textContent = "";
       });
-    }
-
-    if (!state.inscreenNoteBackdrop) {
-      const backdrop = document.createElement("div");
-      backdrop.className = "pdfjs-custom-inscreen-note-backdrop";
-      backdrop.innerHTML = [
-        '<section class="pdfjs-custom-inscreen-note" role="dialog" aria-modal="true" aria-label="Lectura enfocada">',
-        '<input id="pdfjs-custom-inscreen-note-title" type="text" maxlength="300" aria-label="Titulo" />',
-        '<textarea id="pdfjs-custom-inscreen-note-body" aria-label="Texto de la lectura"></textarea>',
-        '<p id="pdfjs-custom-inscreen-note-error" role="alert"></p>',
-        '<div class="pdfjs-custom-modal-actions">',
-        '<button type="button" data-variant="ghost" id="pdfjs-custom-inscreen-note-cancel">Cancelar</button>',
-        '<button type="button" data-variant="primary" id="pdfjs-custom-inscreen-note-save">Guardar</button>',
-        "</div>",
-        "</section>",
-      ].join("");
-      backdrop.addEventListener("click", (event) => {
-        if (event.target === backdrop) closeInscreenFocusedNote();
-      });
-      backdrop.querySelector("#pdfjs-custom-inscreen-note-cancel").addEventListener("click", closeInscreenFocusedNote);
-      backdrop.querySelector("#pdfjs-custom-inscreen-note-save").addEventListener("click", () => void saveInscreenFocusedNote());
-      document.body.appendChild(backdrop);
-      state.inscreenNoteBackdrop = backdrop;
-      state.inscreenNoteTitle = backdrop.querySelector("#pdfjs-custom-inscreen-note-title");
-      state.inscreenNoteBody = backdrop.querySelector("#pdfjs-custom-inscreen-note-body");
-      state.inscreenNoteError = backdrop.querySelector("#pdfjs-custom-inscreen-note-error");
-      state.inscreenNoteSave = backdrop.querySelector("#pdfjs-custom-inscreen-note-save");
     }
 
     if (!state.busy) {

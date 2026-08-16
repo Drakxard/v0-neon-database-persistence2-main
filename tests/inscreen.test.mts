@@ -165,7 +165,7 @@ test("el contrato incluye revisión, deduplicación y subida condicional", () =>
   assert.match(viewer, /queueInscreenTranslation/)
   assert.match(viewer, /flushInscreenTranslations/)
   assert.match(viewer, /translation-batches/)
-  assert.match(viewer, /pdfjs-custom-inscreen-pencil/)
+  assert.doesNotMatch(viewer, /pdfjs-custom-inscreen-pencil/)
   assert.match(viewer, /inscreen:position:/)
   assert.match(viewer, /String\(value \?\? ""\)/)
   assert.match(viewer, /getHighlightEditorSelectedText/)
