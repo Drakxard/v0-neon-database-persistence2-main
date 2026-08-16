@@ -254,6 +254,44 @@
   background-color: color-mix(in srgb, #f97316 18%, transparent);
 }
 
+.pdfjs-custom-subject-shortcuts {
+  gap: 2px;
+  margin-inline: 2px;
+}
+
+.pdfjs-custom-subject-shortcut {
+  box-sizing: border-box;
+  min-width: 0 !important;
+  width: auto !important;
+  height: 28px !important;
+  margin: 2px 0 !important;
+  padding: 0 7px !important;
+  border-radius: 6px;
+  background-image: none !important;
+  color: var(--toolbar-icon-color, #374151);
+  font: 700 10px/28px system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pdfjs-custom-subject-shortcut::before {
+  display: none !important;
+}
+
+.pdfjs-custom-subject-shortcut:hover,
+.pdfjs-custom-subject-shortcut:focus-visible {
+  background-color: var(--button-hover-color, rgba(0, 0, 0, 0.12));
+}
+
+@media (max-width: 700px) {
+  .pdfjs-custom-subject-shortcut {
+    max-width: 46px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 .pdfjs-custom-inscreen-pencil {
   background-image: none !important;
   color: var(--toolbar-icon-color, #374151);

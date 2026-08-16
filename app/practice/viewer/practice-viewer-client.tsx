@@ -9,8 +9,10 @@ import { createObjectUrlForWorkspaceFile, getLocalMaterialById } from "@/lib/loc
 import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
+import { fetchSubjectShortcuts } from "@/lib/subject-shortcuts-client"
 import { getSubjectById } from "@/lib/subjects"
 import { normalizeTagName } from "@/lib/tag-utils"
+import type { SubjectShortcutButton } from "@/lib/study-types"
 
 type MaterialContext = {
   id: number
@@ -268,6 +270,7 @@ export function PracticeViewerClient({
   const [uploadFeedback, setUploadFeedback] = useState("")
   const [resolvedMaterial, setResolvedMaterial] = useState<MaterialContext | undefined>(material)
   const [viewerSourceError, setViewerSourceError] = useState("")
+  const [viewerShortcuts, setViewerShortcuts] = useState<SubjectShortcutButton[]>([])
   const { rootHandle } = useLocalWorkspace()
   const playbackUrlCacheRef = useRef(new Map<string, string>())
   const isLocalMode = isLocalStorageMode()
@@ -313,6 +316,15 @@ export function PracticeViewerClient({
   const postToViewer = useCallback((message: unknown) => {
     iframeRef.current?.contentWindow?.postMessage(message, window.location.origin)
   }, [])
+
+  const publishViewerShortcuts = useCallback(() => {
+    postToViewer({
+      type: "viewerSubjectShortcuts",
+      shortcuts: viewerShortcuts
+        .filter((shortcut) => Boolean(shortcut.url?.trim()))
+        .map((shortcut) => ({ id: shortcut.id, label: shortcut.label, url: shortcut.url })),
+    })
+  }, [postToViewer, viewerShortcuts])
 
   const publishViewerMaterialTags = useCallback(() => {
     if (!resolvedMaterial) return
@@ -425,6 +437,33 @@ export function PracticeViewerClient({
   useEffect(() => {
     publishViewerMaterialTags()
   }, [publishViewerMaterialTags])
+
+  useEffect(() => {
+    publishViewerShortcuts()
+  }, [publishViewerShortcuts])
+
+  useEffect(() => {
+    const subjectId = activeContext?.subjectId
+    if (!subjectId) {
+      setViewerShortcuts([])
+      return
+    }
+
+    let cancelled = false
+    void fetchSubjectShortcuts(subjectId)
+      .then((shortcuts) => {
+        if (!cancelled) setViewerShortcuts(shortcuts.buttons)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error("Failed to load viewer subject shortcuts:", error)
+        setViewerShortcuts([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeContext?.subjectId])
 
   const disposeReviewAudio = useCallback((reviewAudio?: ReviewAudio | null) => {
     if (reviewAudio) {
@@ -797,6 +836,7 @@ export function PracticeViewerClient({
       if (event.data.type === "viewerReady") {
         syncPositionsToViewer(hasMaterial ? positions : [])
         publishViewerMaterialTags()
+        publishViewerShortcuts()
         if (rootHandle) {
           postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
         }
@@ -1018,6 +1058,7 @@ export function PracticeViewerClient({
       positions,
       postToViewer,
       publishViewerMaterialTags,
+      publishViewerShortcuts,
       replacePairDraft,
       resolvedMaterial,
       startRecording,
@@ -1168,6 +1209,7 @@ export function PracticeViewerClient({
           allowFullScreen
           onLoad={() => {
             syncPositionsToViewer(hasMaterial ? positions : [])
+            publishViewerShortcuts()
             if (rootHandle) {
               postToViewer({ type: "viewerWorkspaceRootHandle", handle: rootHandle })
             }

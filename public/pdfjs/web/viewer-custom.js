@@ -70,6 +70,8 @@
     tagList: null,
     tagSuggestions: null,
     tagColorInput: null,
+    subjectShortcutContainer: null,
+    subjectShortcuts: [],
     tagCatalog: [],
     assignedTagIds: new Set(),
     tagRegionCounts: {},
@@ -464,6 +466,38 @@
     }
   }
 
+  function renderSubjectShortcuts() {
+    const container = state.subjectShortcutContainer;
+    if (!container) return;
+    container.replaceChildren();
+
+    for (const shortcut of state.subjectShortcuts) {
+      const label = String(shortcut?.label || "").trim();
+      const rawUrl = String(shortcut?.url || "").trim();
+      if (!label || !rawUrl) continue;
+
+      let url;
+      try {
+        url = new URL(rawUrl);
+      } catch {
+        continue;
+      }
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+
+      const link = document.createElement("a");
+      link.className = "toolbarButton pdfjs-custom-subject-shortcut";
+      link.href = url.toString();
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = `Abrir ${label}`;
+      link.setAttribute("aria-label", `Abrir ${label}`);
+      link.textContent = label;
+      container.appendChild(link);
+    }
+
+    container.hidden = container.childElementCount === 0;
+  }
+
   function ensureUi() {
     if (!state.translateButton) {
       state.translateButton = document.getElementById("translateSelectionButton");
@@ -506,6 +540,24 @@
         }
         state.cutButton = button;
         refreshCutButton();
+      }
+    }
+
+    if (!state.subjectShortcutContainer) {
+      const toolbar = document.getElementById("toolbarViewerRight") || document.getElementById("toolbarViewer");
+      if (toolbar) {
+        const container = document.createElement("div");
+        container.id = "pdfjs-custom-subject-shortcuts";
+        container.className = "pdfjs-custom-subject-shortcuts toolbarHorizontalGroup";
+        container.setAttribute("aria-label", "Accesos directos de la materia");
+        const downloadButton = document.getElementById("downloadButton");
+        if (downloadButton?.parentElement === toolbar) {
+          toolbar.insertBefore(container, downloadButton);
+        } else {
+          toolbar.appendChild(container);
+        }
+        state.subjectShortcutContainer = container;
+        renderSubjectShortcuts();
       }
     }
 
@@ -3894,6 +3946,12 @@
     if (event.data.type === "viewerWorkspaceMode" && event.data.mode === "local") {
       state.workspaceMode = "local";
       refreshSyncButtons();
+      return;
+    }
+
+    if (event.data.type === "viewerSubjectShortcuts") {
+      state.subjectShortcuts = Array.isArray(event.data.shortcuts) ? event.data.shortcuts : [];
+      renderSubjectShortcuts();
       return;
     }
 

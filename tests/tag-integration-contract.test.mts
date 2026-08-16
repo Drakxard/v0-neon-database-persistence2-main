@@ -151,6 +151,18 @@ test("sincronizar usa icono compacto en la barra y texto en mas opciones", () =>
   assert.match(pdfJs, /button\.setAttribute\("aria-label", accessibleLabel\)/)
 })
 
+test("el visor muestra compactos los accesos con link de la materia", () => {
+  const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
+  const pdfJs = source("public/pdfjs/web/viewer-custom.js")
+  const css = source("public/pdfjs/web/viewer-custom.css")
+  assert.match(viewer, /fetchSubjectShortcuts/)
+  assert.match(viewer, /viewerSubjectShortcuts/)
+  assert.match(viewer, /filter\(\(shortcut\) => Boolean\(shortcut\.url\?\.trim\(\)\)\)/)
+  assert.match(pdfJs, /pdfjs-custom-subject-shortcuts/)
+  assert.match(pdfJs, /renderSubjectShortcuts/)
+  assert.match(css, /\.pdfjs-custom-subject-shortcut[\s\S]*?height: 28px/)
+})
+
 test("contenedores, NLM y regiones tienen contratos persistentes y locales", () => {
   const migration = source("scripts/030-add-material-containers-nlm-and-tag-regions.sql")
   const subjectWheel = source("components/subject-wheel.tsx")
