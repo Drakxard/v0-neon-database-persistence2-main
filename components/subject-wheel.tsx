@@ -252,17 +252,8 @@ type SynthesisSubjectState = {
   error: string
 }
 
-function appendMaterialViewerParams(params: URLSearchParams, material: SubjectDayMaterial, subjectName: string) {
+function appendMaterialViewerParams(params: URLSearchParams, material: SubjectDayMaterial) {
   params.set("materialId", String(material.id))
-  params.set("subjectId", material.subject_id)
-  params.set("subjectName", subjectName || material.subject_id)
-  params.set("sessionDate", material.session_date)
-  params.set("weekNumber", String(material.week_number))
-  params.set("weekdayIndex", String(material.weekday_index))
-  params.set("materialType", material.material_type)
-  params.set("fileName", material.file_name)
-  params.set("workspaceFileId", material.drive_file_id)
-  params.set("sourceRevision", `${material.drive_file_id}:${material.updated_at}`)
 }
 
 function buildMaterialViewerHref(
@@ -272,7 +263,7 @@ function buildMaterialViewerHref(
   subjectTargetWeekday?: number
 ) {
   const params = new URLSearchParams()
-  appendMaterialViewerParams(params, material, subjectName)
+  appendMaterialViewerParams(params, material)
   const createdAt = "createdAt" in (subject ?? {}) ? String((subject as CustomSubject).createdAt || "") : ""
   if (/^\d{4}-\d{2}-\d{2}/.test(createdAt)) params.set("subjectActivationDate", createdAt.slice(0, 10))
   if (Number.isInteger(subjectTargetWeekday)) params.set("subjectTargetWeekday", String(subjectTargetWeekday))
@@ -904,7 +895,7 @@ function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutId: string) {
 
 function buildMaterialRegionPresentationHref(material: SubjectDayMaterial, subjectName: string, tagIds: number[]) {
   const params = new URLSearchParams()
-  appendMaterialViewerParams(params, material, subjectName)
+  appendMaterialViewerParams(params, material)
   params.set("presentationTagIds", tagIds.join(","))
   return `/practice/viewer?${params.toString()}`
 }
@@ -9475,9 +9466,7 @@ export function SubjectWheel({
                   {shortcutDialogButton?.label}
                 </DialogTitle>
                 <DialogDescription>
-                  {shortcutSectionScopedDraft
-                    ? `Este enlace corresponde a ${shortcutSectionLabel}.`
-                    : "Este enlace queda guardado para toda la materia en el cursado."}
+                  {shortcutSectionScopedDraft ? null : "Este enlace queda guardado para toda la materia en el cursado."}
                 </DialogDescription>
               </div>
               <DialogClose asChild>

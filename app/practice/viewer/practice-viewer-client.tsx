@@ -239,6 +239,8 @@ export function PracticeViewerClient({
   mode = "standalone",
   onRequestClose,
   returnToken,
+  subjectActivationDate,
+  subjectTargetWeekday,
   presentationTagIds = EMPTY_PRESENTATION_TAG_IDS,
 }: {
   material?: MaterialContext
@@ -247,6 +249,8 @@ export function PracticeViewerClient({
   mode?: "inline" | "standalone"
   onRequestClose?: () => void
   returnToken?: string
+  subjectActivationDate?: string
+  subjectTargetWeekday?: number
   presentationTagIds?: number[]
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
@@ -1111,7 +1115,9 @@ export function PracticeViewerClient({
         materialType: localMaterial.material_type,
         fileName: localMaterial.file_name,
         workspaceFileId: localMaterial.drive_file_id,
-        sourceRevision: `${localMaterial.drive_file_id}:${localMaterial.updated_at}`,
+          sourceRevision: `${localMaterial.drive_file_id}:${localMaterial.updated_at}`,
+          subjectActivationDate,
+          subjectTargetWeekday,
       })
     })().catch((error) => {
       if (cancelled) return
@@ -1123,7 +1129,7 @@ export function PracticeViewerClient({
     return () => {
       cancelled = true
     }
-  }, [isLocalMode, material, materialId, rootHandle])
+  }, [isLocalMode, material, materialId, rootHandle, subjectActivationDate, subjectTargetWeekday])
 
   useEffect(() => {
     void loadPositions()

@@ -34,7 +34,7 @@ test("la rueda real usa la última pestaña como cache descartable mientras lleg
   assert.match(wheel, /Actualizando datos locales/)
 })
 
-test("el visor local monta PDF.js con el contexto conocido y sin una espera negra", () => {
+test("el visor local usa una URL compacta y resuelve el contexto por materialId", () => {
   const wheel = source("components/subject-wheel.tsx")
   const page = source("app/practice/viewer/page.tsx")
   const viewer = source("app/practice/viewer/practice-viewer-client.tsx")
@@ -42,16 +42,15 @@ test("el visor local monta PDF.js con el contexto conocido y sin una espera negr
   const pdfJs = source("public/pdfjs/web/viewer-custom.js")
 
   assert.match(wheel, /function appendMaterialViewerParams/)
-  assert.match(wheel, /params\.set\("workspaceFileId", material\.drive_file_id\)/)
-  assert.match(wheel, /params\.set\("sourceRevision"/)
-  assert.match(wheel, /appendMaterialViewerParams\(params, material, subjectName\)[\s\S]*presentationTagIds/)
-  assert.match(page, /hasImmediateLocalMaterialContext/)
+  assert.match(wheel, /params\.set\("materialId", String\(material\.id\)\)/)
+  assert.doesNotMatch(wheel, /params\.set\("workspaceFileId", material\.drive_file_id\)/)
+  assert.match(wheel, /appendMaterialViewerParams\(params, material\)[\s\S]*presentationTagIds/)
   assert.match(page, /materialId=\{hasImmediateLocalMaterialContext \? undefined : materialId\}/)
   assert.match(viewer, /bg-\[#d4d4d7\]/)
   assert.match(viewer, /if \(!isLocalMode \|\| !rootHandle\) return/)
   assert.match(viewer, /getLocalMaterialById\(resolvedMaterialId\)/)
   assert.match(viewer, /!Number\.isInteger\(materialId\) \|\| !rootHandle/)
-  assert.match(viewer, /\[isLocalMode, material, materialId, rootHandle\]/)
+  assert.match(viewer, /\[isLocalMode, material, materialId, rootHandle, subjectActivationDate, subjectTargetWeekday\]/)
   assert.match(provider, /pathname === "\/practice\/viewer"/)
   assert.match(provider, /isReady \|\| canRenderBeforeWorkspaceReady/)
   assert.match(pdfJs, /isOpeningLocalWorkspaceDocument/)

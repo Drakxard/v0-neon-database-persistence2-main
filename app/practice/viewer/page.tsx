@@ -225,6 +225,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
         materialId={hasImmediateLocalMaterialContext ? undefined : materialId}
         mode="standalone"
         returnToken={returnToken}
+        subjectActivationDate={subjectActivationDate}
+        subjectTargetWeekday={Number.isInteger(subjectTargetWeekday) ? subjectTargetWeekday : undefined}
         presentationTagIds={presentationTagIds}
       />
     )
@@ -276,6 +278,8 @@ export default async function PracticeViewerPage({ searchParams }: ViewerPagePro
           materialType: material.material_type,
           fileName: material.file_name,
           sourceRevision: `${material.drive_file_id}:${material.updated_at}`,
+          subjectActivationDate,
+          subjectTargetWeekday: Number.isInteger(subjectTargetWeekday) ? subjectTargetWeekday : undefined,
           returnToken,
         }}
         presentationTagIds={presentationTagIds}
