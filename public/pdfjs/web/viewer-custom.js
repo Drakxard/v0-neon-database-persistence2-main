@@ -101,11 +101,7 @@
     translationPromptInput: null,
     translationPromptError: null,
     inscreenLoaded: false,
-    inscreenCapturedPages: new Set(),
-    inscreenPendingCaptures: new Map(),
-    inscreenMarkerRequests: new Set(),
     inscreenConsumedAnnotationIds: new Set(),
-    inscreenPageTimer: null,
     inscreenPositionTimer: null,
     inscreenCurrentPage: 1,
     inscreenRestoringPosition: false,
@@ -121,7 +117,6 @@
   const DEFAULT_TRANSLATION_PROMPT = "Traduce a español el texto, sin agregar de más: {texto}";
   const TRANSLATION_PROMPT_STORAGE_KEY = "pdfjs.translationPrompt.v1";
   const INSCREEN_CONFIGURATION_MESSAGE = "Falta configurar la API. Presiona | para iniciar la configuración con API.";
-  const INSCREEN_PAGE_READING_MS = 60_000;
   const INSCREEN_FREETEXT_TYPE = 3;
   const INSCREEN_HIGHLIGHT_TYPE = 9;
 
@@ -1471,6 +1466,7 @@
     } finally {
       state.isExportingPageRange = false;
       hideBusy();
+      refreshCutButton();
     }
   }
 
@@ -2584,95 +2580,12 @@
     };
   }
 
-  function clearInscreenPageTimer() {
-    if (state.inscreenPageTimer) {
-      window.clearTimeout(state.inscreenPageTimer);
-      state.inscreenPageTimer = null;
-    }
-  }
-
   function closeInscreenActionToast() {
     if (!state.inscreenActionToast) return;
     state.inscreenActionToast.dataset.visible = "false";
     const toast = state.inscreenActionToast;
     state.inscreenActionToast = null;
     window.setTimeout(() => toast.remove(), 180);
-  }
-
-  async function buildInscreenPagePdf(pageNumber) {
-    if (!window.PDFLib?.PDFDocument) throw new Error("pdf-lib no esta disponible en este visor.");
-    const sourceDocument = await ensureSourcePdfDoc();
-    const outputDocument = await window.PDFLib.PDFDocument.create();
-    const [page] = await outputDocument.copyPages(sourceDocument, [pageNumber - 1]);
-    outputDocument.addPage(page);
-    return new Blob([await outputDocument.save()], { type: "application/pdf" });
-  }
-
-  async function captureInscreenPage(pageNumber) {
-    if (
-      !canUseInscreen() ||
-      !state.inscreenLoaded ||
-      document.visibilityState !== "visible" ||
-      pageNumber !== state.inscreenCurrentPage ||
-      state.inscreenCapturedPages.has(pageNumber) ||
-      state.inscreenMarkerRequests.has(pageNumber)
-    ) {
-      return;
-    }
-
-    try {
-      state.inscreenMarkerRequests.add(pageNumber);
-      const pagePdf = await buildInscreenPagePdf(pageNumber);
-      if (pageNumber !== state.inscreenCurrentPage || document.visibilityState !== "visible") return;
-      const form = new FormData();
-      form.append("file", pagePdf, `pagina-${pageNumber}.pdf`);
-      const markerPayload = await requireOkJson(
-        await inscreenApiFetch("/api/inscreen/marker-transcribe", { method: "POST", body: form }),
-        "No se pudo transcribir la pagina con Marker."
-      );
-      const text = String(markerPayload.markdown || "").trim();
-      if (!text) throw new Error("Marker no devolvio texto para la pagina.");
-      const payload = await requireOkJson(
-        await inscreenApiFetch("/api/inscreen/page-captures", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...getInscreenMaterialContext(),
-            pageNumber,
-            text,
-            sourceType: "marker",
-          }),
-        }),
-        "No se pudo registrar la pagina leida."
-      );
-      if (payload.status === "complete" || payload.status === "duplicate") {
-        state.inscreenCapturedPages.add(pageNumber);
-        state.inscreenPendingCaptures.delete(pageNumber);
-        return;
-      }
-    } catch (error) {
-      if (isInscreenConfigurationUnavailable(error)) return;
-      console.error("Inscreen page capture failed:", error);
-      showToast(error instanceof Error ? error.message : "No se pudo guardar la pagina leida.", "error", 4200);
-    } finally {
-      state.inscreenMarkerRequests.delete(pageNumber);
-    }
-  }
-
-  function scheduleInscreenPageCapture(pageNumber = state.inscreenCurrentPage) {
-    clearInscreenPageTimer();
-    if (
-      !canUseInscreen() ||
-      !state.inscreenLoaded ||
-      document.visibilityState !== "visible" ||
-      pageNumber !== state.inscreenCurrentPage ||
-      state.inscreenCapturedPages.has(pageNumber) ||
-      state.inscreenMarkerRequests.has(pageNumber)
-    ) return;
-    state.inscreenPageTimer = window.setTimeout(() => {
-      state.inscreenPageTimer = null;
-      void captureInscreenPage(pageNumber);
-    }, INSCREEN_PAGE_READING_MS);
   }
 
   function saveInscreenReadingPosition(pageNumber, immediate = false) {
@@ -2696,9 +2609,6 @@
   async function loadInscreenState() {
     if (!canUseInscreen()) return;
     state.inscreenLoaded = false;
-    state.inscreenCapturedPages = new Set();
-    state.inscreenPendingCaptures = new Map();
-    state.inscreenMarkerRequests = new Set();
     state.inscreenConsumedAnnotationIds = new Set();
     try {
       await assertInscreenConfigurationAvailable();
@@ -2708,12 +2618,6 @@
       const payload = await requireOkJson(
         await inscreenApiFetch(`/api/inscreen/material-state?${contextParams.toString()}`, { cache: "no-store" }),
         "No se pudo cargar el estado de lectura."
-      );
-      state.inscreenCapturedPages = new Set(Array.isArray(payload.capturedPages) ? payload.capturedPages.map(Number) : []);
-      state.inscreenPendingCaptures = new Map(
-        Array.isArray(payload.pendingCaptures)
-          ? payload.pendingCaptures.map((capture) => [Number(capture.pageNumber), String(capture.id)])
-          : []
       );
       state.inscreenConsumedAnnotationIds = new Set(
         Array.isArray(payload.consumedAnnotationIds) ? payload.consumedAnnotationIds.map(String) : []
@@ -2738,7 +2642,6 @@
         }, 0);
       }
       state.inscreenLoaded = true;
-      scheduleInscreenPageCapture(state.inscreenCurrentPage);
     } catch (error) {
       if (error?.name === "InscreenConfigurationUnavailable") {
         return;
@@ -3856,17 +3759,13 @@
   function handlePageHide() {
     state.pendingExitSync = false;
     clearExitSyncTimer();
-    clearInscreenPageTimer();
     if (hasPendingInscreenTranslations()) void flushInscreenTranslations({ keepalive: true, silent: true });
     saveInscreenReadingPosition(state.inscreenCurrentPage, true);
     cleanupLocalWorkspaceObjectUrl();
   }
 
   function handleInscreenVisibilityChange() {
-    clearInscreenPageTimer();
-    if (document.visibilityState === "visible") {
-      scheduleInscreenPageCapture(state.inscreenCurrentPage);
-    } else {
+    if (document.visibilityState !== "visible") {
       saveInscreenReadingPosition(state.inscreenCurrentPage, true);
     }
   }
@@ -4179,7 +4078,6 @@
     state.activeRegionTagName = "";
     cancelCutSelection();
     clearPageTextModels();
-    clearInscreenPageTimer();
     closeInscreenActionToast();
     state.inscreenLoaded = false;
     state.inscreenAnnotationOrder = new Map();
@@ -4309,7 +4207,6 @@
       if (!Number.isInteger(nextPage)) return;
       state.inscreenCurrentPage = nextPage;
       closeInscreenActionToast();
-      scheduleInscreenPageCapture(nextPage);
       saveInscreenReadingPosition(nextPage);
     });
     eventBus.on("annotationeditorstateschanged", () => {

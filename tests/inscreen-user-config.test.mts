@@ -103,5 +103,5 @@ test("la aplicacion y el iframe PDF.js envian la Mitad A en cada llamada protegi
   assert.match(viewer, /inscreen\.config-skipped\.v1/)
   assert.match(viewer, /InscreenConfigurationUnavailable/)
   assert.match(viewer, /inscreenApiFetch\("\/api\/pdf-translate"/)
-  assert.match(viewer, /inscreenApiFetch\("\/api\/inscreen\/marker-transcribe"/)
+  assert.doesNotMatch(viewer, /inscreenApiFetch\("\/api\/inscreen\/marker-transcribe"/)
 })
