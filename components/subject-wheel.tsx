@@ -9508,7 +9508,7 @@ export function SubjectWheel({
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
-              {shortcutSectionScopedDraft ? `Enlace para ${shortcutSectionLabel}` : "Insertar link"}
+              Enlace único
             </label>
             <Input
               type="url"
