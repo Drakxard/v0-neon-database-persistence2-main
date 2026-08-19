@@ -116,6 +116,8 @@ export function useSubjectEntries() {
     subjectId: string
     id: string
     url: string
+    sectionScoped: boolean
+    sectionKey?: string
   }) => {
     const payload = await updateSubjectShortcut(input)
     setSubjectShortcuts(payload)

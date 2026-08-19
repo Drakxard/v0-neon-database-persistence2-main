@@ -1,7 +1,7 @@
 import { getLegacyDatabase, requireSql } from "@/lib/db"
 import { ensureSubjectAccess, requireAuthSession } from "@/lib/authz"
 import { readLocalState, updateLocalState } from "@/lib/local-state-store"
-import { getDefaultSubjectShortcuts } from "@/lib/subject-shortcuts"
+import { getDefaultSubjectShortcuts, normalizeSubjectShortcutButton } from "@/lib/subject-shortcuts"
 import { parseRequiredString } from "@/lib/server/request-parsing"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type { SubjectShortcutButton, SubjectShortcuts } from "@/lib/study-types"
@@ -11,17 +11,17 @@ export const runtime = "nodejs"
 
 const sql = getLegacyDatabase()
 
-type ShortcutRow = { id: number; label: string; url: string | null; order_index: number }
+type ShortcutRow = { id: number; label: string; url: string | null; order_index: number; section_scoped: boolean; section_urls: Record<string, string> | null }
 
 function badRequest(message: string) { return NextResponse.json({ error: message }, { status: 400 }) }
 function isMissingTable(error: unknown) { return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01") }
 function toResponse(subjectId: string, rows: ShortcutRow[]): SubjectShortcuts {
-  return { subjectId, buttons: rows.map((row) => ({ id: String(row.id), label: row.label, url: row.url, orderIndex: row.order_index })) }
+  return { subjectId, buttons: rows.map((row) => normalizeSubjectShortcutButton({ id: String(row.id), label: row.label, url: row.url, orderIndex: row.order_index, sectionScoped: row.section_scoped, sectionUrls: row.section_urls ?? {} })) }
 }
 function localFallback(subjectId: string) { return getDefaultSubjectShortcuts(subjectId) }
 
 async function selectButtons(subjectId: string) {
-  return await requireSql(sql)`SELECT id, label, url, order_index FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} ORDER BY order_index, id` as ShortcutRow[]
+  return await requireSql(sql)`SELECT id, label, url, order_index, section_scoped, section_urls FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} ORDER BY order_index, id` as ShortcutRow[]
 }
 async function ensureRemoteButtons(subjectId: string) {
   const initialized = await requireSql(sql)`INSERT INTO subject_shortcut_button_sets (subject_id) VALUES (${subjectId}) ON CONFLICT (subject_id) DO NOTHING RETURNING subject_id`
@@ -34,7 +34,7 @@ async function ensureRemoteButtons(subjectId: string) {
   return toResponse(subjectId, await selectButtons(subjectId))
 }
 function normalizeLocalShortcut(subjectId: string, value: unknown): SubjectShortcuts {
-  if (value && typeof value === "object" && Array.isArray((value as SubjectShortcuts).buttons)) return value as SubjectShortcuts
+  if (value && typeof value === "object" && Array.isArray((value as SubjectShortcuts).buttons)) return { ...(value as SubjectShortcuts), buttons: (value as SubjectShortcuts).buttons.map(normalizeSubjectShortcutButton) }
   const legacy = value as { eFich?: string | null; figma?: string | null; nlm?: string | null } | undefined
   const next = localFallback(subjectId)
   next.buttons = next.buttons.map((button, index) => ({ ...button, url: index === 0 ? legacy?.eFich ?? null : index === 1 ? legacy?.figma ?? null : legacy?.nlm ?? null }))
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     const label = parseRequiredString(body?.label); if (!label) return badRequest("Missing label")
     if (isLocalStorageMode()) return updateLocalState((state) => {
       const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
-      state.subjectShortcuts[subjectId] = { ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label, url: null, orderIndex: current.buttons.length }] }
+      state.subjectShortcuts[subjectId] = { ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label, url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {} }] }
       return state.subjectShortcuts[subjectId]
     })
     await ensureRemoteButtons(subjectId)
@@ -77,14 +77,27 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   return mutate(request, async (subjectId, body) => {
     const id = parseRequiredString(body?.id); const url = parseRequiredString(body?.url)
+    const sectionScoped = body?.sectionScoped === true
+    const sectionKey = parseRequiredString(body?.sectionKey)
     if (!id) return badRequest("Missing id"); if (!url) return badRequest("Missing url")
+    if (sectionScoped && !sectionKey) return badRequest("Missing sectionKey")
     let normalizedUrl: string; try { normalizedUrl = new URL(url).toString() } catch { return badRequest("Invalid url") }
     if (isLocalStorageMode()) return updateLocalState((state) => {
       const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
-      state.subjectShortcuts[subjectId] = { ...current, buttons: current.buttons.map((button) => button.id === id ? { ...button, url: normalizedUrl } : button) }
+      state.subjectShortcuts[subjectId] = { ...current, buttons: current.buttons.map((button) => {
+        if (button.id !== id) return button
+        if (!sectionScoped) return { ...button, url: normalizedUrl, sectionScoped: false, sectionUrls: {} }
+        return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [sectionKey!]: normalizedUrl } }
+      }) }
       return state.subjectShortcuts[subjectId]
     })
-    await requireSql(sql)`UPDATE subject_shortcut_buttons SET url = ${normalizedUrl}, updated_at = NOW() WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
+    await ensureRemoteButtons(subjectId)
+    const current = (await selectButtons(subjectId)).find((button) => String(button.id) === id)
+    if (!current) return badRequest("Unknown shortcut")
+    const sectionUrls = sectionScoped
+      ? { ...(current.section_scoped ? current.section_urls ?? {} : {}), [sectionKey!]: normalizedUrl }
+      : {}
+    await requireSql(sql)`UPDATE subject_shortcut_buttons SET url = ${sectionScoped ? current.url : normalizedUrl}, section_scoped = ${sectionScoped}, section_urls = ${JSON.stringify(sectionUrls)}::jsonb, updated_at = NOW() WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
     return ensureRemoteButtons(subjectId)
   })
 }

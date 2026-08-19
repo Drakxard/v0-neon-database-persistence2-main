@@ -59,6 +59,7 @@ import {
 } from "@/lib/socratic-review-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
+import { getSubjectShortcutUrl } from "@/lib/subject-shortcuts"
 import {
   createSubjectMaterialContainer,
   fetchSubjectMaterialContainers,
@@ -1975,6 +1976,7 @@ export function SubjectWheel({
   const [shortcutDraft, setShortcutDraft] = useState("")
   const [shortcutDialogButton, setShortcutDialogButton] = useState<SubjectShortcutButton | null>(null)
   const [shortcutDialogMode, setShortcutDialogMode] = useState<"create" | "edit">("create")
+  const [shortcutSectionScopedDraft, setShortcutSectionScopedDraft] = useState(false)
   const [isSavingShortcut, setIsSavingShortcut] = useState(false)
   const [isShortcutNameDialogOpen, setIsShortcutNameDialogOpen] = useState(false)
   const [shortcutNameDraft, setShortcutNameDraft] = useState("")
@@ -2221,6 +2223,15 @@ export function SubjectWheel({
     return formatDateKey(date) <= todayKey ? index : lastIndex
   }, -1)
   const isWeeklyExercisesScope = practiceSectionView === "exercises" && exerciseWeeklyScopeEnabled
+  const isShortcutWeeklySection = isDialogOpen
+    ? practiceSectionView === "exercises" && !subjectViewDateOverride
+    : isPracticeOpen
+  const shortcutSectionKey = isShortcutWeeklySection
+    ? `week:${isDialogOpen ? dialogSelectedWeekNumber : practiceWeekNumber}`
+    : `day:${subjectDialogDateKey}`
+  const shortcutSectionLabel = isShortcutWeeklySection
+    ? `Semana ${isDialogOpen ? dialogSelectedWeekNumber : practiceWeekNumber}`
+    : `${getWeekdayLabel(subjectDialogDateKey)} ${subjectDialogDateKey}`
   const handleDailySessionLoaded = useCallback(() => {
     setHistory([])
     setHistoryIndex(-1)
@@ -4721,12 +4732,14 @@ export function SubjectWheel({
     setShortcutDraft("")
     setShortcutDialogButton(null)
     setShortcutDialogMode("create")
+    setShortcutSectionScopedDraft(false)
   }
 
   const openShortcutDialog = (button: SubjectShortcutButton, mode: "create" | "edit") => {
     setShortcutDialogButton(button)
     setShortcutDialogMode(mode)
-    setShortcutDraft(button.url ?? "")
+    setShortcutSectionScopedDraft(button.sectionScoped)
+    setShortcutDraft(getSubjectShortcutUrl(button, shortcutSectionKey) ?? "")
     setIsShortcutDialogOpen(true)
   }
 
@@ -4740,6 +4753,8 @@ export function SubjectWheel({
         subjectId,
         id: shortcutDialogButton.id,
         url: shortcutDraft.trim(),
+        sectionScoped: shortcutSectionScopedDraft,
+        sectionKey: shortcutSectionScopedDraft ? shortcutSectionKey : undefined,
       })
       closeShortcutDialog()
     } catch (error) {
@@ -4762,7 +4777,7 @@ export function SubjectWheel({
     clearShortcutLongPressTimer()
     shortcutLongPressTimerRef.current = window.setTimeout(() => {
       shouldSuppressShortcutClickRef.current = true
-      openShortcutDialog(button, button.url ? "edit" : "create")
+      openShortcutDialog(button, getSubjectShortcutUrl(button, shortcutSectionKey) ? "edit" : "create")
       shortcutLongPressTimerRef.current = null
     }, 700)
   }
@@ -4782,7 +4797,7 @@ export function SubjectWheel({
       return
     }
 
-    const url = button.url
+    const url = getSubjectShortcutUrl(button, shortcutSectionKey)
     if (url) {
       window.open(url, "_blank", "noopener,noreferrer")
       return
@@ -8271,7 +8286,7 @@ export function SubjectWheel({
                   {currentSubject ? (
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                       {subjectShortcuts.buttons.map((shortcut) => {
-                        const url = shortcut.url
+                        const url = getSubjectShortcutUrl(shortcut, shortcutSectionKey)
                         const commonProps = {
                           onPointerDown: () => handleShortcutPointerDown(shortcut),
                           onPointerUp: handleShortcutPointerUp,
@@ -9460,7 +9475,9 @@ export function SubjectWheel({
                   {shortcutDialogButton?.label}
                 </DialogTitle>
                 <DialogDescription>
-                  Este enlace queda guardado para toda la materia en el cursado.
+                  {shortcutSectionScopedDraft
+                    ? `Este enlace corresponde a ${shortcutSectionLabel}.`
+                    : "Este enlace queda guardado para toda la materia en el cursado."}
                 </DialogDescription>
               </div>
               <DialogClose asChild>
@@ -9474,8 +9491,36 @@ export function SubjectWheel({
               </DialogClose>
             </div>
           </DialogHeader>
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
+            <div className="space-y-1">
+              <label htmlFor="shortcut-section-scoped" className="text-sm font-medium text-foreground">
+                Enlace distinto por sección
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Cambia automáticamente al navegar por días o semanas.
+              </p>
+            </div>
+            <Switch
+              id="shortcut-section-scoped"
+              checked={shortcutSectionScopedDraft}
+              onCheckedChange={(checked) => {
+                if (!checked && shortcutSectionScopedDraft) {
+                  const confirmed = window.confirm("Se borrarán todos los enlaces guardados por sección. Después deberás ingresar un único enlace general.")
+                  if (!confirmed) return
+                  setShortcutDraft("")
+                }
+                if (checked && !shortcutSectionScopedDraft && !shortcutDraft.trim()) {
+                  setShortcutDraft(shortcutDialogButton?.url ?? "")
+                }
+                setShortcutSectionScopedDraft(checked)
+              }}
+              disabled={isSavingShortcut}
+            />
+          </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">Insertar link</label>
+            <label className="text-sm font-medium text-foreground">
+              {shortcutSectionScopedDraft ? `Enlace para ${shortcutSectionLabel}` : "Insertar link"}
+            </label>
             <Input
               type="url"
               value={shortcutDraft}
@@ -9956,7 +10001,7 @@ export function SubjectWheel({
               <div className="flex items-center gap-2">
                 {activePracticeShortcutSubject
                   ? subjectShortcuts.buttons.filter((button) => button.label === "E-Fich" || button.label === "Figma").map((shortcut) => {
-                      const url = shortcut.url
+                      const url = getSubjectShortcutUrl(shortcut, shortcutSectionKey)
                       const title = isSubjectShortcutsLoading
                         ? `Cargando ${shortcut.label}`
                         : url

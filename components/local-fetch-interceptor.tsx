@@ -266,7 +266,7 @@ async function handleLocalApiRequest(request: Request) {
       if (!subjectId) return errorResponse("Missing subjectId")
       return jsonResponse(await getLocalSubjectShortcuts(subjectId))
     }
-    const body = await parseRequestJson<{ subjectId: string; id: string; label: string; url: string }>(request)
+    const body = await parseRequestJson<{ subjectId: string; id: string; label: string; url: string; sectionScoped: boolean; sectionKey?: string }>(request)
     const subjectId = String(body?.subjectId || "").trim()
     if (!subjectId) return errorResponse("Missing subjectId")
     if (method === "POST") {
@@ -277,7 +277,13 @@ async function handleLocalApiRequest(request: Request) {
     if (method === "PUT") {
       const id = String(body?.id || "").trim()
       if (!id) return errorResponse("Missing id")
-      return jsonResponse(await updateLocalSubjectShortcut({ subjectId, id, url: String(body?.url || "") }))
+      return jsonResponse(await updateLocalSubjectShortcut({
+        subjectId,
+        id,
+        url: String(body?.url || ""),
+        sectionScoped: body?.sectionScoped === true,
+        sectionKey: String(body?.sectionKey || "").trim() || undefined,
+      }))
     }
     if (method === "DELETE") {
       const id = String(body?.id || "").trim()

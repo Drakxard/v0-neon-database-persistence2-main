@@ -142,6 +142,8 @@ export type SubjectShortcutButton = {
   label: string
   url: string | null
   orderIndex: number
+  sectionScoped: boolean
+  sectionUrls: Record<string, string>
 }
 
 export type SubjectShortcuts = {

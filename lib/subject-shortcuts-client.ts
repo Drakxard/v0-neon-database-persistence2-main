@@ -31,7 +31,13 @@ export async function createSubjectShortcut(input: {
   return requireOkJson<SubjectShortcuts>(response, "No se pudo guardar el acceso directo.")
 }
 
-export async function updateSubjectShortcut(input: { subjectId: string; id: string; url: string }) {
+export async function updateSubjectShortcut(input: {
+  subjectId: string
+  id: string
+  url: string
+  sectionScoped: boolean
+  sectionKey?: string
+}) {
   const response = await fetch("/api/subject-shortcuts", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

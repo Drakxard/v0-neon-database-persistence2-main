@@ -10,6 +10,7 @@ import { uploadSubjectDayMaterial } from "@/lib/materials-client"
 import { createPracticeAudioEntry } from "@/lib/practice-entry-client"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { fetchSubjectShortcuts } from "@/lib/subject-shortcuts-client"
+import { getSubjectShortcutUrl } from "@/lib/subject-shortcuts"
 import { getSubjectById } from "@/lib/subjects"
 import { normalizeTagName } from "@/lib/tag-utils"
 import type { SubjectShortcutButton } from "@/lib/study-types"
@@ -318,13 +319,15 @@ export function PracticeViewerClient({
   }, [])
 
   const publishViewerShortcuts = useCallback(() => {
+    const sectionKey = activeContext ? `day:${activeContext.sessionDate}` : ""
     postToViewer({
       type: "viewerSubjectShortcuts",
       shortcuts: viewerShortcuts
-        .filter((shortcut) => Boolean(shortcut.url?.trim()))
-        .map((shortcut) => ({ id: shortcut.id, label: shortcut.label, url: shortcut.url })),
+        .map((shortcut) => ({ ...shortcut, effectiveUrl: getSubjectShortcutUrl(shortcut, sectionKey) }))
+        .filter((shortcut) => Boolean(shortcut.effectiveUrl?.trim()))
+        .map((shortcut) => ({ id: shortcut.id, label: shortcut.label, url: shortcut.effectiveUrl })),
     })
-  }, [postToViewer, viewerShortcuts])
+  }, [activeContext, postToViewer, viewerShortcuts])
 
   const publishViewerMaterialTags = useCallback(() => {
     if (!resolvedMaterial) return

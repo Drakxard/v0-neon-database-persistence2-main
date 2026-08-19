@@ -1,0 +1,7 @@
+BEGIN;
+
+ALTER TABLE subject_shortcut_buttons
+  ADD COLUMN IF NOT EXISTS section_scoped BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS section_urls JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+COMMIT;

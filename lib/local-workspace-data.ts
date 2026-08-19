@@ -16,7 +16,7 @@ import type {
   SubjectMaterialContainer,
   SubjectShortcuts,
 } from "@/lib/study-types"
-import { getDefaultSubjectShortcuts } from "@/lib/subject-shortcuts"
+import { getDefaultSubjectShortcuts, normalizeSubjectShortcutButton } from "@/lib/subject-shortcuts"
 import {
   normalizeTagColor,
   normalizeTagDisplayName,
@@ -446,7 +446,7 @@ async function writeShortcutsManifest(value: Record<string, SubjectShortcuts>) {
 
 function normalizeShortcutRecord(subjectId: string, value: unknown): SubjectShortcuts {
   if (value && typeof value === "object" && Array.isArray((value as SubjectShortcuts).buttons)) {
-    return { ...(value as SubjectShortcuts), subjectId }
+    return { ...(value as SubjectShortcuts), subjectId, buttons: (value as SubjectShortcuts).buttons.map(normalizeSubjectShortcutButton) }
   }
   const legacy = value as { eFich?: string | null; figma?: string | null; nlm?: string | null } | undefined
   const migrated = getDefaultSubjectShortcuts(subjectId)
@@ -2617,10 +2617,16 @@ async function mutateLocalSubjectShortcuts(subjectId: string, mutate: (current: 
   return { ...next, subjectId }
 }
 export async function createLocalSubjectShortcut(input: { subjectId: string; label: string }) {
-  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label: input.label.trim(), url: null, orderIndex: current.buttons.length }] }))
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label: input.label.trim(), url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {} }] }))
 }
-export async function updateLocalSubjectShortcut(input: { subjectId: string; id: string; url: string }) {
-  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.map((button) => button.id === input.id ? { ...button, url: input.url.trim() || null } : button) }))
+export async function updateLocalSubjectShortcut(input: { subjectId: string; id: string; url: string; sectionScoped: boolean; sectionKey?: string }) {
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.map((button) => {
+    if (button.id !== input.id) return button
+    const url = input.url.trim()
+    if (!input.sectionScoped) return { ...button, url: url || null, sectionScoped: false, sectionUrls: {} }
+    if (!input.sectionKey) throw new Error("Missing sectionKey")
+    return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [input.sectionKey]: url } }
+  }) }))
 }
 export async function deleteLocalSubjectShortcut(input: { subjectId: string; id: string }) {
   return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.filter((button) => button.id !== input.id).map((button, orderIndex) => ({ ...button, orderIndex })) }))
