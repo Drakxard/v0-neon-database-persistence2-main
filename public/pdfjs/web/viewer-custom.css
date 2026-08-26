@@ -553,17 +553,17 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
   cursor: pointer;
 }
 
-#syncButton.pdfjs-custom-sync-button {
+#pagesZipButton.pdfjs-custom-pages-zip-button {
   width: 32px;
   min-width: 32px;
   background-image: none !important;
 }
 
-#syncButton.pdfjs-custom-sync-button span::before {
+#pagesZipButton.pdfjs-custom-pages-zip-button span::before {
   display: none;
 }
 
-#syncButton.pdfjs-custom-sync-button svg,
+#pagesZipButton.pdfjs-custom-pages-zip-button svg,
 .pdfjs-custom-translate-button svg {
   width: 18px;
   height: 18px;
@@ -574,48 +574,23 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
   stroke-linejoin: round;
 }
 
-#syncButton.pdfjs-custom-sync-button[data-sync-state="syncing"] svg {
+#pagesZipButton.pdfjs-custom-pages-zip-button[data-export-state="exporting"] svg {
   animation: pdfjs-custom-spin 900ms linear infinite;
 }
 
-#secondarySyncButton.pdfjs-custom-sync-button {
-  min-width: 116px;
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="idle"] span::before {
-  content: "Sincronizar";
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="dirty"] span::before {
-  content: "Sincronizar";
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="syncing"] span::before {
-  content: "Sincronizando...";
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state="synced"] span::before {
-  content: "Sincronizado";
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state] span {
-  font-size: 0;
-}
-
-#secondarySyncButton.pdfjs-custom-sync-button[data-sync-state] span::before {
-  font-size: 12px;
-}
-
-.pdfjs-custom-sync-button[data-sync-state="dirty"] {
-  color: #f97316;
-}
-
-.pdfjs-custom-sync-button[data-sync-state="synced"] {
-  color: #16a34a;
+#secondaryPagesZipButton.pdfjs-custom-pages-zip-button {
+  min-width: 142px;
 }
 
 @keyframes pdfjs-custom-spin {
   to { transform: rotate(360deg); }
+}
+
+#editorHighlightButton.pdfjs-custom-editor-tool-button.toggled,
+#editorFreeTextButton.pdfjs-custom-editor-tool-button.toggled,
+#editorInkButton.pdfjs-custom-editor-tool-button.toggled {
+  color: #f97316;
+  background-color: color-mix(in srgb, #f97316 18%, transparent);
 }
 
 .pdfjs-custom-translate-button {

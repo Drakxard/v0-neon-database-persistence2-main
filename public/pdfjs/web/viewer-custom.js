@@ -30,8 +30,9 @@
     loadingOverlay: null,
     loadingText: null,
     draftOverlay: null,
-    syncButton: null,
-    secondarySyncButton: null,
+    pagesZipButton: null,
+    secondaryPagesZipButton: null,
+    isExportingPagesZip: false,
     replaceButton: null,
     secondaryReplaceButton: null,
     replaceInput: null,
@@ -50,6 +51,10 @@
     replacementDecisions: new Map(),
     pageTextModels: new Map(),
     syncStatePoller: null,
+    autosyncTimer: null,
+    autosyncRetryCount: 0,
+    lastObservedAnnotationHash: "",
+    lastSyncedAnnotationHash: "",
     isSyncing: false,
     isSynced: false,
     hasUnsyncedChanges: false,
@@ -88,6 +93,10 @@
     cutStartPage: null,
     cutEndPage: null,
     isExportingPageRange: false,
+    editorToolLongPressTimer: null,
+    editorToolLongPressButton: null,
+    suppressEditorToolClickButton: null,
+    openEditorConfigPanel: null,
     translateButton: null,
     translatePromptButton: null,
     translationMode: false,
@@ -119,6 +128,10 @@
   const INSCREEN_CONFIGURATION_MESSAGE = "Falta configurar la API. Presiona | para iniciar la configuración con API.";
   const INSCREEN_FREETEXT_TYPE = 3;
   const INSCREEN_HIGHLIGHT_TYPE = 9;
+  const AUTOSYNC_DEBOUNCE_MS = 2000;
+  const AUTOSYNC_RETRY_BASE_MS = 5000;
+  const AUTOSYNC_RETRY_MAX_MS = 30000;
+  const EDITOR_TOOL_LONG_PRESS_MS = 500;
 
   function parseQuery() {
     const params = new URLSearchParams(window.location.search);
@@ -234,7 +247,53 @@
   }
 
   function hasUnsyncedAnnotations() {
-    return Boolean(state.app?.pdfDocument?.annotationStorage?.size > 0 && state.app?._annotationStorageModified);
+    const annotationStorage = state.app?.pdfDocument?.annotationStorage;
+    if (!annotationStorage || annotationStorage.size === 0) return false;
+    const currentHash = getAnnotationContentHash();
+    return Boolean(
+      state.app?._annotationStorageModified ||
+      (currentHash && currentHash !== state.lastSyncedAnnotationHash)
+    );
+  }
+
+  function getAnnotationContentHash() {
+    const annotationStorage = state.app?.pdfDocument?.annotationStorage;
+    if (!annotationStorage || annotationStorage.size === 0) return "";
+    try {
+      return String(annotationStorage.serializable?.hash || "");
+    } catch (error) {
+      console.warn("Custom PDF.js annotation hash failed:", error);
+      return "";
+    }
+  }
+
+  function clearAutosyncTimer() {
+    if (!state.autosyncTimer) return;
+    window.clearTimeout(state.autosyncTimer);
+    state.autosyncTimer = null;
+  }
+
+  function scheduleAutosync(delay = AUTOSYNC_DEBOUNCE_MS) {
+    if (!canSyncCurrentDocument() || !hasUnsyncedAnnotations()) return;
+    clearAutosyncTimer();
+    state.autosyncTimer = window.setTimeout(() => {
+      state.autosyncTimer = null;
+      if (state.isSyncing) {
+        scheduleAutosync(500);
+        return;
+      }
+      void syncAnnotatedPdf({ automatic: true });
+    }, delay);
+  }
+
+  function monitorAnnotationChanges() {
+    refreshSyncButtons();
+    if (!canSyncCurrentDocument() || !hasUnsyncedAnnotations()) return;
+    const currentHash = getAnnotationContentHash();
+    if (!currentHash || currentHash === state.lastObservedAnnotationHash) return;
+    state.lastObservedAnnotationHash = currentHash;
+    state.autosyncRetryCount = 0;
+    scheduleAutosync();
   }
 
   function getCurrentFileUrl(cacheBust = false) {
@@ -483,6 +542,88 @@
     }
 
     container.hidden = container.childElementCount === 0;
+  }
+
+  function getEditorToolBindings() {
+    return [
+      ["editorHighlightButton", "editorHighlightParamsToolbar"],
+      ["editorFreeTextButton", "editorFreeTextParamsToolbar"],
+      ["editorInkButton", "editorInkParamsToolbar"],
+    ]
+      .map(([buttonId, panelId]) => ({
+        button: document.getElementById(buttonId),
+        panel: document.getElementById(panelId),
+      }))
+      .filter(({ button, panel }) => button instanceof HTMLButtonElement && panel instanceof HTMLElement);
+  }
+
+  function closeEditorConfigPanels(exceptPanel = null) {
+    for (const { button, panel } of getEditorToolBindings()) {
+      if (panel === exceptPanel) continue;
+      panel.classList.add("hidden");
+      button.setAttribute("aria-expanded", "false");
+      if (state.openEditorConfigPanel === panel) state.openEditorConfigPanel = null;
+    }
+  }
+
+  function openEditorConfigPanel(button, panel) {
+    closeEditorConfigPanels(panel);
+    panel.classList.remove("hidden");
+    button.setAttribute("aria-expanded", "true");
+    state.openEditorConfigPanel = panel;
+  }
+
+  function clearEditorToolLongPress() {
+    if (state.editorToolLongPressTimer) {
+      window.clearTimeout(state.editorToolLongPressTimer);
+      state.editorToolLongPressTimer = null;
+    }
+    state.editorToolLongPressButton = null;
+  }
+
+  function bindEditorToolBehavior() {
+    for (const { button, panel } of getEditorToolBindings()) {
+      button.classList.add("pdfjs-custom-editor-tool-button");
+      button.title = `${button.title || button.textContent?.trim() || "Herramienta"}. Mantener presionado para configurar`;
+
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || button.disabled) return;
+        clearEditorToolLongPress();
+        state.editorToolLongPressButton = button;
+        state.editorToolLongPressTimer = window.setTimeout(() => {
+          state.editorToolLongPressTimer = null;
+          state.suppressEditorToolClickButton = button;
+          openEditorConfigPanel(button, panel);
+        }, EDITOR_TOOL_LONG_PRESS_MS);
+      });
+      for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
+        button.addEventListener(eventName, () => {
+          clearEditorToolLongPress();
+          window.setTimeout(() => {
+            if (state.suppressEditorToolClickButton === button) {
+              state.suppressEditorToolClickButton = null;
+            }
+          }, 0);
+        });
+      }
+      button.addEventListener("contextmenu", (event) => event.preventDefault());
+      button.addEventListener("click", (event) => {
+        if (state.suppressEditorToolClickButton === button) {
+          state.suppressEditorToolClickButton = null;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        window.setTimeout(() => closeEditorConfigPanels(), 0);
+      }, true);
+      button.addEventListener("keydown", (event) => {
+        if (event.shiftKey && event.key === "Enter") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          openEditorConfigPanel(button, panel);
+        }
+      }, true);
+    }
   }
 
   function ensureUi() {
@@ -805,23 +946,19 @@
     }
   }
 
-  function bindSyncButtons() {
-    if (!state.syncButton) {
-      state.syncButton = document.getElementById("syncButton");
-      if (state.syncButton) {
-        state.syncButton.addEventListener("click", () => {
-          void syncAnnotatedPdf();
-        });
-      }
+  function bindDocumentActionButtons() {
+    if (!state.pagesZipButton) {
+      state.pagesZipButton = document.getElementById("pagesZipButton");
+      state.pagesZipButton?.addEventListener("click", () => {
+        void exportPagesAsJpegZip();
+      });
     }
 
-    if (!state.secondarySyncButton) {
-      state.secondarySyncButton = document.getElementById("secondarySyncButton");
-      if (state.secondarySyncButton) {
-        state.secondarySyncButton.addEventListener("click", () => {
-          void syncAnnotatedPdf();
-        });
-      }
+    if (!state.secondaryPagesZipButton) {
+      state.secondaryPagesZipButton = document.getElementById("secondaryPagesZipButton");
+      state.secondaryPagesZipButton?.addEventListener("click", () => {
+        void exportPagesAsJpegZip();
+      });
     }
 
     if (!state.replaceButton) {
@@ -861,33 +998,14 @@
       : "Recortar paginas";
   }
 
-  function setSyncButtonState(button) {
+  function setPagesZipButtonState(button) {
     if (!(button instanceof HTMLElement)) return;
-
-    if (!canSyncCurrentDocument()) {
-      button.hidden = true;
-      return;
-    }
-
-    button.hidden = false;
-    let nextState = "idle";
-    if (state.isSyncing) {
-      nextState = "syncing";
-    } else if (state.hasUnsyncedChanges) {
-      nextState = "dirty";
-    } else if (state.isSynced) {
-      nextState = "synced";
-    }
-
-    button.dataset.syncState = nextState;
-    button.toggleAttribute("disabled", state.isSyncing || !state.hasUnsyncedChanges);
-    const accessibleLabel = state.isSyncing
-        ? "Sincronizando cambios"
-        : state.hasUnsyncedChanges
-          ? "Sincronizar cambios"
-          : state.isSynced
-            ? "Sincronizado"
-            : "Sin cambios para sincronizar";
+    const hasDocument = Boolean(state.app?.pdfDocument);
+    button.toggleAttribute("disabled", !hasDocument || state.isExportingPagesZip);
+    button.dataset.exportState = state.isExportingPagesZip ? "exporting" : "idle";
+    const accessibleLabel = state.isExportingPagesZip
+      ? "Preparando paginas JPG"
+      : "Descargar paginas como JPG en ZIP";
     button.setAttribute("title", accessibleLabel);
     button.setAttribute("aria-label", accessibleLabel);
   }
@@ -901,8 +1019,8 @@
       state.isSynced = false;
     }
 
-    setSyncButtonState(state.syncButton);
-    setSyncButtonState(state.secondarySyncButton);
+    setPagesZipButtonState(state.pagesZipButton);
+    setPagesZipButtonState(state.secondaryPagesZipButton);
     setReplaceButtonState(state.replaceButton);
     setReplaceButtonState(state.secondaryReplaceButton);
   }
@@ -1424,6 +1542,189 @@
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  const ZIP_CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let index = 0; index < 256; index += 1) {
+      let value = index;
+      for (let bit = 0; bit < 8; bit += 1) {
+        value = (value & 1) !== 0 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      }
+      table[index] = value >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    let value = 0xffffffff;
+    for (const byte of bytes) {
+      value = ZIP_CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+    }
+    return (value ^ 0xffffffff) >>> 0;
+  }
+
+  function concatByteArrays(parts, totalLength = parts.reduce((sum, part) => sum + part.byteLength, 0)) {
+    const output = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of parts) {
+      output.set(part, offset);
+      offset += part.byteLength;
+    }
+    return output;
+  }
+
+  function getZipDosDateTime(date = new Date()) {
+    const year = Math.max(1980, date.getFullYear());
+    return {
+      date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+      time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2),
+    };
+  }
+
+  function buildStoredZip(entries) {
+    const encoder = new TextEncoder();
+    const localParts = [];
+    const centralParts = [];
+    const { date, time } = getZipDosDateTime();
+    let localOffset = 0;
+
+    for (const entry of entries) {
+      const nameBytes = encoder.encode(entry.name);
+      const data = entry.bytes instanceof Uint8Array ? entry.bytes : new Uint8Array(entry.bytes);
+      if (data.byteLength > 0xffffffff || localOffset > 0xffffffff) {
+        throw new Error("El ZIP supera el limite de 4 GB.");
+      }
+      const checksum = crc32(data);
+      const localHeader = new Uint8Array(30 + nameBytes.byteLength);
+      const localView = new DataView(localHeader.buffer);
+      localView.setUint32(0, 0x04034b50, true);
+      localView.setUint16(4, 20, true);
+      localView.setUint16(6, 0x0800, true);
+      localView.setUint16(8, 0, true);
+      localView.setUint16(10, time, true);
+      localView.setUint16(12, date, true);
+      localView.setUint32(14, checksum, true);
+      localView.setUint32(18, data.byteLength, true);
+      localView.setUint32(22, data.byteLength, true);
+      localView.setUint16(26, nameBytes.byteLength, true);
+      localView.setUint16(28, 0, true);
+      localHeader.set(nameBytes, 30);
+      localParts.push(localHeader, data);
+
+      const centralHeader = new Uint8Array(46 + nameBytes.byteLength);
+      const centralView = new DataView(centralHeader.buffer);
+      centralView.setUint32(0, 0x02014b50, true);
+      centralView.setUint16(4, 20, true);
+      centralView.setUint16(6, 20, true);
+      centralView.setUint16(8, 0x0800, true);
+      centralView.setUint16(10, 0, true);
+      centralView.setUint16(12, time, true);
+      centralView.setUint16(14, date, true);
+      centralView.setUint32(16, checksum, true);
+      centralView.setUint32(20, data.byteLength, true);
+      centralView.setUint32(24, data.byteLength, true);
+      centralView.setUint16(28, nameBytes.byteLength, true);
+      centralView.setUint16(30, 0, true);
+      centralView.setUint16(32, 0, true);
+      centralView.setUint16(34, 0, true);
+      centralView.setUint16(36, 0, true);
+      centralView.setUint32(38, 0, true);
+      centralView.setUint32(42, localOffset, true);
+      centralHeader.set(nameBytes, 46);
+      centralParts.push(centralHeader);
+      localOffset += localHeader.byteLength + data.byteLength;
+    }
+
+    const centralDirectory = concatByteArrays(centralParts);
+    const end = new Uint8Array(22);
+    const endView = new DataView(end.buffer);
+    endView.setUint32(0, 0x06054b50, true);
+    endView.setUint16(4, 0, true);
+    endView.setUint16(6, 0, true);
+    endView.setUint16(8, entries.length, true);
+    endView.setUint16(10, entries.length, true);
+    endView.setUint32(12, centralDirectory.byteLength, true);
+    endView.setUint32(16, localOffset, true);
+    endView.setUint16(20, 0, true);
+    return concatByteArrays([...localParts, centralDirectory, end]);
+  }
+
+  function canvasToJpegBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error("No se pudo convertir una pagina a JPG.")),
+        "image/jpeg",
+        0.92
+      );
+    });
+  }
+
+  function downloadBlob(blob, fileName) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  async function exportPagesAsJpegZip() {
+    if (!state.app?.pdfDocument || state.isExportingPagesZip) return;
+    state.isExportingPagesZip = true;
+    refreshSyncButtons();
+    showBusy("Preparando paginas JPG...");
+
+    let exportDocument = null;
+    try {
+      const savedBytes = await state.app.pdfDocument.saveDocument();
+      const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(savedBytes) });
+      exportDocument = await loadingTask.promise;
+      const pageCount = exportDocument.numPages;
+      const digits = Math.max(3, String(pageCount).length);
+      const entries = [];
+
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        updateBusy(`Renderizando pagina ${pageNumber} de ${pageCount}...`);
+        const page = await exportDocument.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("El navegador no pudo crear el lienzo de exportacion.");
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: context, viewport, background: "#ffffff" }).promise;
+        const jpegBlob = await canvasToJpegBlob(canvas);
+        entries.push({
+          name: `pagina-${String(pageNumber).padStart(digits, "0")}.jpg`,
+          bytes: new Uint8Array(await jpegBlob.arrayBuffer()),
+        });
+        page.cleanup?.();
+        canvas.width = 1;
+        canvas.height = 1;
+      }
+
+      updateBusy("Creando archivo ZIP...");
+      const zipBytes = buildStoredZip(entries);
+      const sourceName = normalizePdfFileName(
+        state.query.fileName || state.app._docFilename || "documento.pdf"
+      ).replace(/\.pdf$/i, "");
+      downloadBlob(new Blob([zipBytes], { type: "application/zip" }), `${sourceName}-paginas.zip`);
+      showToast("Paginas JPG descargadas.", "success", 2800);
+    } catch (error) {
+      console.error("Custom PDF.js page ZIP export failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudieron exportar las paginas.", "error", 4600);
+    } finally {
+      await exportDocument?.destroy?.();
+      state.isExportingPagesZip = false;
+      hideBusy();
+      refreshSyncButtons();
+    }
   }
 
   async function submitPageRangeExport(startPage, endPage, inputName) {
@@ -2398,7 +2699,7 @@
     } catch {}
   }
 
-  function markDocumentAsSynced() {
+  function markDocumentAsSynced(syncedHash = getAnnotationContentHash()) {
     const annotationStorage = state.app?.pdfDocument?.annotationStorage;
     annotationStorage?.resetModified?.();
     annotationStorage?.resetModifiedIds?.();
@@ -2409,6 +2710,10 @@
     state.hasUnsyncedChanges = false;
     state.isSynced = true;
     state.pendingExitSync = false;
+    state.lastSyncedAnnotationHash = syncedHash;
+    state.lastObservedAnnotationHash = syncedHash;
+    state.autosyncRetryCount = 0;
+    clearAutosyncTimer();
     refreshSyncButtons();
   }
 
@@ -3409,7 +3714,7 @@
     }
   }
 
-  async function syncAnnotatedPdf() {
+  async function syncAnnotatedPdf({ automatic = false } = {}) {
     if (!canSyncCurrentDocument()) {
       showToast("La sincronizacion solo esta disponible para documentos guardados.", "info");
       return false;
@@ -3422,17 +3727,19 @@
       return false;
     }
     if (!hasUnsyncedAnnotations()) {
-      showToast("No hay cambios pendientes para sincronizar.", "info");
+      if (!automatic) showToast("No hay cambios pendientes para sincronizar.", "info");
       refreshSyncButtons();
       return false;
     }
 
+    clearAutosyncTimer();
     state.isSyncing = true;
     state.pendingExitSync = false;
     refreshSyncButtons();
     showStatus("Sincronizando...");
 
     try {
+      const syncingHash = getAnnotationContentHash();
       const pdfBytes = await state.app.pdfDocument.saveDocument();
       const fileName = normalizePdfFileName(
         state.query.fileName || state.app._docFilename || (isCronogramaResource() ? "cronograma" : "material")
@@ -3441,12 +3748,17 @@
       if (isLocalWorkspaceMode()) {
         await syncAnnotatedPdfToLocalWorkspace(pdfBytes, fileName);
         state.query.fileName = fileName;
-        markDocumentAsSynced();
+        const fullySynced = getAnnotationContentHash() === syncingHash;
+        if (fullySynced) {
+          markDocumentAsSynced(syncingHash);
+        } else {
+          scheduleAutosync();
+        }
         refreshDocumentViewerMetadata();
         notifySubjectDayMaterialsRefresh();
-        showStatus("Puedes salir, sincronizado.");
+        showStatus(fullySynced ? "Puedes salir, sincronizado." : "Guardando cambios nuevos...");
         scheduleHideStatus();
-        return true;
+        return fullySynced;
       }
 
       const formData = new FormData();
@@ -3474,17 +3786,27 @@
             ? payload.fileName.trim()
             : fileName;
 
-      markDocumentAsSynced();
+      const fullySynced = getAnnotationContentHash() === syncingHash;
+      if (fullySynced) {
+        markDocumentAsSynced(syncingHash);
+      } else {
+        scheduleAutosync();
+      }
       refreshDocumentViewerMetadata();
       notifySubjectDayMaterialsRefresh();
-      showStatus("Puedes salir, sincronizado.");
+      showStatus(fullySynced ? "Puedes salir, sincronizado." : "Guardando cambios nuevos...");
       scheduleHideStatus();
-      return true;
+      return fullySynced;
     } catch (error) {
       console.error("Custom PDF.js sync failed:", error);
       showStatus("La sincronizacion fallo.");
       scheduleHideStatus(3200);
       showToast(error instanceof Error ? error.message : "No se pudo sincronizar el PDF anotado.", "error", 4200);
+      state.autosyncRetryCount += 1;
+      scheduleAutosync(Math.min(
+        AUTOSYNC_RETRY_MAX_MS,
+        AUTOSYNC_RETRY_BASE_MS * (2 ** Math.min(state.autosyncRetryCount - 1, 3))
+      ));
       return false;
     } finally {
       state.isSyncing = false;
@@ -4083,6 +4405,10 @@
     state.inscreenAnnotationOrder = new Map();
     state.inscreenAnnotationCounter = 0;
     state.inscreenCurrentPage = state.app?.pdfViewer?.currentPageNumber || 1;
+    clearAutosyncTimer();
+    state.autosyncRetryCount = 0;
+    state.lastObservedAnnotationHash = getAnnotationContentHash();
+    state.lastSyncedAnnotationHash = state.lastObservedAnnotationHash;
     closeReplacementModal();
     leaveSelectionMode();
     updateDraftOverlay();
@@ -4122,6 +4448,11 @@
 
   function handleKeyDown(event) {
     if (!state.app || event.defaultPrevented || event.repeat) return;
+    if (event.key === "Escape" && state.openEditorConfigPanel) {
+      event.preventDefault();
+      closeEditorConfigPanels();
+      return;
+    }
     if (event.key === "Escape" && state.translationPopover?.dataset.open === "true") {
       event.preventDefault();
       closeTranslationPopover();
@@ -4191,7 +4522,8 @@
     state.query = parseQuery();
     state.presentationPhase = isPresentationMode() ? "source" : "idle";
     ensureUi();
-    bindSyncButtons();
+    bindDocumentActionButtons();
+    bindEditorToolBehavior();
     refreshLayers();
     updateDraftOverlay();
 
@@ -4211,6 +4543,9 @@
     });
     eventBus.on("annotationeditorstateschanged", () => {
       getInscreenAnnotationEntries();
+    });
+    eventBus.on("annotationeditormodechanged", () => {
+      window.setTimeout(() => closeEditorConfigPanels(), 0);
     });
     eventBus.on("pagesinit", initializePresentationScale);
     eventBus.on("scalechanging", refreshLayers);
@@ -4242,6 +4577,16 @@
     viewerContainer?.addEventListener("keyup", () => window.setTimeout(captureViewerTextSelection, 0));
     viewerContainer?.addEventListener("scroll", closeTranslationPopover, { passive: true });
     document.addEventListener("pointerdown", (event) => {
+      if (state.openEditorConfigPanel) {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          !target.closest(".editorParamsToolbar") &&
+          !target.closest(".pdfjs-custom-editor-tool-button")
+        ) {
+          closeEditorConfigPanels();
+        }
+      }
       if (state.translationPopover?.dataset.open !== "true") return;
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -4275,7 +4620,7 @@
     postToParent({ type: "viewerReady" });
 
     if (!state.syncStatePoller) {
-      state.syncStatePoller = window.setInterval(refreshSyncButtons, 400);
+      state.syncStatePoller = window.setInterval(monitorAnnotationChanges, 400);
     }
 
     if (!window.PDFLib?.PDFDocument) {
