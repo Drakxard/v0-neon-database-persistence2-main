@@ -1,4 +1,6 @@
-import { getGoogleAccessToken, getGoogleAccessTokenForRefreshToken } from "@/lib/google-oauth"
+import { createHash } from "node:crypto"
+
+import { getGoogleAccessToken, getGoogleAccessTokenDetailsForRefreshToken, getGoogleAccessTokenForRefreshToken } from "@/lib/google-oauth"
 import { RemoteFileNotFoundError } from "@/lib/remote-file-errors"
 import { WEEKDAY_NAMES } from "@/lib/subject-utils"
 
@@ -7,28 +9,44 @@ const DRIVE_RESUMABLE_UPLOAD_URL =
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink"
 const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 
-async function userDriveRequest(refreshToken: string, url: string, init?: RequestInit) {
-  const accessToken = await getGoogleAccessTokenForRefreshToken(refreshToken)
+const pendingUserFolders = new Map<string, Promise<{ id: string; name: string; webViewLink?: string }>>()
+
+async function userDriveRequest(refreshToken: string, url: string, init?: RequestInit, preparedAccessToken?: string) {
+  const accessToken = preparedAccessToken || await getGoogleAccessTokenForRefreshToken(refreshToken)
   const response = await fetch(url, { ...init, headers: { Authorization: `Bearer ${accessToken}`, ...(init?.headers || {}) } })
   if (!response.ok) throw new Error((await response.text()) || "Google Drive request failed")
   return response
 }
 
-async function findUserFolder(refreshToken: string, name: string, parentId?: string) {
+async function findUserFolder(refreshToken: string, name: string, parentId?: string, accessToken?: string) {
   const query = [`mimeType='${FOLDER_MIME_TYPE}'`, `name='${escapeDriveQueryValue(name)}'`, "trashed=false"]
   if (parentId) query.push(`'${parentId}' in parents`)
-  const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,webViewLink)&pageSize=1`)
+  const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,webViewLink)&pageSize=1`, undefined, accessToken)
   return ((await response.json()) as { files?: Array<{ id: string; name: string; webViewLink?: string }> }).files?.[0] || null
 }
 
-export async function ensureUserDriveFolder(refreshToken: string, name: string, parentId?: string) {
-  const existing = await findUserFolder(refreshToken, name, parentId)
-  if (existing) return existing
-  const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?fields=id,name,webViewLink`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, mimeType: FOLDER_MIME_TYPE, ...(parentId ? { parents: [parentId] } : {}) }),
-  })
-  return response.json() as Promise<{ id: string; name: string; webViewLink?: string }>
+export async function ensureUserDriveFolder(refreshToken: string, name: string, parentId?: string, accessToken?: string) {
+  const safeName = name.replace(/\n/g, " ").trim()
+  const lockKey = createHash("sha256").update(`${refreshToken}\0${parentId || "root"}\0${safeName}`).digest("hex")
+  const inFlight = pendingUserFolders.get(lockKey)
+  if (inFlight) return inFlight
+
+  const operation = (async () => {
+    const existing = await findUserFolder(refreshToken, safeName, parentId, accessToken)
+    if (existing) return existing
+    const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?fields=id,name,webViewLink`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: safeName, mimeType: FOLDER_MIME_TYPE, ...(parentId ? { parents: [parentId] } : {}) }),
+    }, accessToken)
+    return response.json() as Promise<{ id: string; name: string; webViewLink?: string }>
+  })()
+
+  pendingUserFolders.set(lockKey, operation)
+  try {
+    return await operation
+  } finally {
+    if (pendingUserFolders.get(lockKey) === operation) pendingUserFolders.delete(lockKey)
+  }
 }
 
 export async function getUserDriveIdentity(refreshToken: string) {
@@ -36,18 +54,39 @@ export async function getUserDriveIdentity(refreshToken: string) {
   return (await response.json()) as { user?: { displayName?: string; emailAddress?: string } }
 }
 
-export async function createUserDriveUploadSession(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; fileName: string; mimeType: string }) {
-  const subject = await ensureUserDriveFolder(params.refreshToken, params.subjectName.replace(/\n/g, " ").trim(), params.rootFolderId)
-  const week = await ensureUserDriveFolder(params.refreshToken, `Semana ${params.weekNumber}`, subject.id)
-  const container = await ensureUserDriveFolder(params.refreshToken, params.containerName.replace(/\n/g, " ").trim(), week.id)
-  const response = await userDriveRequest(params.refreshToken, DRIVE_RESUMABLE_UPLOAD_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": params.mimeType },
-    body: JSON.stringify({ name: params.fileName, mimeType: params.mimeType, parents: [container.id] }),
-  })
-  const uploadUrl = response.headers.get("location")
-  if (!uploadUrl) throw new Error("Google Drive did not return a resumable upload URL.")
-  return { uploadUrl }
+async function findUploadedUserMaterial(refreshToken: string, accessToken: string, parentId: string, materialId: number, contentFingerprint: string) {
+  const query = [
+    `'${escapeDriveQueryValue(parentId)}' in parents`,
+    "trashed=false",
+    `appProperties has { key='cursadoMaterialId' and value='${escapeDriveQueryValue(String(materialId))}' }`,
+    `appProperties has { key='cursadoContentSha256' and value='${escapeDriveQueryValue(contentFingerprint)}' }`,
+  ]
+  const response = await userDriveRequest(
+    refreshToken,
+    `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,mimeType,webViewLink)&pageSize=1`,
+    undefined,
+    accessToken,
+  )
+  return ((await response.json()) as { files?: Array<{ id: string; name: string; mimeType: string; webViewLink?: string }> }).files?.[0] || null
+}
+
+export async function prepareUserDriveUpload(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; materialId: number; contentFingerprint: string }) {
+  const token = await getGoogleAccessTokenDetailsForRefreshToken(params.refreshToken)
+  const subject = await ensureUserDriveFolder(params.refreshToken, params.subjectName, params.rootFolderId, token.accessToken)
+  const week = await ensureUserDriveFolder(params.refreshToken, `Semana ${params.weekNumber}`, subject.id, token.accessToken)
+  const container = await ensureUserDriveFolder(params.refreshToken, params.containerName, week.id, token.accessToken)
+  const existingFile = await findUploadedUserMaterial(params.refreshToken, token.accessToken, container.id, params.materialId, params.contentFingerprint)
+  if (existingFile) return { existingFile }
+
+  return {
+    accessToken: token.accessToken,
+    expiresAt: new Date(Date.now() + token.expiresIn * 1000).toISOString(),
+    parentFolderId: container.id,
+    appProperties: {
+      cursadoMaterialId: String(params.materialId),
+      cursadoContentSha256: params.contentFingerprint,
+    },
+  }
 }
 
 export async function deleteUserDriveFile(refreshToken: string, fileId: string) {

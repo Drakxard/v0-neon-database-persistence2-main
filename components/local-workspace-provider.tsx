@@ -500,6 +500,7 @@ export function LocalWorkspaceProvider({
       const status = await statusResponse.json().catch(() => ({ connected: false })) as DriveStatus
       if (!cancelled) setDriveStatus(status)
       if (!status.connected) return
+      await enqueueAllLocalMaterialsForDrive()
       const summary = await processLocalDriveSyncQueue()
       if (!cancelled) setDriveSummary(summary)
     }

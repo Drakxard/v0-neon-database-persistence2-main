@@ -53,7 +53,7 @@ export async function exchangeCodeForRefreshToken(code: string) {
   }
 }
 
-export async function getGoogleAccessTokenForRefreshToken(refreshToken: string) {
+export async function getGoogleAccessTokenDetailsForRefreshToken(refreshToken: string) {
   const { clientId, clientSecret } = getGoogleOAuthConfig()
   const response = await fetch(GOOGLE_TOKEN_URL, {
     method: "POST",
@@ -62,7 +62,14 @@ export async function getGoogleAccessTokenForRefreshToken(refreshToken: string) 
   })
   const payload = await response.json()
   if (!response.ok || !payload.access_token) throw new RemoteProviderAuthError("drive", payload.error_description || payload.error || "Failed to refresh Google access token")
-  return payload.access_token as string
+  return {
+    accessToken: payload.access_token as string,
+    expiresIn: Number(payload.expires_in) || 3600,
+  }
+}
+
+export async function getGoogleAccessTokenForRefreshToken(refreshToken: string) {
+  return (await getGoogleAccessTokenDetailsForRefreshToken(refreshToken)).accessToken
 }
 
 export async function getGoogleAccessToken() {

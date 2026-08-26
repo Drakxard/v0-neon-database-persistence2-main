@@ -48,6 +48,7 @@ import {
   type LocalSubjectCatalogEntry,
 } from "@/lib/local-subject-catalog"
 import { SUBJECTS } from "@/lib/subjects"
+import { uploadPdfDirectlyToDrive } from "@/lib/google-drive-upload-client"
 import { getWeekNumberForDate, getWeekdayIndexFromDateKey, parseDateKey } from "@/lib/subject-utils"
 
 type MaterialManifest = {
@@ -234,7 +235,7 @@ export async function getLocalDriveSyncSummary() {
   const errors = items
     .filter((item) => item.status === "failed" && item.lastError)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-    .slice(0, 5)
+    .slice(0, 1)
     .map((item) => `${item.fileName}: ${item.lastError}`)
   return {
     synced: items.filter((item) => item.status === "synced").length,
@@ -271,12 +272,7 @@ async function runLocalDriveSyncQueue() {
         continue
       }
       const file = await getWorkspaceFile(item.localFileId)
-      const sessionResponse = await fetch("/api/google/drive/upload-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
-      const session = await sessionResponse.json().catch(() => null) as { uploadUrl?: string; error?: string } | null
-      if (!sessionResponse.ok || !session?.uploadUrl) throw new Error(session?.error || "No se pudo iniciar la subida a Drive.")
-      const uploadResponse = await fetch(session.uploadUrl, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: file })
-      const uploaded = await uploadResponse.json().catch(() => null) as { id?: string; webViewLink?: string } | null
-      if (!uploadResponse.ok || !uploaded?.id) throw new Error("Google Drive no confirmo la subida.")
+      const uploaded = await uploadPdfDirectlyToDrive(item, file)
       if (item.driveFileId && item.driveFileId !== uploaded.id) await fetch(`/api/google/drive/files/${encodeURIComponent(item.driveFileId)}`, { method: "DELETE" }).catch(() => undefined)
       const latest = await readDriveSyncManifest()
       await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, driveFileId: uploaded.id!, status: "synced", attempts: current.attempts + 1, lastError: "", updatedAt: nowIso() } : current))

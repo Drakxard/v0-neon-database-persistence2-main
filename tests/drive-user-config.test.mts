@@ -27,8 +27,20 @@ test("User.Drive separa y cifra la cuenta sin exponer el refresh token", () => {
 
 test("la replica usa materia, semana y contenedor sin crear carpeta por dia", () => {
   const drive = readFileSync(new URL("../lib/google-drive.ts", import.meta.url), "utf8")
-  const replica = drive.slice(drive.indexOf("export async function createUserDriveUploadSession"), drive.indexOf("export async function deleteUserDriveFile"))
+  const replica = drive.slice(drive.indexOf("export async function prepareUserDriveUpload"), drive.indexOf("export async function deleteUserDriveFile"))
   assert.match(replica, /`Semana \$\{params\.weekNumber\}`/)
   assert.match(replica, /params\.containerName/)
   assert.doesNotMatch(replica, /weekdayIndex|WEEKDAY_NAMES|Dia /)
+})
+
+test("la sesion de replica se inicia en el navegador y el token no se persiste", () => {
+  const route = readFileSync(new URL("../app/api/google/drive/upload-session/route.ts", import.meta.url), "utf8")
+  const client = readFileSync(new URL("../lib/google-drive-upload-client.ts", import.meta.url), "utf8")
+  const workspace = readFileSync(new URL("../lib/local-workspace-data.ts", import.meta.url), "utf8")
+  assert.match(route, /Cache-Control.*no-store/)
+  assert.match(client, /Authorization: `Bearer \$\{context\.accessToken\}`/)
+  assert.match(client, /Content-Range/)
+  assert.match(client, /response\.status === 308/)
+  const manifestAndQueue = workspace.slice(workspace.indexOf("export type DriveSyncItem"), workspace.indexOf("type SubjectFolderMigrationJournal"))
+  assert.doesNotMatch(manifestAndQueue, /accessToken|expiresAt/)
 })
