@@ -18,6 +18,7 @@ import {
   persistDriveFileHalf,
   removeDriveFileHalf,
   setReadyInscreenConfigHalf,
+  getReadyInscreenConfigHalf,
   setReadyDriveConfigHalf,
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
@@ -35,10 +36,10 @@ type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported"
 
 type DriveStatus = { connected: boolean; email?: string; rootFolderName?: string; rootFolderLink?: string; error?: string }
 type DriveSummary = { synced: number; pending: number; failed: number }
+type ApiStatus = { groq: boolean; r2: boolean }
 
 type InscreenConfigValues = {
   GROQ_API_KEY: string
-  MARKER_API: string
   R2_BUCKET_NAME: string
   R2_ACCESS_KEY_ID: string
   R2_SECRET_ACCESS_KEY: string
@@ -47,7 +48,6 @@ type InscreenConfigValues = {
 
 const EMPTY_INSCREEN_CONFIG: InscreenConfigValues = {
   GROQ_API_KEY: "",
-  MARKER_API: "",
   R2_BUCKET_NAME: "",
   R2_ACCESS_KEY_ID: "",
   R2_SECRET_ACCESS_KEY: "",
@@ -194,7 +194,7 @@ function InscreenConfigModal({
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Configuración InScreen</p>
             <h2 className="mt-2 text-2xl font-semibold">Conecta tus servicios</h2>
           </div>
-          <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">Paso {step + 1} de 4</span>
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">{step === 0 ? "Groq" : "Cloudflare R2"}</span>
         </div>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Tus credenciales se cifran en el servidor. `User.InScreen` conserva la Mitad A y Vercel instala la Mitad B como cookie HttpOnly, fuera del alcance del JavaScript.
@@ -208,13 +208,6 @@ function InscreenConfigModal({
             </>
           ) : null}
           {step === 1 ? (
-            <>
-              <h3 className="text-lg font-semibold">Marker de Datalab</h3>
-              <p className="text-sm text-slate-600">Extrae el contenido de la página después del tiempo de lectura.</p>
-              {secretField("MARKER_API", "marker_api / MARKER_API")}
-            </>
-          ) : null}
-          {step === 2 ? (
             <>
               <h3 className="text-lg font-semibold">Cloudflare R2</h3>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -247,13 +240,12 @@ function InscreenConfigModal({
         {error ? <p className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
         <div className="mt-7 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {step < 3 ? <button type="button" onClick={onSkip} disabled={saving} className="h-11 rounded-xl px-3 text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40">Omitir por ahora</button> : null}
-            {step < 3 ? <button type="button" onClick={onBack} disabled={saving || step === 0} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Anterior</button> : null}
+            {step < 2 ? <button type="button" onClick={onBack} disabled={saving} className="h-11 rounded-xl border border-slate-300 px-5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40">Volver a servicios</button> : null}
           </div>
           {step < 2 ? (
-            <button type="button" onClick={onNext} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500">Siguiente</button>
+            <button type="button" onClick={onSave} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">{saving ? "Protegiendo..." : "Guardar"}</button>
           ) : step === 2 ? (
-            <button type="button" onClick={onSave} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">{saving ? "Protegiendo..." : "Guardar y continuar"}</button>
+            <button type="button" onClick={onSave} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">Guardar</button>
           ) : <button type="button" onClick={onFinish} disabled={saving} className="h-11 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50">Finalizar</button>}
         </div>
       </div>
@@ -261,11 +253,14 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ drive, summary, busy, error, onConnect, onDisconnect, onSync, onClose }: {
+function ServicesPanel({ apis, drive, summary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onClose }: {
+  apis: ApiStatus
   drive: DriveStatus
   summary: DriveSummary
   busy: boolean
   error: string
+  onConfigureGroq: () => void
+  onConfigureR2: () => void
   onConnect: () => void
   onDisconnect: () => void
   onSync: () => void
@@ -282,9 +277,8 @@ function ServicesPanel({ drive, summary, busy, error, onConnect, onDisconnect, o
       <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Servicios</p>
       <h2 className="mt-2 text-2xl font-semibold">Conexiones de este navegador</h2>
       <div className="mt-6 space-y-3">
-        {service("Groq", "Configurado en User.InScreen")}
-        {service("Marker", "Configurado en User.InScreen")}
-        {service("Cloudflare R2", "Configurado en User.InScreen")}
+        <button type="button" onClick={onConfigureGroq} className="block w-full text-left">{service("Groq", apis.groq ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.groq)}</button>
+        <button type="button" onClick={onConfigureR2} className="block w-full text-left">{service("Cloudflare R2", apis.r2 ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.r2)}</button>
         {service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
       </div>
       {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
@@ -345,6 +339,7 @@ export function LocalWorkspaceProvider({
   const [pairingExpiresAt, setPairingExpiresAt] = useState("")
   const [providerDevices, setProviderDevices] = useState<Array<{ deviceId: string; enabled: boolean; createdAt: string }>>([])
   const [driveStatus, setDriveStatus] = useState<DriveStatus>({ connected: false })
+  const [apiStatus, setApiStatus] = useState<ApiStatus>({ groq: false, r2: false })
   const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0 })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
@@ -464,18 +459,21 @@ export function LocalWorkspaceProvider({
       if (unlocked.ok) {
         setConfigStep(4)
         setBootState("configure")
-        const [statusResponse, summary] = await Promise.all([
+        const [statusResponse, inscreenStatusResponse, summary] = await Promise.all([
           fetch("/api/google/drive/status", { cache: "no-store" }),
+          fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-half": getReadyInscreenConfigHalf() } }),
           getLocalDriveSyncSummary(),
         ])
         setDriveStatus(await statusResponse.json().catch(() => ({ connected: false })))
+        const inscreenStatus = await inscreenStatusResponse.json().catch(() => null) as { services?: ApiStatus } | null
+        setApiStatus(inscreenStatus?.services ?? { groq: false, r2: false })
         setDriveSummary(summary)
         return
       }
 
-      setReadyWorkspaceHandle(null)
-      setConfigStep(0)
-      setError(unlocked.error)
+      setApiStatus({ groq: false, r2: false })
+      setConfigStep(4)
+      setError("")
       setBootState("configure")
     }
 
@@ -570,7 +568,6 @@ export function LocalWorkspaceProvider({
   const nextConfigStep = () => {
     const requiredByStep: Array<Array<keyof InscreenConfigValues>> = [
       ["GROQ_API_KEY"],
-      ["MARKER_API"],
       ["R2_BUCKET_NAME", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT"],
     ]
     const missing = requiredByStep[configStep].find((field) => !configValues[field].trim())
@@ -579,7 +576,6 @@ export function LocalWorkspaceProvider({
       return false
     }
     setError("")
-    if (configStep < 2) setConfigStep((current) => current + 1)
     return true
   }
 
@@ -614,7 +610,7 @@ export function LocalWorkspaceProvider({
       setError("")
       const sealedResponse = await fetch("/api/inscreen/config/seal", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(getReadyInscreenConfigHalf() ? { "x-inscreen-config-half": getReadyInscreenConfigHalf() } : {}) },
         body: JSON.stringify(configValues),
       })
       const sealedPayload = await sealedResponse.json().catch(() => null) as { fileHalf?: string; error?: string } | null
@@ -626,8 +622,9 @@ export function LocalWorkspaceProvider({
       if (!unlocked.ok) throw new Error(unlocked.error)
       setInscreenConfigurationSkipped(false)
       setReadyWorkspaceHandle(rootHandle)
-      setConfigStep(3)
-      await createPairingQr()
+      setApiStatus((current) => ({ ...current, ...(configStep === 0 ? { groq: true } : { r2: true }) }))
+      setConfigValues(EMPTY_INSCREEN_CONFIG)
+      setConfigStep(4)
     } catch (configError) {
       setError(configError instanceof Error ? configError.message : "No se pudo guardar la configuracion InScreen.")
     } finally {
@@ -726,7 +723,7 @@ export function LocalWorkspaceProvider({
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel drive={driveStatus} summary={driveSummary} busy={savingConfig} error={error} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}
@@ -739,7 +736,7 @@ export function LocalWorkspaceProvider({
           }}
           onBack={() => {
             setError("")
-            setConfigStep((current) => Math.max(0, current - 1))
+            setConfigStep(4)
           }}
           onNext={() => { nextConfigStep() }}
           onSave={() => { void saveInscreenConfiguration() }}

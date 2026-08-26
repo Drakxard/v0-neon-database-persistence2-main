@@ -1,5 +1,5 @@
 import { requireAuthSession } from "@/lib/authz"
-import { buildInscreenConfigCookie, splitInscreenUserConfig } from "@/lib/inscreen-user-config"
+import { buildInscreenConfigCookie, readInscreenUserConfig, splitInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 
@@ -8,7 +8,10 @@ export async function POST(request: Request) {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
     const body = await request.json().catch(() => null)
-    const { fileHalf, cookieHalf } = splitInscreenUserConfig(body)
+    let previous: Record<string, string> = {}
+    try { previous = readInscreenUserConfig(request) } catch {}
+    const updates = body && typeof body === "object" ? Object.fromEntries(Object.entries(body).filter(([, value]) => String(value || "").trim())) : {}
+    const { fileHalf, cookieHalf } = splitInscreenUserConfig({ ...previous, ...updates })
     return Response.json(
       { fileHalf },
       {

@@ -37,24 +37,16 @@ function getSeed() {
 export function normalizeInscreenUserConfig(value: unknown): InscreenUserConfig {
   const input = value && typeof value === "object" ? value as Record<string, unknown> : {}
   const config = Object.fromEntries(CONFIG_FIELDS.map((field) => [field, String(input[field] || "").trim()])) as InscreenUserConfig
-  for (const field of CONFIG_FIELDS) {
-    if (!config[field]) throw new Error(`Falta configurar ${field}.`)
-  }
-  const endpoint = new URL(config.R2_ENDPOINT)
-  if (
-    endpoint.protocol !== "https:" ||
-    endpoint.username ||
-    endpoint.password ||
-    endpoint.port ||
-    endpoint.pathname !== "/" ||
-    endpoint.search ||
-    endpoint.hash ||
-    !/^[a-z0-9]{32}(?:\.(?:eu|fedramp))?\.r2\.cloudflarestorage\.com$/i.test(endpoint.hostname)
-  ) {
-    throw new Error("R2_ENDPOINT debe ser un endpoint S3 oficial de Cloudflare R2.")
-  }
-  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(config.R2_BUCKET_NAME)) {
-    throw new Error("R2_BUCKET_NAME invalido.")
+  const r2Fields = [config.R2_BUCKET_NAME, config.R2_ACCESS_KEY_ID, config.R2_SECRET_ACCESS_KEY, config.R2_ENDPOINT]
+  if (r2Fields.some(Boolean) && !r2Fields.every(Boolean)) throw new Error("Completa todos los campos de Cloudflare R2.")
+  if (config.R2_ENDPOINT) {
+    const endpoint = new URL(config.R2_ENDPOINT)
+    if (
+      endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.port ||
+      endpoint.pathname !== "/" || endpoint.search || endpoint.hash ||
+      !/^[a-z0-9]{32}(?:\.(?:eu|fedramp))?\.r2\.cloudflarestorage\.com$/i.test(endpoint.hostname)
+    ) throw new Error("R2_ENDPOINT debe ser un endpoint S3 oficial de Cloudflare R2.")
+    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(config.R2_BUCKET_NAME)) throw new Error("R2_BUCKET_NAME invalido.")
   }
   for (const field of CONFIG_FIELDS) {
     if (Buffer.byteLength(config[field], "utf8") > 4096) throw new Error(`${field} es demasiado largo.`)
