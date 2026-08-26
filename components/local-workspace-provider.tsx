@@ -35,7 +35,7 @@ type LocalWorkspaceContextValue = {
 type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported" | "configure" | "ready"
 
 type DriveStatus = { connected: boolean; email?: string; rootFolderName?: string; rootFolderLink?: string; error?: string }
-type DriveSummary = { synced: number; pending: number; failed: number }
+type DriveSummary = { synced: number; pending: number; failed: number; errors: string[] }
 type ApiStatus = { groq: boolean; r2: boolean }
 
 type InscreenConfigValues = {
@@ -283,6 +283,10 @@ function ServicesPanel({ apis, drive, summary, busy, error, onConfigureGroq, onC
       </div>
       {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>{summary.synced} sincronizados · {summary.pending} pendientes · {summary.failed} con error</p>
+        {summary.errors.length ? <div className="mt-3 space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          {summary.errors.map((message, index) => <p key={`${index}-${message}`}>{message}</p>)}
+          <p className="pt-1 text-amber-700">Se reintentan automaticamente mientras la web esta abierta.</p>
+        </div> : null}
         <div className="mt-3 flex flex-wrap gap-2">
           {drive.rootFolderLink ? <a href={drive.rootFolderLink} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2">Abrir carpeta</a> : null}
           <button type="button" onClick={onSync} disabled={busy} className="rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Sincronizar existentes</button>
@@ -340,7 +344,7 @@ export function LocalWorkspaceProvider({
   const [providerDevices, setProviderDevices] = useState<Array<{ deviceId: string; enabled: boolean; createdAt: string }>>([])
   const [driveStatus, setDriveStatus] = useState<DriveStatus>({ connected: false })
   const [apiStatus, setApiStatus] = useState<ApiStatus>({ groq: false, r2: false })
-  const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0 })
+  const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0, errors: [] })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 

@@ -231,10 +231,16 @@ async function enqueueLocalMaterialDriveDelete(materialId: number) {
 
 export async function getLocalDriveSyncSummary() {
   const items = (await readDriveSyncManifest()).items
+  const errors = items
+    .filter((item) => item.status === "failed" && item.lastError)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 5)
+    .map((item) => `${item.fileName}: ${item.lastError}`)
   return {
     synced: items.filter((item) => item.status === "synced").length,
     pending: items.filter((item) => item.status === "pending").length,
     failed: items.filter((item) => item.status === "failed").length,
+    errors,
   }
 }
 
@@ -247,7 +253,9 @@ export async function enqueueAllLocalMaterialsForDrive() {
   return getLocalDriveSyncSummary()
 }
 
-export async function processLocalDriveSyncQueue() {
+let driveSyncRun: Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> | null = null
+
+async function runLocalDriveSyncQueue() {
   const manifest = await readDriveSyncManifest()
   for (const candidate of manifest.items.filter((item) => item.status !== "synced")) {
     const item = (await readDriveSyncManifest()).items.find((current) => current.materialId === candidate.materialId)
@@ -278,6 +286,15 @@ export async function processLocalDriveSyncQueue() {
     }
   }
   return getLocalDriveSyncSummary()
+}
+
+export function processLocalDriveSyncQueue() {
+  if (driveSyncRun) return driveSyncRun
+  const run = typeof navigator !== "undefined" && navigator.locks
+    ? navigator.locks.request("cursado2026-drive-sync", { mode: "exclusive" }, () => runLocalDriveSyncQueue())
+    : runLocalDriveSyncQueue()
+  driveSyncRun = run.finally(() => { driveSyncRun = null })
+  return driveSyncRun
 }
 
 type SubjectFolderMigrationJournal = {
