@@ -168,9 +168,11 @@ test("las herramientas PDF separan activacion y configuracion por pulsacion larg
   assert.match(pdfJs, /editorFreeTextParamsToolbar/)
   assert.match(pdfJs, /editorInkParamsToolbar/)
   assert.match(pdfJs, /suppressEditorToolClickButton/)
+  assert.match(pdfJs, /panel\.dataset\.customOpen = "true"/)
   assert.match(pdfJs, /event\.shiftKey && event\.key === "Enter"/)
   assert.match(pdfJs, /closeEditorConfigPanels/)
   assert.match(css, /#editorHighlightButton\.pdfjs-custom-editor-tool-button\.toggled/)
+  assert.match(css, /#editorHighlightParamsToolbar:not\(\[data-custom-open="true"\]\)/)
 })
 
 test("el visor muestra compactos los accesos con link de la materia", () => {

@@ -560,6 +560,7 @@
   function closeEditorConfigPanels(exceptPanel = null) {
     for (const { button, panel } of getEditorToolBindings()) {
       if (panel === exceptPanel) continue;
+      delete panel.dataset.customOpen;
       panel.classList.add("hidden");
       button.setAttribute("aria-expanded", "false");
       if (state.openEditorConfigPanel === panel) state.openEditorConfigPanel = null;
@@ -568,6 +569,7 @@
 
   function openEditorConfigPanel(button, panel) {
     closeEditorConfigPanels(panel);
+    panel.dataset.customOpen = "true";
     panel.classList.remove("hidden");
     button.setAttribute("aria-expanded", "true");
     state.openEditorConfigPanel = panel;
@@ -603,7 +605,7 @@
             if (state.suppressEditorToolClickButton === button) {
               state.suppressEditorToolClickButton = null;
             }
-          }, 0);
+          }, 750);
         });
       }
       button.addEventListener("contextmenu", (event) => event.preventDefault());

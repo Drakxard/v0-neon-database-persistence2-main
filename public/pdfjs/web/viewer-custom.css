@@ -593,6 +593,12 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
   background-color: color-mix(in srgb, #f97316 18%, transparent);
 }
 
+#editorHighlightParamsToolbar:not([data-custom-open="true"]),
+#editorFreeTextParamsToolbar:not([data-custom-open="true"]),
+#editorInkParamsToolbar:not([data-custom-open="true"]) {
+  display: none !important;
+}
+
 .pdfjs-custom-translate-button {
   background-image: none !important;
   color: var(--toolbar-icon-color, #374151);
