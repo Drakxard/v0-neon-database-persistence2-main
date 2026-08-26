@@ -156,6 +156,7 @@ const SUBJECT_CATALOG_MANIFEST = [MANIFESTS_DIR, "subject-catalog.json"]
 const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
 const MATERIAL_CONTAINERS_MANIFEST = [MANIFESTS_DIR, "material-containers.json"]
 const MATERIAL_CONTAINERS_BACKUP_MANIFEST = [MANIFESTS_DIR, "material-containers.backup.json"]
+const DRIVE_SYNC_MANIFEST = [MANIFESTS_DIR, "drive-sync.json"]
 const SUBJECT_MIGRATION_MANIFEST = [MANIFESTS_DIR, "subject-folder-migration-v2.json"]
 const SUBJECT_CATALOG_V1_BACKUP_MANIFEST = [MANIFESTS_DIR, "subject-catalog.v1.backup.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
@@ -166,6 +167,117 @@ type SubjectFolderMigrationPlan = {
   name: string
   targetStorageKey: string
   sourceStorageKeys: string[]
+}
+
+export type DriveSyncItem = {
+  materialId: number
+  operation: "upload" | "delete"
+  localFileId: string
+  driveFileId: string
+  subjectName: string
+  weekNumber: number
+  containerName: string
+  fileName: string
+  status: "pending" | "synced" | "failed"
+  attempts: number
+  lastError: string
+  updatedAt: string
+}
+
+type DriveSyncManifest = { version: 1; items: DriveSyncItem[] }
+
+async function readDriveSyncManifest() {
+  const value = await readJsonFile<DriveSyncManifest | null>(DRIVE_SYNC_MANIFEST, null)
+  return value ?? { version: 1 as const, items: [] }
+}
+
+async function writeDriveSyncManifest(items: DriveSyncItem[]) {
+  await writeJsonFile(DRIVE_SYNC_MANIFEST, { version: 1, items } satisfies DriveSyncManifest)
+}
+
+async function getDriveLocation(material: SubjectDayMaterial, preferredSubjectName = "") {
+  const entry = await resolveLocalSubjectCatalogEntry(material.subject_id)
+  const subjectName = preferredSubjectName.trim() || entry?.name || SUBJECTS.find((subject) => subject.id === material.subject_id)?.name || material.subject_id
+  const containers = await listLocalSubjectMaterialContainers(material.subject_id)
+  const container = containers.find((candidate) => candidate.id === material.container_id) || containers.find((candidate) => candidate.kind === material.material_type)
+  return { subjectName: subjectName.replace(/\n/g, " "), containerName: container?.name || (material.material_type === "theory" ? "Teoria" : "Practica") }
+}
+
+export async function enqueueLocalMaterialDriveUpload(material: SubjectDayMaterial, preferredSubjectName = "", force = false) {
+  const manifest = await readDriveSyncManifest()
+  const location = await getDriveLocation(material, preferredSubjectName)
+  const previous = manifest.items.find((item) => item.materialId === material.id)
+  if (!force && previous?.status === "synced" && previous.localFileId === material.drive_file_id && previous.fileName === material.file_name && previous.subjectName === location.subjectName && previous.weekNumber === material.week_number && previous.containerName === location.containerName) return previous
+  const next: DriveSyncItem = {
+    materialId: material.id, operation: "upload", localFileId: material.drive_file_id,
+    driveFileId: previous?.driveFileId || "", subjectName: location.subjectName,
+    weekNumber: material.week_number, containerName: location.containerName, fileName: material.file_name,
+    status: "pending", attempts: previous?.attempts || 0, lastError: "", updatedAt: nowIso(),
+  }
+  await writeDriveSyncManifest([...manifest.items.filter((item) => item.materialId !== material.id), next])
+  return next
+}
+
+async function enqueueLocalMaterialDriveDelete(materialId: number) {
+  const manifest = await readDriveSyncManifest()
+  const current = manifest.items.find((item) => item.materialId === materialId)
+  if (!current) return
+  if (!current.driveFileId) {
+    await writeDriveSyncManifest(manifest.items.filter((item) => item.materialId !== materialId))
+    return
+  }
+  await writeDriveSyncManifest(manifest.items.map((item) => item.materialId === materialId ? { ...item, operation: "delete", status: "pending", lastError: "", updatedAt: nowIso() } : item))
+}
+
+export async function getLocalDriveSyncSummary() {
+  const items = (await readDriveSyncManifest()).items
+  return {
+    synced: items.filter((item) => item.status === "synced").length,
+    pending: items.filter((item) => item.status === "pending").length,
+    failed: items.filter((item) => item.status === "failed").length,
+  }
+}
+
+export async function enqueueAllLocalMaterialsForDrive() {
+  for (const subjectId of await listKnownLocalSubjectIds()) {
+    for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, subjectId)) {
+      for (const material of (await readMaterialManifest(subjectId, weekNumber)).materials) await enqueueLocalMaterialDriveUpload(material)
+    }
+  }
+  return getLocalDriveSyncSummary()
+}
+
+export async function processLocalDriveSyncQueue() {
+  const manifest = await readDriveSyncManifest()
+  for (const candidate of manifest.items.filter((item) => item.status !== "synced")) {
+    const item = (await readDriveSyncManifest()).items.find((current) => current.materialId === candidate.materialId)
+    if (!item) continue
+    try {
+      if (item.operation === "delete") {
+        if (item.driveFileId) {
+          const response = await fetch(`/api/google/drive/files/${encodeURIComponent(item.driveFileId)}`, { method: "DELETE" })
+          if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || "No se pudo eliminar de Drive.")
+        }
+        const latest = await readDriveSyncManifest()
+        await writeDriveSyncManifest(latest.items.filter((current) => current.materialId !== item.materialId))
+        continue
+      }
+      const file = await getWorkspaceFile(item.localFileId)
+      const sessionResponse = await fetch("/api/google/drive/upload-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+      const session = await sessionResponse.json().catch(() => null) as { uploadUrl?: string; error?: string } | null
+      if (!sessionResponse.ok || !session?.uploadUrl) throw new Error(session?.error || "No se pudo iniciar la subida a Drive.")
+      const uploadResponse = await fetch(session.uploadUrl, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: file })
+      const uploaded = await uploadResponse.json().catch(() => null) as { id?: string; webViewLink?: string } | null
+      if (!uploadResponse.ok || !uploaded?.id) throw new Error("Google Drive no confirmo la subida.")
+      if (item.driveFileId && item.driveFileId !== uploaded.id) await fetch(`/api/google/drive/files/${encodeURIComponent(item.driveFileId)}`, { method: "DELETE" }).catch(() => undefined)
+      const latest = await readDriveSyncManifest()
+      await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, driveFileId: uploaded.id!, status: "synced", attempts: current.attempts + 1, lastError: "", updatedAt: nowIso() } : current))
+    } catch (error) {
+      const latest = await readDriveSyncManifest()
+      await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, status: "failed", attempts: current.attempts + 1, lastError: error instanceof Error ? error.message : "Error de sincronizacion.", updatedAt: nowIso() } : current))
+    }
+  }
+  return getLocalDriveSyncSummary()
 }
 
 type SubjectFolderMigrationJournal = {
@@ -2149,6 +2261,13 @@ export async function renameLocalSubjectMaterialContainer(containerId: number, r
     const updated = { ...current, name, normalizedName, updatedAt: nowIso() }
     manifest[subjectId] = stored.map((container) => container.id === containerId ? updated : container)
     await writeMaterialContainersManifest(manifest)
+    for (const sourceId of await resolveLocalSubjectSourceIds(subjectId)) {
+      for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId)) {
+        for (const material of (await readMaterialManifest(sourceId, weekNumber)).materials.filter((candidate) => candidate.container_id === containerId)) {
+          await enqueueLocalMaterialDriveUpload(material, "", true)
+        }
+      }
+    }
     return updated
   }
   return null
@@ -2752,6 +2871,7 @@ export async function createLocalMaterialUploadSession(input: {
 
 export async function completeLocalMaterialUpload(input: {
   subjectId: string
+  subjectName?: string
   sessionDate: string
   weekNumber?: number
   materialType: SubjectDayMaterialType
@@ -2797,6 +2917,7 @@ export async function completeLocalMaterialUpload(input: {
     updated_at: timestamp,
   }
   await writeMaterialManifest(storageKey, weekNumber, [...manifest.materials, nextMaterial])
+  await enqueueLocalMaterialDriveUpload(nextMaterial, input.subjectName)
   return nextMaterial
 }
 
@@ -2920,6 +3041,7 @@ export async function deleteLocalMaterial(materialId: number) {
   const material = await findMaterialById(materialId)
   if (!material) return null
 
+  await enqueueLocalMaterialDriveDelete(materialId)
   const materialManifest = await readMaterialManifest(material.subject_id, material.week_number)
   await writeMaterialManifest(
     material.subject_id,
@@ -3406,6 +3528,7 @@ export async function syncLocalMaterialPdf(materialId: number, formData: FormDat
     material.week_number,
     manifest.materials.map((candidate) => (candidate.id === materialId ? updatedMaterial : candidate))
   )
+  await enqueueLocalMaterialDriveUpload(updatedMaterial, "", true)
   const tagManifest = await readTagManifest()
   await writeTagManifest({
     ...tagManifest,

@@ -26,6 +26,8 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Storage
 
+Los PDF de materiales pueden replicarse en el Google Drive conectado por cada navegador desde el panel `|`. La copia usa `Cursado2026/{materia}/Semana {n}/{contenedor}` y no reemplaza el workspace local. Vercel conserva solamente las credenciales OAuth de la aplicacion; cada refresh token se cifra y divide entre `User.Drive` y una cookie HttpOnly.
+
 La aplicación usa un workspace local elegido por el usuario para materias, PDFs y manifiestos. No requiere una base de datos SQL.
 
 Las salidas de InSreen usan Cloudflare R2 para que otro programa pueda consumir los TXT. Su estado técnico se guarda por separado bajo `manifests/inscreen/`.

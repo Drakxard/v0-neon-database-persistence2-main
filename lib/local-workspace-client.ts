@@ -6,6 +6,7 @@ const WORKSPACE_STORE_NAME = "workspace"
 const WORKSPACE_ROOT_KEY = "root-handle"
 const LEGACY_INSCREEN_BROWSER_HALF_KEY = "inscreen-config-half"
 export const INSCREEN_CONFIG_FILE_NAME = "User.InScreen"
+export const DRIVE_CONFIG_FILE_NAME = "User.Drive"
 
 type WorkspaceRecord = {
   id: string
@@ -16,6 +17,7 @@ let cachedWorkspaceHandle: FileSystemDirectoryHandle | null = null
 let workspaceHandleLoad: Promise<FileSystemDirectoryHandle | null> | null = null
 let readyWorkspaceHandle: FileSystemDirectoryHandle | null = null
 let readyInscreenConfigHalf = ""
+let readyDriveConfigHalf = ""
 
 function openWorkspaceDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -116,6 +118,29 @@ export async function persistInscreenFileHalf(rootHandle: FileSystemDirectoryHan
   }
 }
 
+export async function loadDriveFileHalf(rootHandle: FileSystemDirectoryHandle) {
+  try {
+    const handle = await rootHandle.getFileHandle(DRIVE_CONFIG_FILE_NAME)
+    const parsed = JSON.parse(await (await handle.getFile()).text()) as { version?: number; half?: string }
+    return parsed.version === 1 ? String(parsed.half || "") : ""
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotFoundError") return ""
+    throw error
+  }
+}
+
+export async function persistDriveFileHalf(rootHandle: FileSystemDirectoryHandle, half: string) {
+  const handle = await rootHandle.getFileHandle(DRIVE_CONFIG_FILE_NAME, { create: true })
+  const writable = await handle.createWritable()
+  try { await writable.write(JSON.stringify({ version: 1, half }, null, 2)) } finally { await writable.close() }
+}
+
+export async function removeDriveFileHalf(rootHandle: FileSystemDirectoryHandle) {
+  try { await rootHandle.removeEntry(DRIVE_CONFIG_FILE_NAME) } catch (error) {
+    if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error
+  }
+}
+
 export function getReadyWorkspaceHandle() {
   return readyWorkspaceHandle
 }
@@ -133,6 +158,9 @@ export function getReadyInscreenConfigHalf() {
 export function setReadyInscreenConfigHalf(value: string) {
   readyInscreenConfigHalf = String(value || "")
 }
+
+export function getReadyDriveConfigHalf() { return readyDriveConfigHalf }
+export function setReadyDriveConfigHalf(value: string) { readyDriveConfigHalf = String(value || "") }
 
 export async function queryWorkspacePermission(handle: FileSystemDirectoryHandle, mode: FileSystemPermissionMode = "readwrite") {
   try {

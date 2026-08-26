@@ -39,6 +39,7 @@ import {
   listLocalMaterialTagRegions,
   mergeLocalMaterialTags,
   moveLocalSubjectMaterialContainer,
+  processLocalDriveSyncQueue,
   readLocalWorkspaceTabsState,
   saveLocalAiPrompt,
   saveLocalDailySession,
@@ -60,7 +61,7 @@ import {
   type LocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
 import { SUBJECT_IDS } from "@/lib/subjects"
-import { getReadyInscreenConfigHalf } from "@/lib/local-workspace-client"
+import { getReadyDriveConfigHalf, getReadyInscreenConfigHalf } from "@/lib/local-workspace-client"
 
 const INSCREEN_CONFIG_HALF_HEADER = "x-inscreen-config-half"
 
@@ -440,6 +441,7 @@ async function handleLocalApiRequest(request: Request) {
   if (matchesPath(pathSegments, ["api", "subject-day-materials", "complete"]) && method === "POST") {
     const body = await parseRequestJson<{
       subjectId: string
+      subjectName?: string
       sessionDate: string
       weekNumber?: number
       materialType: "theory" | "practice"
@@ -449,9 +451,9 @@ async function handleLocalApiRequest(request: Request) {
     }>(request)
     const materialType = body?.materialType === "theory" || body?.materialType === "practice" ? body.materialType : null
     if (!materialType) return errorResponse("Invalid materialType")
-    return jsonResponse(
-      await completeLocalMaterialUpload({
+    const completed = await completeLocalMaterialUpload({
         subjectId: String(body?.subjectId || "").trim(),
+        subjectName: String(body?.subjectName || "").trim(),
         sessionDate: String(body?.sessionDate || "").trim(),
         weekNumber: body?.weekNumber,
         materialType,
@@ -459,7 +461,8 @@ async function handleLocalApiRequest(request: Request) {
         driveFileId: String(body?.driveFileId || "").trim(),
         fileName: String(body?.fileName || ""),
       })
-    )
+    void processLocalDriveSyncQueue()
+    return jsonResponse(completed)
   }
 
   if (matchesPath(pathSegments, ["api", "subject-day-materials", "next-theory"]) && method === "GET") {
@@ -510,6 +513,7 @@ async function handleLocalApiRequest(request: Request) {
       }
       if (method === "DELETE") {
         const material = await deleteLocalMaterial(materialId)
+        void processLocalDriveSyncQueue()
         return material ? jsonResponse({ success: true, id: materialId }) : errorResponse("Material not found", 404)
       }
     }
@@ -615,6 +619,7 @@ async function handleLocalApiRequest(request: Request) {
 
     if (pathSegments[3] === "sync" && method === "POST") {
       const material = await syncLocalMaterialPdf(materialId, await request.formData())
+      void processLocalDriveSyncQueue()
       return material ? jsonResponse(material) : errorResponse("Material not found", 404)
     }
 
@@ -785,6 +790,18 @@ export function LocalFetchInterceptor() {
       const url = new URL(request.url)
       if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
         return originalFetch(input, init)
+      }
+      if (
+        request.method.toUpperCase() === "GET" &&
+        (url.pathname === "/api/google/oauth/start" || url.pathname === "/api/google/oauth/callback")
+      ) {
+        return originalFetch(input, init)
+      }
+      if (url.pathname.startsWith("/api/google/drive/")) {
+        const headers = new Headers(request.headers)
+        const fileHalf = getReadyDriveConfigHalf()
+        if (fileHalf) headers.set("x-drive-config-half", fileHalf)
+        return originalFetch(new Request(request, { headers }))
       }
       if (isProtectedInscreenRequest(url.pathname)) {
         const configHalf = getReadyInscreenConfigHalf()

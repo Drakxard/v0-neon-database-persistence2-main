@@ -53,29 +53,23 @@ export async function exchangeCodeForRefreshToken(code: string) {
   }
 }
 
+export async function getGoogleAccessTokenForRefreshToken(refreshToken: string) {
+  const { clientId, clientSecret } = getGoogleOAuthConfig()
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }),
+  })
+  const payload = await response.json()
+  if (!response.ok || !payload.access_token) throw new RemoteProviderAuthError("drive", payload.error_description || payload.error || "Failed to refresh Google access token")
+  return payload.access_token as string
+}
+
 export async function getGoogleAccessToken() {
-  const { clientId, clientSecret, refreshToken } = getGoogleOAuthConfig()
+  const { refreshToken } = getGoogleOAuthConfig()
   if (!refreshToken) {
     throw new RemoteProviderAuthError("drive", "Missing environment variable: GOOGLE_DRIVE_REFRESH_TOKEN")
   }
 
-  const response = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  })
-
-  const payload = await response.json()
-  if (!response.ok || !payload.access_token) {
-    throw new RemoteProviderAuthError("drive", payload.error_description || payload.error || "Failed to refresh Google access token")
-  }
-
-  return payload.access_token as string
+  return getGoogleAccessTokenForRefreshToken(refreshToken)
 }

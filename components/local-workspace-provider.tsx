@@ -9,15 +9,20 @@ import {
   clearLegacyInscreenBrowserHalf,
   ensureWorkspaceSubdirectories,
   loadInscreenFileHalf,
+  loadDriveFileHalf,
   loadWorkspaceHandle,
   pickWorkspaceRootHandle,
   queryWorkspacePermission,
   requestWorkspacePermission,
   persistInscreenFileHalf,
+  persistDriveFileHalf,
+  removeDriveFileHalf,
   setReadyInscreenConfigHalf,
+  setReadyDriveConfigHalf,
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
+import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, processLocalDriveSyncQueue } from "@/lib/local-workspace-data"
 
 type LocalWorkspaceContextValue = {
   isReady: boolean
@@ -27,6 +32,9 @@ type LocalWorkspaceContextValue = {
 }
 
 type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported" | "configure" | "ready"
+
+type DriveStatus = { connected: boolean; email?: string; rootFolderName?: string; rootFolderLink?: string; error?: string }
+type DriveSummary = { synced: number; pending: number; failed: number }
 
 type InscreenConfigValues = {
   GROQ_API_KEY: string
@@ -253,6 +261,47 @@ function InscreenConfigModal({
   )
 }
 
+function ServicesPanel({ drive, summary, busy, error, onConnect, onDisconnect, onSync, onClose }: {
+  drive: DriveStatus
+  summary: DriveSummary
+  busy: boolean
+  error: string
+  onConnect: () => void
+  onDisconnect: () => void
+  onSync: () => void
+  onClose: () => void
+}) {
+  const service = (name: string, detail: string, ok = true) => (
+    <div className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
+      <div><p className="font-medium">{name}</p><p className="text-xs text-slate-500">{detail}</p></div>
+      <span className={ok ? "text-emerald-600" : "text-slate-400"}>{ok ? "✓ OK" : "OFF"}</span>
+    </div>
+  )
+  return <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/25 px-6 backdrop-blur-sm">
+    <div className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-7 text-slate-900 shadow-2xl">
+      <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Servicios</p>
+      <h2 className="mt-2 text-2xl font-semibold">Conexiones de este navegador</h2>
+      <div className="mt-6 space-y-3">
+        {service("Groq", "Configurado en User.InScreen")}
+        {service("Marker", "Configurado en User.InScreen")}
+        {service("Cloudflare R2", "Configurado en User.InScreen")}
+        {service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
+      </div>
+      {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
+        <p>{summary.synced} sincronizados · {summary.pending} pendientes · {summary.failed} con error</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {drive.rootFolderLink ? <a href={drive.rootFolderLink} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2">Abrir carpeta</a> : null}
+          <button type="button" onClick={onSync} disabled={busy} className="rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Sincronizar existentes</button>
+          <button type="button" onClick={onConnect} disabled={busy} className="rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Cambiar cuenta</button>
+          <button type="button" onClick={onDisconnect} disabled={busy} className="rounded-xl border border-red-200 px-3 py-2 text-red-600 disabled:opacity-50">Desconectar</button>
+        </div>
+      </div> : <button type="button" onClick={onConnect} disabled={busy} className="mt-4 h-11 w-full rounded-xl bg-sky-600 px-5 font-semibold text-white disabled:opacity-50">Conectar Google Drive</button>}
+      {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+      <div className="mt-6 flex justify-end"><button type="button" onClick={onClose} className="h-11 rounded-xl bg-slate-900 px-6 font-semibold text-white">Cerrar</button></div>
+    </div>
+  </div>
+}
+
 async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle): Promise<{ ok: boolean; missing?: boolean; error: string }> {
   await clearLegacyInscreenBrowserHalf()
   const fileHalf = await loadInscreenFileHalf(handle)
@@ -295,6 +344,8 @@ export function LocalWorkspaceProvider({
   const [qrDataUrl, setQrDataUrl] = useState("")
   const [pairingExpiresAt, setPairingExpiresAt] = useState("")
   const [providerDevices, setProviderDevices] = useState<Array<{ deviceId: string; enabled: boolean; createdAt: string }>>([])
+  const [driveStatus, setDriveStatus] = useState<DriveStatus>({ connected: false })
+  const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0 })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
@@ -345,6 +396,7 @@ export function LocalWorkspaceProvider({
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
         await unlockWorkspaceInscreenConfig(storedHandle)
+        setReadyDriveConfigHalf(await loadDriveFileHalf(storedHandle))
         if (isInscreenConfigurationSkipped()) setReadyInscreenConfigHalf("")
         setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
@@ -410,9 +462,14 @@ export function LocalWorkspaceProvider({
 
       const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
       if (unlocked.ok) {
-        setConfigStep(3)
+        setConfigStep(4)
         setBootState("configure")
-        await createPairingQr()
+        const [statusResponse, summary] = await Promise.all([
+          fetch("/api/google/drive/status", { cache: "no-store" }),
+          getLocalDriveSyncSummary(),
+        ])
+        setDriveStatus(await statusResponse.json().catch(() => ({ connected: false })))
+        setDriveSummary(summary)
         return
       }
 
@@ -430,6 +487,25 @@ export function LocalWorkspaceProvider({
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [bootState, enabled, pathname, permissionState, rootHandle])
 
+  useEffect(() => {
+    if (!enabled || bootState !== "ready" || !rootHandle) return
+    let cancelled = false
+    const run = async () => {
+      const fileHalf = await loadDriveFileHalf(rootHandle)
+      setReadyDriveConfigHalf(fileHalf)
+      if (!fileHalf) return
+      const statusResponse = await fetch("/api/google/drive/status", { cache: "no-store" })
+      const status = await statusResponse.json().catch(() => ({ connected: false })) as DriveStatus
+      if (!cancelled) setDriveStatus(status)
+      if (!status.connected) return
+      const summary = await processLocalDriveSyncQueue()
+      if (!cancelled) setDriveSummary(summary)
+    }
+    void run()
+    const timer = window.setInterval(() => { void run() }, 60_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [bootState, enabled, rootHandle])
+
   const reselectWorkspace = async () => {
     try {
       setError("")
@@ -441,6 +517,7 @@ export function LocalWorkspaceProvider({
       setStoredHandle(handle)
       setPermissionState("granted")
       await unlockWorkspaceInscreenConfig(handle)
+      setReadyDriveConfigHalf(await loadDriveFileHalf(handle))
       setReadyWorkspaceHandle(handle)
       setBootState("ready")
     } catch (workspaceError) {
@@ -592,6 +669,48 @@ export function LocalWorkspaceProvider({
     }
   }
 
+  const connectDrive = () => {
+    if (!rootHandle) return
+    setSavingConfig(true)
+    setError("")
+    const popup = window.open("/api/google/oauth/start", "connect-google-drive", "popup,width=560,height=720")
+    if (!popup) { setSavingConfig(false); setError("El navegador bloqueo la ventana de Google."); return }
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.data?.type !== "drive-oauth") return
+      window.removeEventListener("message", handleMessage)
+      try {
+        if (!event.data.ok || !event.data.fileHalf) throw new Error(event.data.error || "No se pudo conectar Google Drive.")
+        await persistDriveFileHalf(rootHandle, String(event.data.fileHalf))
+        setReadyDriveConfigHalf(String(event.data.fileHalf))
+        const response = await fetch("/api/google/drive/status", { cache: "no-store" })
+        setDriveStatus(await response.json())
+        setDriveSummary(await getLocalDriveSyncSummary())
+      } catch (driveError) { setError(driveError instanceof Error ? driveError.message : "No se pudo guardar la conexion.") }
+      finally { setSavingConfig(false) }
+    }
+    window.addEventListener("message", handleMessage)
+  }
+
+  const disconnectDrive = async () => {
+    if (!rootHandle) return
+    setSavingConfig(true)
+    await fetch("/api/google/drive/status", { method: "DELETE" }).catch(() => undefined)
+    await removeDriveFileHalf(rootHandle)
+    setReadyDriveConfigHalf("")
+    setDriveStatus({ connected: false })
+    setSavingConfig(false)
+  }
+
+  const syncDrive = async () => {
+    setSavingConfig(true)
+    setError("")
+    try {
+      await enqueueAllLocalMaterialsForDrive()
+      setDriveSummary(await processLocalDriveSyncQueue())
+    } catch (driveError) { setError(driveError instanceof Error ? driveError.message : "No se pudo sincronizar Drive.") }
+    finally { setSavingConfig(false) }
+  }
+
   const value = useMemo<LocalWorkspaceContextValue>(
     () => ({
       isReady,
@@ -606,7 +725,9 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
-      {enabled && bootState === "configure" ? (
+      {enabled && bootState === "configure" && configStep === 4 ? (
+        <ServicesPanel drive={driveStatus} summary={driveSummary} busy={savingConfig} error={error} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
+      ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}
           values={configValues}

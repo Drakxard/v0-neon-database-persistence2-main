@@ -1,39 +1,38 @@
+import { driveConfigCookie, oauthStateCookie, splitDriveUserConfig, verifyOAuthState } from "@/lib/drive-user-config"
+import { ensureUserDriveFolder, getUserDriveIdentity } from "@/lib/google-drive"
 import { exchangeCodeForRefreshToken } from "@/lib/google-oauth"
 
 export const runtime = "nodejs"
 
+function popupPage(payload: Record<string, unknown>, headers?: HeadersInit, status = 200) {
+  const serialized = JSON.stringify(payload).replace(/</g, "\\u003c")
+  const responseHeaders = new Headers(headers)
+  responseHeaders.set("Content-Type", "text/html; charset=utf-8")
+  responseHeaders.set("Cache-Control", "no-store")
+  return new Response(`<!doctype html><html><body><p>Finalizando conexion con Google Drive...</p><script>const data=${serialized};if(window.opener){window.opener.postMessage(data,window.location.origin);window.close()}else{document.body.textContent=data.error||"Drive conectado. Ya podes cerrar esta ventana."}</script></body></html>`, { status, headers: responseHeaders })
+}
+
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const code = searchParams.get("code")
-  const error = searchParams.get("error")
-
-  if (error) {
-    return new Response(`<html><body><h1>OAuth cancelado</h1><p>${error}</p></body></html>`, {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      status: 400,
-    })
-  }
-
-  if (!code) {
-    return new Response(`<html><body><h1>Falta el code de Google OAuth.</h1></body></html>`, {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      status: 400,
-    })
-  }
-
+  const url = new URL(request.url)
+  const code = url.searchParams.get("code") || ""
+  const state = url.searchParams.get("state") || ""
+  const oauthError = url.searchParams.get("error")
+  if (oauthError) return popupPage({ type: "drive-oauth", ok: false, error: oauthError }, undefined, 400)
+  if (!code || !verifyOAuthState(request, state)) return popupPage({ type: "drive-oauth", ok: false, error: "La sesion OAuth es invalida o vencio." }, undefined, 400)
   try {
     const token = await exchangeCodeForRefreshToken(code)
-    return new Response(
-      `<html><body style="font-family: sans-serif; padding: 24px;"><h1>OAuth completado</h1><p>Copia este refresh token a <code>GOOGLE_DRIVE_REFRESH_TOKEN</code>.</p><pre style="white-space: pre-wrap; word-break: break-word; background: #f5f5f5; padding: 16px;">${token.refresh_token || "Google no devolvio refresh_token. Repeti el flujo con prompt=consent."}</pre></body></html>`,
-      {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      }
-    )
-  } catch (oauthError) {
-    const message = oauthError instanceof Error ? oauthError.message : "OAuth exchange failed"
-    return new Response(`<html><body><h1>Error OAuth</h1><pre>${message}</pre></body></html>`, {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-      status: 500,
-    })
+    if (!token.refresh_token) throw new Error("Google no devolvio un refresh token. Repeti la conexion.")
+    const rootFolderName = process.env.GOOGLE_DRIVE_ROOT_FOLDER_NAME || "Cursado2026"
+    const [identity, root] = await Promise.all([getUserDriveIdentity(token.refresh_token), ensureUserDriveFolder(token.refresh_token, rootFolderName, "root")])
+    const email = String(identity.user?.emailAddress || "").trim()
+    if (!email) throw new Error("Google Drive no devolvio la cuenta conectada.")
+    const rootFolderLink = root.webViewLink || `https://drive.google.com/drive/folders/${root.id}`
+    const halves = splitDriveUserConfig({ refreshToken: token.refresh_token, rootFolderId: root.id, rootFolderName, rootFolderLink, email })
+    const headers = new Headers()
+    headers.append("Set-Cookie", driveConfigCookie(halves.cookieHalf))
+    headers.append("Set-Cookie", oauthStateCookie("", 0))
+    return popupPage({ type: "drive-oauth", ok: true, fileHalf: halves.fileHalf, email, rootFolderName, rootFolderLink }, headers)
+  } catch (error) {
+    return popupPage({ type: "drive-oauth", ok: false, error: error instanceof Error ? error.message : "No se pudo conectar Google Drive." }, undefined, 500)
   }
 }

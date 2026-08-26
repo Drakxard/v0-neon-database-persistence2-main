@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { getGoogleOAuthConfig } from "@/lib/google-oauth"
+import { createOAuthState, oauthStateCookie } from "@/lib/drive-user-config"
 
 export const runtime = "nodejs"
 
@@ -13,6 +14,10 @@ export async function GET() {
   authUrl.searchParams.set("scope", scope)
   authUrl.searchParams.set("access_type", "offline")
   authUrl.searchParams.set("prompt", "consent")
+  const state = createOAuthState()
+  authUrl.searchParams.set("state", state)
 
-  return NextResponse.redirect(authUrl)
+  const response = NextResponse.redirect(authUrl)
+  response.headers.append("Set-Cookie", oauthStateCookie(state))
+  return response
 }

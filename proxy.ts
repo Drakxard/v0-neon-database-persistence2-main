@@ -7,6 +7,15 @@ import { SUBJECT_IDS } from "@/lib/subjects"
 export function proxy(request: NextRequest) {
   if (isLocalStorageMode() && request.nextUrl.pathname.startsWith("/api/")) {
     if (
+      request.method.toUpperCase() === "GET" &&
+      (request.nextUrl.pathname === "/api/google/oauth/start" ||
+        request.nextUrl.pathname === "/api/google/oauth/callback")
+    ) {
+      return NextResponse.next()
+    }
+    if (request.nextUrl.pathname.startsWith("/api/google/drive/")) return NextResponse.next()
+
+    if (
       (request.nextUrl.pathname === "/api/pdf-translate" && request.method.toUpperCase() === "POST") ||
       request.nextUrl.pathname.startsWith("/api/inscreen/")
     ) {

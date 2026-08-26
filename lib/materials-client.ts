@@ -37,6 +37,7 @@ export async function uploadSubjectDayMaterial(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       subjectId: context.subjectId,
+      subjectName: context.subjectName,
       sessionDate: context.sessionDate,
       weekNumber: context.weekNumber,
       materialType: context.materialType,
