@@ -215,7 +215,12 @@ export async function redeemProviderPairing(token: string, installationId: strin
 }
 
 export async function authorizeProviderToken(token: string, handler: () => Promise<Response>) {
-  const payload = open<ProviderPayload>(token, "ipc1", "provider")
+  let payload: ProviderPayload
+  try {
+    payload = open<ProviderPayload>(token, "ipc1", "provider")
+  } catch {
+    throw new ProviderPairingError(401, "No autorizado.")
+  }
   if (payload.version !== 1 || !validId(payload.deviceId)) throw new ProviderPairingError(401, "No autorizado.")
   return withInscreenRuntimeConfig({
     ...payload.r2,

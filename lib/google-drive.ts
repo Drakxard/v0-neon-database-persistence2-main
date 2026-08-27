@@ -8,6 +8,7 @@ const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3/files"
 const DRIVE_RESUMABLE_UPLOAD_URL =
   "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,webViewLink"
 const FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+const SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
 
 const pendingUserFolders = new Map<string, Promise<{ id: string; name: string; webViewLink?: string }>>()
 
@@ -23,6 +24,30 @@ async function findUserFolder(refreshToken: string, name: string, parentId?: str
   if (parentId) query.push(`'${parentId}' in parents`)
   const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,webViewLink)&pageSize=1`, undefined, accessToken)
   return ((await response.json()) as { files?: Array<{ id: string; name: string; webViewLink?: string }> }).files?.[0] || null
+}
+
+async function listUserWeekFolders(refreshToken: string, parentId: string, accessToken: string) {
+  const query = [`mimeType='${FOLDER_MIME_TYPE}'`, `'${escapeDriveQueryValue(parentId)}' in parents`, "trashed=false"]
+  const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,webViewLink)&pageSize=1000`, undefined, accessToken)
+  return (((await response.json()) as { files?: Array<{ id: string; name: string; webViewLink?: string }> }).files ?? [])
+    .filter((folder) => /^Semana \d+$/.test(folder.name))
+}
+
+async function ensureUserDriveShortcut(refreshToken: string, parentId: string, targetId: string, accessToken: string) {
+  const query = [
+    `mimeType='${SHORTCUT_MIME_TYPE}'`,
+    `name='Fijos'`,
+    `'${escapeDriveQueryValue(parentId)}' in parents`,
+    "trashed=false",
+  ]
+  const existing = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,shortcutDetails(targetId))&pageSize=100`, undefined, accessToken)
+  const shortcuts = ((await existing.json()) as { files?: Array<{ id: string; shortcutDetails?: { targetId?: string } }> }).files ?? []
+  if (shortcuts.some((shortcut) => shortcut.shortcutDetails?.targetId === targetId)) return
+  await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?fields=id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Fijos", mimeType: SHORTCUT_MIME_TYPE, parents: [parentId], shortcutDetails: { targetId } }),
+  }, accessToken)
 }
 
 export async function ensureUserDriveFolder(refreshToken: string, name: string, parentId?: string, accessToken?: string) {
@@ -70,13 +95,29 @@ async function findUploadedUserMaterial(refreshToken: string, accessToken: strin
   return ((await response.json()) as { files?: Array<{ id: string; name: string; mimeType: string; webViewLink?: string }> }).files?.[0] || null
 }
 
-export async function prepareUserDriveUpload(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; materialId: number; contentFingerprint: string }) {
+export async function prepareUserDriveUpload(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; materialId: number; contentFingerprint: string; isPinned?: boolean }) {
   const token = await getGoogleAccessTokenDetailsForRefreshToken(params.refreshToken)
   const subject = await ensureUserDriveFolder(params.refreshToken, params.subjectName, params.rootFolderId, token.accessToken)
-  const week = await ensureUserDriveFolder(params.refreshToken, `Semana ${params.weekNumber}`, subject.id, token.accessToken)
-  const container = await ensureUserDriveFolder(params.refreshToken, params.containerName, week.id, token.accessToken)
+  const existingFixed = await findUserFolder(params.refreshToken, "Fijos", subject.id, token.accessToken)
+  const fixed = params.isPinned
+    ? existingFixed ?? await ensureUserDriveFolder(params.refreshToken, "Fijos", subject.id, token.accessToken)
+    : existingFixed
+  const week = params.isPinned ? null : await ensureUserDriveFolder(params.refreshToken, `Semana ${params.weekNumber}`, subject.id, token.accessToken)
+  if (fixed) {
+    const weeks = week ? [week] : await listUserWeekFolders(params.refreshToken, subject.id, token.accessToken)
+    await Promise.all(weeks.map((candidate) => ensureUserDriveShortcut(params.refreshToken, candidate.id, fixed.id, token.accessToken)))
+  }
+  const parent = params.isPinned ? fixed! : week!
+  const container = await ensureUserDriveFolder(params.refreshToken, params.containerName, parent.id, token.accessToken)
   const existingFile = await findUploadedUserMaterial(params.refreshToken, token.accessToken, container.id, params.materialId, params.contentFingerprint)
-  if (existingFile) return { existingFile }
+  const destination = {
+    isPinned: params.isPinned === true,
+    subjectFolderId: subject.id,
+    weekFolderId: week?.id ?? null,
+    weekFolderUrl: week?.webViewLink || (week ? `https://drive.google.com/drive/folders/${encodeURIComponent(week.id)}` : null),
+    fixedFolderId: fixed?.id ?? null,
+  }
+  if (existingFile) return { existingFile, destination }
 
   return {
     accessToken: token.accessToken,
@@ -86,6 +127,7 @@ export async function prepareUserDriveUpload(params: { refreshToken: string; roo
       cursadoMaterialId: String(params.materialId),
       cursadoContentSha256: params.contentFingerprint,
     },
+    destination,
   }
 }
 

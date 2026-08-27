@@ -144,6 +144,8 @@ export type SubjectShortcutButton = {
   orderIndex: number
   sectionScoped: boolean
   sectionUrls: Record<string, string>
+  integrationRole: "notebooklm" | null
+  activeSectionKey: string | null
 }
 
 export type SubjectShortcuts = {

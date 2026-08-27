@@ -11,24 +11,24 @@ export const runtime = "nodejs"
 
 const sql = getLegacyDatabase()
 
-type ShortcutRow = { id: number; label: string; url: string | null; order_index: number; section_scoped: boolean; section_urls: Record<string, string> | null }
+type ShortcutRow = { id: number; label: string; url: string | null; order_index: number; section_scoped: boolean; section_urls: Record<string, string> | null; integration_role: "notebooklm" | null; active_section_key: string | null }
 
 function badRequest(message: string) { return NextResponse.json({ error: message }, { status: 400 }) }
 function isMissingTable(error: unknown) { return Boolean(error && typeof error === "object" && "code" in error && error.code === "42P01") }
 function toResponse(subjectId: string, rows: ShortcutRow[]): SubjectShortcuts {
-  return { subjectId, buttons: rows.map((row) => normalizeSubjectShortcutButton({ id: String(row.id), label: row.label, url: row.url, orderIndex: row.order_index, sectionScoped: row.section_scoped, sectionUrls: row.section_urls ?? {} })) }
+  return { subjectId, buttons: rows.map((row) => normalizeSubjectShortcutButton({ id: String(row.id), label: row.label, url: row.url, orderIndex: row.order_index, sectionScoped: row.section_scoped, sectionUrls: row.section_urls ?? {}, integrationRole: row.integration_role, activeSectionKey: row.active_section_key })) }
 }
 function localFallback(subjectId: string) { return getDefaultSubjectShortcuts(subjectId) }
 
 async function selectButtons(subjectId: string) {
-  return await requireSql(sql)`SELECT id, label, url, order_index, section_scoped, section_urls FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} ORDER BY order_index, id` as ShortcutRow[]
+  return await requireSql(sql)`SELECT id, label, url, order_index, section_scoped, section_urls, integration_role, active_section_key FROM subject_shortcut_buttons WHERE subject_id = ${subjectId} ORDER BY order_index, id` as ShortcutRow[]
 }
 async function ensureRemoteButtons(subjectId: string) {
   const initialized = await requireSql(sql)`INSERT INTO subject_shortcut_button_sets (subject_id) VALUES (${subjectId}) ON CONFLICT (subject_id) DO NOTHING RETURNING subject_id`
   if (initialized.length > 0) {
     const defaults = getDefaultSubjectShortcuts(subjectId).buttons
     for (const button of defaults) {
-      await requireSql(sql)`INSERT INTO subject_shortcut_buttons (subject_id, label, url, order_index) VALUES (${subjectId}, ${button.label}, NULL, ${button.orderIndex})`
+      await requireSql(sql)`INSERT INTO subject_shortcut_buttons (subject_id, label, url, order_index, integration_role) VALUES (${subjectId}, ${button.label}, NULL, ${button.orderIndex}, ${button.integrationRole})`
     }
   }
   return toResponse(subjectId, await selectButtons(subjectId))
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     const label = parseRequiredString(body?.label); if (!label) return badRequest("Missing label")
     if (isLocalStorageMode()) return updateLocalState((state) => {
       const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
-      state.subjectShortcuts[subjectId] = { ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label, url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {} }] }
+      state.subjectShortcuts[subjectId] = { ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label, url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {}, integrationRole: null, activeSectionKey: null }] }
       return state.subjectShortcuts[subjectId]
     })
     await ensureRemoteButtons(subjectId)
@@ -86,8 +86,8 @@ export async function PUT(request: Request) {
       const current = normalizeLocalShortcut(subjectId, state.subjectShortcuts[subjectId])
       state.subjectShortcuts[subjectId] = { ...current, buttons: current.buttons.map((button) => {
         if (button.id !== id) return button
-        if (!sectionScoped) return { ...button, url: normalizedUrl, sectionScoped: false, sectionUrls: {} }
-        return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [sectionKey!]: normalizedUrl } }
+        if (!sectionScoped) return { ...button, url: normalizedUrl, sectionScoped: false, sectionUrls: {}, activeSectionKey: null }
+        return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [sectionKey!]: normalizedUrl }, activeSectionKey: sectionKey! }
       }) }
       return state.subjectShortcuts[subjectId]
     })
@@ -97,7 +97,7 @@ export async function PUT(request: Request) {
     const sectionUrls = sectionScoped
       ? { ...(current.section_scoped ? current.section_urls ?? {} : {}), [sectionKey!]: normalizedUrl }
       : {}
-    await requireSql(sql)`UPDATE subject_shortcut_buttons SET url = ${sectionScoped ? current.url : normalizedUrl}, section_scoped = ${sectionScoped}, section_urls = ${JSON.stringify(sectionUrls)}::jsonb, updated_at = NOW() WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
+    await requireSql(sql)`UPDATE subject_shortcut_buttons SET url = ${sectionScoped ? current.url : normalizedUrl}, section_scoped = ${sectionScoped}, section_urls = ${JSON.stringify(sectionUrls)}::jsonb, active_section_key = ${sectionScoped ? sectionKey : null}, updated_at = NOW() WHERE subject_id = ${subjectId} AND id = ${Number(id)}`
     return ensureRemoteButtons(subjectId)
   })
 }

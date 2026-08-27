@@ -44,6 +44,10 @@ import {
   reconcileLocalWorkspaceTabsState,
   renameLocalCatalogSubject,
   saveLocalWorkspaceTabsState,
+  enqueueLocalWidgetCatalog,
+  enqueueLocalNotebookWidgetTargets,
+  enqueueLocalWidgetTarget,
+  processLocalWidgetTargetSyncQueue,
   type LocalSubjectDeletionSummary,
 } from "@/lib/local-workspace-data"
 import { createPracticeAudioEntry, createPracticeTextEntry } from "@/lib/practice-entry-client"
@@ -59,7 +63,7 @@ import {
 } from "@/lib/socratic-review-client"
 import { fetchSubjectSynthesisMaterials, saveSubjectSynthesisMaterials } from "@/lib/subject-synthesis-materials-client"
 import { getEmptySubjectShortcuts } from "@/lib/subject-shortcuts-client"
-import { getSubjectShortcutUrl } from "@/lib/subject-shortcuts"
+import { getNotebookLmShortcutTarget, getSubjectShortcutUrl } from "@/lib/subject-shortcuts"
 import {
   createSubjectMaterialContainer,
   fetchSubjectMaterialContainers,
@@ -1322,6 +1326,14 @@ export function SubjectWheel({
       .filter((subject): subject is CustomSubject => Boolean(subject))
   }, [activeWorkspaceTab, builtInVisibleSubjects, customSubjects])
   const visibleSubjectIds = useMemo(() => visibleSubjects.map((subject) => subject.id), [visibleSubjects])
+
+  useEffect(() => {
+    if (!LOCAL_STORAGE_MODE || !localWorkspaceReady) return
+    const subjects = Object.values(customSubjects).map(({ id, name, color }) => ({ id, name, color }))
+    void enqueueLocalWidgetCatalog(subjects)
+      .then(() => enqueueLocalNotebookWidgetTargets(subjects.map((subject) => subject.id)))
+      .then(() => processLocalWidgetTargetSyncQueue())
+  }, [customSubjects, localWorkspaceReady])
 
   const exportActiveWorkspaceTab = useCallback(async () => {
     if (visibleSubjects.length === 0 || isExportingSubjects) return
@@ -4740,13 +4752,23 @@ export function SubjectWheel({
 
     setIsSavingShortcut(true)
     try {
-      await persistSubjectShortcut({
+      const saved = await persistSubjectShortcut({
         subjectId,
         id: shortcutDialogButton.id,
         url: shortcutDraft.trim(),
         sectionScoped: shortcutSectionScopedDraft,
         sectionKey: shortcutSectionScopedDraft ? shortcutSectionKey : undefined,
       })
+      if (LOCAL_STORAGE_MODE) {
+        const target = getNotebookLmShortcutTarget(saved)
+        await enqueueLocalWidgetTarget({
+          subjectId,
+          kind: "notebooklm",
+          url: target?.url ?? null,
+          ...(target?.sectionKey ? { sectionKey: target.sectionKey } : {}),
+        })
+        void processLocalWidgetTargetSyncQueue()
+      }
       closeShortcutDialog()
     } catch (error) {
       console.error("Failed to save subject shortcut:", error)

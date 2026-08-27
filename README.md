@@ -26,7 +26,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Storage
 
-Los PDF de materiales pueden replicarse en el Google Drive conectado por cada navegador desde el panel `|`. La copia usa `Cursado2026/{materia}/Semana {n}/{contenedor}` y no reemplaza el workspace local. Vercel conserva solamente las credenciales OAuth de la aplicacion; cada refresh token se cifra y divide entre `User.Drive` y una cookie HttpOnly.
+Los PDF de materiales pueden replicarse en el Google Drive conectado por cada navegador desde el panel `|`. La copia semanal usa `Cursado2026/{materia}/Semana {n}/{contenedor}`; los contenedores fijados se guardan una sola vez en `Cursado2026/{materia}/Fijos/{contenedor}` y cada semana contiene un acceso directo a `Fijos`. La replica no reemplaza el workspace local. Vercel conserva solamente las credenciales OAuth de la aplicacion; cada refresh token se cifra y divide entre `User.Drive` y una cookie HttpOnly.
 
 La aplicación usa un workspace local elegido por el usuario para materias, PDFs y manifiestos. No requiere una base de datos SQL.
 
@@ -63,6 +63,7 @@ El estado se distribuye en el R2 de cada usuario:
 ```text
 manifests/inscreen/provider/pairings/<pairingId>.json
 manifests/inscreen/provider/devices/<deviceId>.json
+manifests/inscreen/provider/widget-targets-v1.json
 ```
 
 Cada consulta envia la capsula en `Authorization: Bearer ...`. El proveedor obtiene de
@@ -78,6 +79,8 @@ GET /api/inscreen/provider/paginas-leidas?materia=ecuordinarias&dia=6
 GET /api/inscreen/provider/traducciones?materia=ecuordinarias&dia=6
 GET /api/inscreen/provider/traducciones?materia=ecuordinarias&ultimo=6.txt
 POST /api/inscreen/provider/marker-transcribe
+GET /api/inscreen/provider/widget-targets
+GET /api/inscreen/provider/widget-targets?subjectId=eo&kind=notebooklm
 ```
 
 `marker-transcribe` recibe un único JPG, PNG o WebP en el campo multipart `file`, exige

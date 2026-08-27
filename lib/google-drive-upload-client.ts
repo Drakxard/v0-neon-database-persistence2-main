@@ -12,6 +12,13 @@ type DriveUploadContext = {
   parentFolderId?: string
   appProperties?: Record<string, string>
   existingFile?: UploadedDriveFile
+  destination?: {
+    isPinned: boolean
+    subjectFolderId: string
+    weekFolderId: string | null
+    weekFolderUrl: string | null
+    fixedFolderId: string | null
+  }
   error?: string
 }
 
@@ -111,9 +118,9 @@ export async function uploadPdfDirectlyToDrive(item: { fileName: string } & Reco
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const context = await requestUploadContext(item, contentFingerprint)
-    if (context.existingFile?.id) return context.existingFile
+    if (context.existingFile?.id) return { ...context.existingFile, destination: context.destination }
     try {
-      return await transferChunks(await startResumableUpload(context, item.fileName, file), file)
+      return { ...(await transferChunks(await startResumableUpload(context, item.fileName, file), file)), destination: context.destination }
     } catch (error) {
       if (!(error instanceof RestartDriveUploadError)) throw error
       lastRestartError = error

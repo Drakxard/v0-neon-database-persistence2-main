@@ -16,7 +16,7 @@ import type {
   SubjectMaterialContainer,
   SubjectShortcuts,
 } from "@/lib/study-types"
-import { getDefaultSubjectShortcuts, normalizeSubjectShortcutButton } from "@/lib/subject-shortcuts"
+import { getDefaultSubjectShortcuts, getNotebookLmShortcutTarget, normalizeSubjectShortcutButton } from "@/lib/subject-shortcuts"
 import {
   normalizeTagColor,
   normalizeTagDisplayName,
@@ -26,6 +26,7 @@ import {
 import {
   ensureWorkspaceSubdirectories,
   getReadyWorkspaceHandle,
+  getReadyInscreenConfigHalf,
   loadWorkspaceHandle,
   queryWorkspacePermission,
   setReadyWorkspaceHandle,
@@ -158,6 +159,7 @@ const TAGS_MANIFEST = [MANIFESTS_DIR, "tags.json"]
 const MATERIAL_CONTAINERS_MANIFEST = [MANIFESTS_DIR, "material-containers.json"]
 const MATERIAL_CONTAINERS_BACKUP_MANIFEST = [MANIFESTS_DIR, "material-containers.backup.json"]
 const DRIVE_SYNC_MANIFEST = [MANIFESTS_DIR, "drive-sync.json"]
+const WIDGET_TARGET_SYNC_MANIFEST = [MANIFESTS_DIR, "inscreen-widget-target-sync.json"]
 const SUBJECT_MIGRATION_MANIFEST = [MANIFESTS_DIR, "subject-folder-migration-v2.json"]
 const SUBJECT_CATALOG_V1_BACKUP_MANIFEST = [MANIFESTS_DIR, "subject-catalog.v1.backup.json"]
 const MAIN_WORKSPACE_TAB_ID = "main"
@@ -172,6 +174,7 @@ type SubjectFolderMigrationPlan = {
 
 export type DriveSyncItem = {
   materialId: number
+  subjectId: string
   operation: "upload" | "delete"
   localFileId: string
   driveFileId: string
@@ -183,9 +186,145 @@ export type DriveSyncItem = {
   attempts: number
   lastError: string
   updatedAt: string
+  isPinned: boolean
+  pathVersion: 2
+  weekFolderId: string
+  weekFolderUrl: string
 }
 
 type DriveSyncManifest = { version: 1; items: DriveSyncItem[] }
+
+type WidgetCatalogSubject = { id: string; name: string; color: string }
+type WidgetTargetPatch = {
+  subjectId: string
+  kind: "notebooklm" | "materials"
+  url: string | null
+  sectionKey?: string
+  weekNumber?: number
+}
+type WidgetTargetSyncItem = {
+  id: string
+  kind: "catalog" | "target"
+  subjects?: WidgetCatalogSubject[]
+  target?: WidgetTargetPatch
+  status: "pending" | "failed"
+  attempts: number
+  lastError: string
+  updatedAt: string
+}
+type WidgetTargetSyncManifest = { version: 1; items: WidgetTargetSyncItem[] }
+
+async function readWidgetTargetSyncManifest() {
+  const value = await readJsonFile<WidgetTargetSyncManifest | null>(WIDGET_TARGET_SYNC_MANIFEST, null)
+  return value ?? { version: 1 as const, items: [] }
+}
+
+async function writeWidgetTargetSyncManifest(items: WidgetTargetSyncItem[]) {
+  await writeJsonFile(WIDGET_TARGET_SYNC_MANIFEST, { version: 1, items } satisfies WidgetTargetSyncManifest)
+}
+
+export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]) {
+  const manifest = await readWidgetTargetSyncManifest()
+  const normalized = subjects
+    .map((subject) => ({ id: subject.id.trim(), name: subject.name.replace(/\s+/g, " ").trim(), color: subject.color.trim() }))
+    .filter((subject) => /^[a-zA-Z0-9_-]{1,180}$/.test(subject.id) && subject.name && /^#[0-9a-fA-F]{6}$/.test(subject.color))
+  const item: WidgetTargetSyncItem = {
+    id: crypto.randomUUID(), kind: "catalog", subjects: normalized, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
+  }
+  await writeWidgetTargetSyncManifest([...manifest.items.filter((candidate) => candidate.kind !== "catalog"), item])
+}
+
+export async function enqueueLocalWidgetTarget(target: WidgetTargetPatch) {
+  const manifest = await readWidgetTargetSyncManifest()
+  const item: WidgetTargetSyncItem = {
+    id: crypto.randomUUID(), kind: "target", target, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
+  }
+  await writeWidgetTargetSyncManifest([
+    ...manifest.items.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== target.subjectId || candidate.target?.kind !== target.kind),
+    item,
+  ])
+}
+
+export async function enqueueLocalNotebookWidgetTargets(subjectIds: string[]) {
+  for (const subjectId of subjectIds) {
+    const target = getNotebookLmShortcutTarget(await getLocalSubjectShortcuts(subjectId))
+    await enqueueLocalWidgetTarget({
+      subjectId,
+      kind: "notebooklm",
+      url: target?.url ?? null,
+      ...(target?.sectionKey ? { sectionKey: target.sectionKey } : {}),
+    })
+  }
+}
+
+export async function getLocalWidgetTargetSyncSummary() {
+  const items = (await readWidgetTargetSyncManifest()).items
+  return {
+    pending: items.filter((item) => item.status === "pending").length,
+    failed: items.filter((item) => item.status === "failed").length,
+    errors: items.filter((item) => item.lastError).map((item) => item.lastError).slice(-1),
+  }
+}
+
+let widgetTargetSyncRun: Promise<Awaited<ReturnType<typeof getLocalWidgetTargetSyncSummary>>> | null = null
+
+async function runLocalWidgetTargetSyncQueue() {
+  const configHalf = getReadyInscreenConfigHalf()
+  if (!configHalf) return getLocalWidgetTargetSyncSummary()
+  const ordered = [...(await readWidgetTargetSyncManifest()).items].sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind === "catalog" ? -1 : 1
+    return left.updatedAt.localeCompare(right.updatedAt)
+  })
+  for (const candidate of ordered) {
+    const current = (await readWidgetTargetSyncManifest()).items.find((item) => item.id === candidate.id)
+    if (!current) continue
+    try {
+      const response = await fetch("/api/inscreen/widget-targets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-inscreen-config-half": configHalf },
+        body: JSON.stringify(current.kind === "catalog" ? { subjects: current.subjects } : { target: current.target }),
+        cache: "no-store",
+      })
+      const payload = await response.json().catch(() => null) as { error?: string } | null
+      if (!response.ok) throw new Error(payload?.error || "No se pudo publicar el destino de InScreen.")
+      const latest = await readWidgetTargetSyncManifest()
+      await writeWidgetTargetSyncManifest(latest.items.filter((item) => item.id !== current.id))
+    } catch (error) {
+      const latest = await readWidgetTargetSyncManifest()
+      await writeWidgetTargetSyncManifest(latest.items.map((item) => item.id === current.id ? {
+        ...item,
+        status: "failed",
+        attempts: item.attempts + 1,
+        lastError: error instanceof Error ? error.message : "No se pudo publicar el destino de InScreen.",
+        updatedAt: nowIso(),
+      } : item))
+      break
+    }
+  }
+  return getLocalWidgetTargetSyncSummary()
+}
+
+export function processLocalWidgetTargetSyncQueue() {
+  if (widgetTargetSyncRun) return widgetTargetSyncRun
+  widgetTargetSyncRun = runLocalWidgetTargetSyncQueue().finally(() => { widgetTargetSyncRun = null })
+  return widgetTargetSyncRun
+}
+
+async function refreshLocalMaterialWidgetTargets(additionalSubjectIds: Iterable<string> = []) {
+  const manifest = await readDriveSyncManifest()
+  const subjectIds = new Set([...manifest.items.map((item) => item.subjectId).filter(Boolean), ...additionalSubjectIds])
+  for (const subjectId of subjectIds) {
+    const latest = manifest.items
+      .filter((item) => item.subjectId === subjectId && item.operation === "upload" && item.status === "synced" && !item.isPinned && Boolean(item.weekFolderUrl))
+      .sort((left, right) => right.weekNumber - left.weekNumber || right.updatedAt.localeCompare(left.updatedAt))[0]
+    await enqueueLocalWidgetTarget({
+      subjectId,
+      kind: "materials",
+      url: latest?.weekFolderUrl || null,
+      ...(latest ? { weekNumber: latest.weekNumber } : {}),
+    })
+  }
+}
 
 async function readDriveSyncManifest() {
   const value = await readJsonFile<DriveSyncManifest | null>(DRIVE_SYNC_MANIFEST, null)
@@ -201,19 +340,24 @@ async function getDriveLocation(material: SubjectDayMaterial, preferredSubjectNa
   const subjectName = preferredSubjectName.trim() || entry?.name || SUBJECTS.find((subject) => subject.id === material.subject_id)?.name || material.subject_id
   const containers = await listLocalSubjectMaterialContainers(material.subject_id)
   const container = containers.find((candidate) => candidate.id === material.container_id) || containers.find((candidate) => candidate.kind === material.material_type)
-  return { subjectName: subjectName.replace(/\n/g, " "), containerName: container?.name || (material.material_type === "theory" ? "Teoria" : "Practica") }
+  return {
+    subjectName: subjectName.replace(/\n/g, " "),
+    containerName: container?.name || (material.material_type === "theory" ? "Teoria" : "Practica"),
+    isPinned: container?.kind === "custom" && container.isPinned,
+  }
 }
 
 export async function enqueueLocalMaterialDriveUpload(material: SubjectDayMaterial, preferredSubjectName = "", force = false) {
   const manifest = await readDriveSyncManifest()
   const location = await getDriveLocation(material, preferredSubjectName)
   const previous = manifest.items.find((item) => item.materialId === material.id)
-  if (!force && previous?.status === "synced" && previous.localFileId === material.drive_file_id && previous.fileName === material.file_name && previous.subjectName === location.subjectName && previous.weekNumber === material.week_number && previous.containerName === location.containerName) return previous
+  if (!force && previous?.status === "synced" && previous.pathVersion === 2 && previous.localFileId === material.drive_file_id && previous.fileName === material.file_name && previous.subjectName === location.subjectName && previous.weekNumber === material.week_number && previous.containerName === location.containerName && previous.isPinned === location.isPinned) return previous
   const next: DriveSyncItem = {
-    materialId: material.id, operation: "upload", localFileId: material.drive_file_id,
+    materialId: material.id, subjectId: material.subject_id, operation: "upload", localFileId: material.drive_file_id,
     driveFileId: previous?.driveFileId || "", subjectName: location.subjectName,
     weekNumber: material.week_number, containerName: location.containerName, fileName: material.file_name,
     status: "pending", attempts: previous?.attempts || 0, lastError: "", updatedAt: nowIso(),
+    isPinned: location.isPinned, pathVersion: 2, weekFolderId: "", weekFolderUrl: "",
   }
   await writeDriveSyncManifest([...manifest.items.filter((item) => item.materialId !== material.id), next])
   return next
@@ -258,6 +402,7 @@ let driveSyncRun: Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> 
 
 async function runLocalDriveSyncQueue() {
   const manifest = await readDriveSyncManifest()
+  const affectedSubjectIds = new Set(manifest.items.map((item) => item.subjectId).filter(Boolean))
   for (const candidate of manifest.items.filter((item) => item.status !== "synced")) {
     const item = (await readDriveSyncManifest()).items.find((current) => current.materialId === candidate.materialId)
     if (!item) continue
@@ -275,12 +420,23 @@ async function runLocalDriveSyncQueue() {
       const uploaded = await uploadPdfDirectlyToDrive(item, file)
       if (item.driveFileId && item.driveFileId !== uploaded.id) await fetch(`/api/google/drive/files/${encodeURIComponent(item.driveFileId)}`, { method: "DELETE" }).catch(() => undefined)
       const latest = await readDriveSyncManifest()
-      await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, driveFileId: uploaded.id!, status: "synced", attempts: current.attempts + 1, lastError: "", updatedAt: nowIso() } : current))
+      await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? {
+        ...current,
+        driveFileId: uploaded.id!,
+        weekFolderId: uploaded.destination?.weekFolderId || "",
+        weekFolderUrl: uploaded.destination?.weekFolderUrl || "",
+        status: "synced",
+        attempts: current.attempts + 1,
+        lastError: "",
+        updatedAt: nowIso(),
+      } : current))
     } catch (error) {
       const latest = await readDriveSyncManifest()
       await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, status: "failed", attempts: current.attempts + 1, lastError: error instanceof Error ? error.message : "Error de sincronizacion.", updatedAt: nowIso() } : current))
     }
   }
+  await refreshLocalMaterialWidgetTargets(affectedSubjectIds)
+  void processLocalWidgetTargetSyncQueue()
   return getLocalDriveSyncSummary()
 }
 
@@ -2320,6 +2476,13 @@ export async function setLocalSubjectMaterialContainerPinned(containerId: number
   const updated = { ...current, isPinned }
   persistLocalCustomOrder(manifest, isPinned ? [...pinned, updated, ...unpinned] : [...pinned, ...unpinned, updated])
   await writeMaterialContainersManifest(manifest)
+  for (const sourceId of await resolveLocalSubjectSourceIds(subjectId)) {
+    for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, sourceId)) {
+      for (const material of (await readMaterialManifest(sourceId, weekNumber)).materials.filter((candidate) => candidate.container_id === containerId)) {
+        await enqueueLocalMaterialDriveUpload(material, "", true)
+      }
+    }
+  }
   return { ...updated, orderIndex: isPinned ? pinned.length + 2 : pinned.length + unpinned.length + 2 }
 }
 
@@ -2749,15 +2912,15 @@ async function mutateLocalSubjectShortcuts(subjectId: string, mutate: (current: 
   return { ...next, subjectId }
 }
 export async function createLocalSubjectShortcut(input: { subjectId: string; label: string }) {
-  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label: input.label.trim(), url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {} }] }))
+  return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: [...current.buttons, { id: crypto.randomUUID(), label: input.label.trim(), url: null, orderIndex: current.buttons.length, sectionScoped: false, sectionUrls: {}, integrationRole: null, activeSectionKey: null }] }))
 }
 export async function updateLocalSubjectShortcut(input: { subjectId: string; id: string; url: string; sectionScoped: boolean; sectionKey?: string }) {
   return mutateLocalSubjectShortcuts(input.subjectId, (current) => ({ ...current, buttons: current.buttons.map((button) => {
     if (button.id !== input.id) return button
     const url = input.url.trim()
-    if (!input.sectionScoped) return { ...button, url: url || null, sectionScoped: false, sectionUrls: {} }
+    if (!input.sectionScoped) return { ...button, url: url || null, sectionScoped: false, sectionUrls: {}, activeSectionKey: null }
     if (!input.sectionKey) throw new Error("Missing sectionKey")
-    return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [input.sectionKey]: url } }
+    return { ...button, sectionScoped: true, sectionUrls: { ...(button.sectionScoped ? button.sectionUrls : {}), [input.sectionKey]: url }, activeSectionKey: input.sectionKey }
   }) }))
 }
 export async function deleteLocalSubjectShortcut(input: { subjectId: string; id: string }) {

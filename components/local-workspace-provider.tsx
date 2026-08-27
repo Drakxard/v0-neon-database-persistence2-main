@@ -23,7 +23,7 @@ import {
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
-import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, processLocalDriveSyncQueue } from "@/lib/local-workspace-data"
+import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, getLocalWidgetTargetSyncSummary, processLocalDriveSyncQueue, processLocalWidgetTargetSyncQueue } from "@/lib/local-workspace-data"
 
 type LocalWorkspaceContextValue = {
   isReady: boolean
@@ -36,6 +36,7 @@ type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported"
 
 type DriveStatus = { connected: boolean; email?: string; rootFolderName?: string; rootFolderLink?: string; error?: string }
 type DriveSummary = { synced: number; pending: number; failed: number; errors: string[] }
+type WidgetTargetSummary = { pending: number; failed: number; errors: string[] }
 type ApiStatus = { groq: boolean; r2: boolean }
 
 type InscreenConfigValues = {
@@ -253,10 +254,11 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ apis, drive, summary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onClose }: {
+function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onClose }: {
   apis: ApiStatus
   drive: DriveStatus
   summary: DriveSummary
+  widgetSummary: WidgetTargetSummary
   busy: boolean
   error: string
   onConfigureGroq: () => void
@@ -280,6 +282,10 @@ function ServicesPanel({ apis, drive, summary, busy, error, onConfigureGroq, onC
         <button type="button" onClick={onConfigureGroq} className="block w-full text-left">{service("Groq", apis.groq ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.groq)}</button>
         <button type="button" onClick={onConfigureR2} className="block w-full text-left">{service("Cloudflare R2", apis.r2 ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.r2)}</button>
         {service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
+      </div>
+      <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
+        <p>Widgets InScreen · {widgetSummary.pending} pendientes · {widgetSummary.failed} con error</p>
+        {widgetSummary.errors.map((message, index) => <p className="mt-2 text-xs text-amber-800" key={`${index}-${message}`}>{message}</p>)}
       </div>
       {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>{summary.synced} sincronizados · {summary.pending} pendientes · {summary.failed} con error</p>
@@ -345,6 +351,7 @@ export function LocalWorkspaceProvider({
   const [driveStatus, setDriveStatus] = useState<DriveStatus>({ connected: false })
   const [apiStatus, setApiStatus] = useState<ApiStatus>({ groq: false, r2: false })
   const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0, errors: [] })
+  const [widgetTargetSummary, setWidgetTargetSummary] = useState<WidgetTargetSummary>({ pending: 0, failed: 0, errors: [] })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
@@ -463,15 +470,17 @@ export function LocalWorkspaceProvider({
       if (unlocked.ok) {
         setConfigStep(4)
         setBootState("configure")
-        const [statusResponse, inscreenStatusResponse, summary] = await Promise.all([
+        const [statusResponse, inscreenStatusResponse, summary, widgetSummary] = await Promise.all([
           fetch("/api/google/drive/status", { cache: "no-store" }),
           fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-half": getReadyInscreenConfigHalf() } }),
           getLocalDriveSyncSummary(),
+          getLocalWidgetTargetSyncSummary(),
         ])
         setDriveStatus(await statusResponse.json().catch(() => ({ connected: false })))
         const inscreenStatus = await inscreenStatusResponse.json().catch(() => null) as { services?: ApiStatus } | null
         setApiStatus(inscreenStatus?.services ?? { groq: false, r2: false })
         setDriveSummary(summary)
+        setWidgetTargetSummary(widgetSummary)
         return
       }
 
@@ -507,6 +516,14 @@ export function LocalWorkspaceProvider({
     void run()
     const timer = window.setInterval(() => { void run() }, 60_000)
     return () => { cancelled = true; window.clearInterval(timer) }
+  }, [bootState, enabled, rootHandle])
+
+  useEffect(() => {
+    if (!enabled || bootState !== "ready" || !rootHandle || !getReadyInscreenConfigHalf()) return
+    const run = () => { void processLocalWidgetTargetSyncQueue().then(setWidgetTargetSummary) }
+    run()
+    const timer = window.setInterval(run, 60_000)
+    return () => window.clearInterval(timer)
   }, [bootState, enabled, rootHandle])
 
   const reselectWorkspace = async () => {
@@ -709,6 +726,7 @@ export function LocalWorkspaceProvider({
     try {
       await enqueueAllLocalMaterialsForDrive()
       setDriveSummary(await processLocalDriveSyncQueue())
+      setWidgetTargetSummary(await processLocalWidgetTargetSyncQueue())
     } catch (driveError) { setError(driveError instanceof Error ? driveError.message : "No se pudo sincronizar Drive.") }
     finally { setSavingConfig(false) }
   }
@@ -728,7 +746,7 @@ export function LocalWorkspaceProvider({
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}

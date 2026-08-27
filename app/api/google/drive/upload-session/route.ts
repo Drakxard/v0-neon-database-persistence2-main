@@ -13,6 +13,7 @@ export async function POST(request: Request) {
     const contentFingerprint = String(body?.contentFingerprint || "").trim().toLowerCase()
     const weekNumber = Number(body?.weekNumber)
     const materialId = Number(body?.materialId)
+    const isPinned = body?.isPinned === true
     if (!subjectName || !containerName || !Number.isInteger(weekNumber) || weekNumber < 1 || !Number.isInteger(materialId) || !/^[a-f0-9]{64}$/.test(contentFingerprint)) {
       return Response.json({ error: "Datos de ubicacion o archivo incompletos." }, { status: 400, headers: NO_STORE_HEADERS })
     }
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
       weekNumber,
       materialId,
       contentFingerprint,
+      isPinned,
     })
     return Response.json(context, { headers: NO_STORE_HEADERS })
   } catch (error) {
