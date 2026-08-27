@@ -23,7 +23,7 @@ import {
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
-import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, getLocalWidgetTargetSyncSummary, processLocalDriveSyncQueue, processLocalWidgetTargetSyncQueue, refreshAllLocalMaterialWidgetTargets } from "@/lib/local-workspace-data"
+import { applyLocalDriveDuplicateCleanup, enqueueAllLocalMaterialsForDrive, getLocalDriveReferencedFileIds, getLocalDriveSyncSummary, getLocalWidgetTargetSyncSummary, processLocalDriveSyncQueue, processLocalWidgetTargetSyncQueue, refreshAllLocalMaterialWidgetTargets } from "@/lib/local-workspace-data"
 
 type LocalWorkspaceContextValue = {
   isReady: boolean
@@ -254,18 +254,20 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onRetryWidgets, onClose }: {
+function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, driveCleanupMessage, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onCleanupDrive, onRetryWidgets, onClose }: {
   apis: ApiStatus
   drive: DriveStatus
   summary: DriveSummary
   widgetSummary: WidgetTargetSummary
   busy: boolean
   error: string
+  driveCleanupMessage: string
   onConfigureGroq: () => void
   onConfigureR2: () => void
   onConnect: () => void
   onDisconnect: () => void
   onSync: () => void
+  onCleanupDrive: () => void
   onRetryWidgets: () => void
   onClose: () => void
 }) {
@@ -298,10 +300,12 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onCon
         <div className="mt-3 flex flex-wrap gap-2">
           {drive.rootFolderLink ? <a href={drive.rootFolderLink} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2">Abrir carpeta</a> : null}
           <button type="button" onClick={onSync} disabled={busy} className="rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Sincronizar existentes</button>
+          <button type="button" onClick={onCleanupDrive} disabled={busy} className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 disabled:opacity-50">Limpiar duplicados</button>
           <button type="button" onClick={onConnect} disabled={busy} className="rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Cambiar cuenta</button>
           <button type="button" onClick={onDisconnect} disabled={busy} className="rounded-xl border border-red-200 px-3 py-2 text-red-600 disabled:opacity-50">Desconectar</button>
         </div>
       </div> : <button type="button" onClick={onConnect} disabled={busy} className="mt-4 h-11 w-full rounded-xl bg-sky-600 px-5 font-semibold text-white disabled:opacity-50">Conectar Google Drive</button>}
+      {driveCleanupMessage ? <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{driveCleanupMessage}</p> : null}
       {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
       <div className="mt-6 flex justify-end"><button type="button" onClick={onClose} className="h-11 rounded-xl bg-slate-900 px-6 font-semibold text-white">Cerrar</button></div>
     </div>
@@ -353,6 +357,7 @@ export function LocalWorkspaceProvider({
   const [driveStatus, setDriveStatus] = useState<DriveStatus>({ connected: false })
   const [apiStatus, setApiStatus] = useState<ApiStatus>({ groq: false, r2: false })
   const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0, errors: [] })
+  const [driveCleanupMessage, setDriveCleanupMessage] = useState("")
   const [widgetTargetSummary, setWidgetTargetSummary] = useState<WidgetTargetSummary>({ pending: 0, failed: 0, errors: [] })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
@@ -729,6 +734,29 @@ export function LocalWorkspaceProvider({
     finally { setSavingConfig(false) }
   }
 
+  const cleanupDriveDuplicates = async () => {
+    if (!window.confirm("Se conservara un PDF por nombre en cada carpeta de Cursado2026. Las copias sobrantes se enviaran a la papelera de Drive. ¿Continuar?")) return
+    setSavingConfig(true)
+    setError("")
+    setDriveCleanupMessage("")
+    try {
+      const referencedFileIds = await getLocalDriveReferencedFileIds()
+      const response = await fetch("/api/google/drive/cleanup-duplicates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referencedFileIds }),
+      })
+      const result = await response.json().catch(() => null) as { scannedFolders?: number; scannedPdfs?: number; duplicateGroups?: number; trashedFiles?: number; groups?: Array<{ keptFileId: string; trashedFileIds: string[] }>; error?: string } | null
+      if (!response.ok) throw new Error(result?.error || "No se pudieron limpiar los duplicados de Drive.")
+      await applyLocalDriveDuplicateCleanup(result?.groups ?? [])
+      setDriveCleanupMessage(`Limpieza completa: ${result?.scannedPdfs ?? 0} PDF revisados en ${result?.scannedFolders ?? 0} carpetas; ${result?.trashedFiles ?? 0} duplicados enviados a la papelera.`)
+    } catch (driveError) {
+      setError(driveError instanceof Error ? driveError.message : "No se pudieron limpiar los duplicados de Drive.")
+    } finally {
+      setSavingConfig(false)
+    }
+  }
+
   const retryWidgets = async () => {
     setSavingConfig(true)
     setError("")
@@ -752,7 +780,7 @@ export function LocalWorkspaceProvider({
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}

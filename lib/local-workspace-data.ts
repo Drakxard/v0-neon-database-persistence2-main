@@ -483,6 +483,27 @@ export async function getLocalDriveSyncSummary() {
   }
 }
 
+export async function getLocalDriveReferencedFileIds() {
+  return Array.from(new Set(
+    (await readDriveSyncManifest()).items
+      .filter((item) => item.operation === "upload" && item.status === "synced" && item.driveFileId)
+      .map((item) => item.driveFileId)
+  ))
+}
+
+export async function applyLocalDriveDuplicateCleanup(groups: Array<{ keptFileId: string; trashedFileIds: string[] }>) {
+  const replacements = new Map<string, string>()
+  for (const group of groups) {
+    for (const fileId of group.trashedFileIds) replacements.set(fileId, group.keptFileId)
+  }
+  if (replacements.size === 0) return
+  const manifest = await readDriveSyncManifest()
+  await writeDriveSyncManifest(manifest.items.map((item) => {
+    const keptFileId = replacements.get(item.driveFileId)
+    return keptFileId ? { ...item, driveFileId: keptFileId, updatedAt: nowIso() } : item
+  }))
+}
+
 export async function enqueueAllLocalMaterialsForDrive() {
   for (const subjectId of await listKnownLocalSubjectIds()) {
     for (const weekNumber of await listWeekNumbersForManifestKind(MATERIALS_DIR, subjectId)) {

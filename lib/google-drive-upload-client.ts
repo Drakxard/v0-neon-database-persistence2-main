@@ -10,6 +10,7 @@ type DriveUploadContext = {
   accessToken?: string
   expiresAt?: string
   parentFolderId?: string
+  replaceFileId?: string
   appProperties?: Record<string, string>
   existingFile?: UploadedDriveFile
   destination?: {
@@ -58,8 +59,11 @@ async function requestUploadContext(item: object, contentFingerprint: string) {
 async function startResumableUpload(context: DriveUploadContext, fileName: string, file: Blob) {
   let response: Response
   try {
-    response = await fetch(DRIVE_RESUMABLE_UPLOAD_URL, {
-      method: "POST",
+    const uploadUrl = context.replaceFileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(context.replaceFileId)}?uploadType=resumable&fields=id,name,mimeType,webViewLink`
+      : DRIVE_RESUMABLE_UPLOAD_URL
+    response = await fetch(uploadUrl, {
+      method: context.replaceFileId ? "PATCH" : "POST",
       headers: {
         Authorization: `Bearer ${context.accessToken}`,
         "Content-Type": "application/json; charset=UTF-8",
@@ -69,7 +73,7 @@ async function startResumableUpload(context: DriveUploadContext, fileName: strin
       body: JSON.stringify({
         name: fileName,
         mimeType: "application/pdf",
-        parents: [context.parentFolderId],
+        ...(context.replaceFileId ? {} : { parents: [context.parentFolderId] }),
         appProperties: context.appProperties,
       }),
     })

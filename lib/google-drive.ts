@@ -95,7 +95,23 @@ async function findUploadedUserMaterial(refreshToken: string, accessToken: strin
   return ((await response.json()) as { files?: Array<{ id: string; name: string; mimeType: string; webViewLink?: string }> }).files?.[0] || null
 }
 
-export async function prepareUserDriveUpload(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; materialId: number; contentFingerprint: string; isPinned?: boolean }) {
+async function findUserMaterialByName(refreshToken: string, accessToken: string, parentId: string, fileName: string) {
+  const query = [
+    `'${escapeDriveQueryValue(parentId)}' in parents`,
+    `name='${escapeDriveQueryValue(fileName.trim())}'`,
+    "mimeType='application/pdf'",
+    "trashed=false",
+  ]
+  const response = await userDriveRequest(
+    refreshToken,
+    `${DRIVE_API_BASE}?q=${encodeURIComponent(query.join(" and "))}&fields=files(id,name,mimeType,webViewLink,appProperties,modifiedTime)&orderBy=modifiedTime desc&pageSize=100`,
+    undefined,
+    accessToken,
+  )
+  return ((await response.json()) as { files?: Array<{ id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string; appProperties?: Record<string, string> }> }).files ?? []
+}
+
+export async function prepareUserDriveUpload(params: { refreshToken: string; rootFolderId: string; subjectName: string; weekNumber: number; containerName: string; fileName: string; materialId: number; contentFingerprint: string; isPinned?: boolean }) {
   const token = await getGoogleAccessTokenDetailsForRefreshToken(params.refreshToken)
   const subject = await ensureUserDriveFolder(params.refreshToken, params.subjectName, params.rootFolderId, token.accessToken)
   const existingFixed = await findUserFolder(params.refreshToken, "Fijos", subject.id, token.accessToken)
@@ -109,7 +125,9 @@ export async function prepareUserDriveUpload(params: { refreshToken: string; roo
   }
   const parent = params.isPinned ? fixed! : week!
   const container = await ensureUserDriveFolder(params.refreshToken, params.containerName, parent.id, token.accessToken)
-  const existingFile = await findUploadedUserMaterial(params.refreshToken, token.accessToken, container.id, params.materialId, params.contentFingerprint)
+  const namedFiles = await findUserMaterialByName(params.refreshToken, token.accessToken, container.id, params.fileName)
+  const existingFile = namedFiles.find((file) => file.appProperties?.cursadoContentSha256 === params.contentFingerprint)
+    ?? await findUploadedUserMaterial(params.refreshToken, token.accessToken, container.id, params.materialId, params.contentFingerprint)
   const destination = {
     isPinned: params.isPinned === true,
     subjectFolderId: subject.id,
@@ -123,11 +141,92 @@ export async function prepareUserDriveUpload(params: { refreshToken: string; roo
     accessToken: token.accessToken,
     expiresAt: new Date(Date.now() + token.expiresIn * 1000).toISOString(),
     parentFolderId: container.id,
+    replaceFileId: namedFiles[0]?.id,
     appProperties: {
       cursadoMaterialId: String(params.materialId),
       cursadoContentSha256: params.contentFingerprint,
     },
     destination,
+  }
+}
+
+
+type DriveCleanupFile = {
+  id: string
+  name: string
+  mimeType: string
+  modifiedTime?: string
+  parents?: string[]
+}
+
+async function listUserDriveChildren(refreshToken: string, accessToken: string, parentId: string) {
+  const files: DriveCleanupFile[] = []
+  let pageToken = ""
+  do {
+    const query = [`'${escapeDriveQueryValue(parentId)}' in parents`, "trashed=false"]
+    const params = new URLSearchParams({
+      q: query.join(" and "),
+      fields: "nextPageToken,files(id,name,mimeType,modifiedTime,parents)",
+      pageSize: "1000",
+    })
+    if (pageToken) params.set("pageToken", pageToken)
+    const response = await userDriveRequest(refreshToken, `${DRIVE_API_BASE}?${params.toString()}`, undefined, accessToken)
+    const payload = await response.json() as { nextPageToken?: string; files?: DriveCleanupFile[] }
+    files.push(...(payload.files ?? []))
+    pageToken = payload.nextPageToken || ""
+  } while (pageToken)
+  return files
+}
+
+function normalizedDrivePdfName(name: string) {
+  return name.trim().normalize("NFC").toLocaleLowerCase("es")
+}
+
+export async function cleanupUserDriveDuplicatePdfs(params: { refreshToken: string; rootFolderId: string; referencedFileIds: string[] }) {
+  const accessToken = await getGoogleAccessTokenForRefreshToken(params.refreshToken)
+  const referenced = new Set(params.referencedFileIds.filter(Boolean))
+  const folders = [params.rootFolderId]
+  let scannedFolders = 0
+  let scannedPdfs = 0
+  const duplicateGroups: Array<{ folderId: string; name: string; keptFileId: string; trashedFileIds: string[] }> = []
+
+  while (folders.length > 0) {
+    const folderId = folders.shift()!
+    scannedFolders += 1
+    const children = await listUserDriveChildren(params.refreshToken, accessToken, folderId)
+    folders.push(...children.filter((file) => file.mimeType === FOLDER_MIME_TYPE).map((file) => file.id))
+    const pdfs = children.filter((file) => file.mimeType === "application/pdf")
+    scannedPdfs += pdfs.length
+    const byName = new Map<string, DriveCleanupFile[]>()
+    for (const file of pdfs) {
+      const key = normalizedDrivePdfName(file.name)
+      byName.set(key, [...(byName.get(key) ?? []), file])
+    }
+    for (const files of byName.values()) {
+      if (files.length < 2) continue
+      const ordered = [...files].sort((left, right) => {
+        const referenceDifference = Number(referenced.has(right.id)) - Number(referenced.has(left.id))
+        if (referenceDifference !== 0) return referenceDifference
+        return String(right.modifiedTime || "").localeCompare(String(left.modifiedTime || "")) || left.id.localeCompare(right.id)
+      })
+      const [kept, ...duplicates] = ordered
+      for (const duplicate of duplicates) {
+        await userDriveRequest(params.refreshToken, `${DRIVE_API_BASE}/${encodeURIComponent(duplicate.id)}?fields=id,trashed`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trashed: true }),
+        }, accessToken)
+      }
+      duplicateGroups.push({ folderId, name: kept.name, keptFileId: kept.id, trashedFileIds: duplicates.map((file) => file.id) })
+    }
+  }
+
+  return {
+    scannedFolders,
+    scannedPdfs,
+    duplicateGroups: duplicateGroups.length,
+    trashedFiles: duplicateGroups.reduce((total, group) => total + group.trashedFileIds.length, 0),
+    groups: duplicateGroups,
   }
 }
 

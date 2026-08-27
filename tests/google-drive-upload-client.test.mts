@@ -102,3 +102,27 @@ test("reutiliza un archivo confirmado por su huella sin volver a subirlo", async
     globalThis.fetch = originalFetch
   }
 })
+
+test("reemplaza el archivo del mismo nombre en lugar de crear otro", async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), init })
+    if (calls.length === 1) return Response.json({
+      ...await contextResponse().json(),
+      replaceFileId: "drive-existing",
+    })
+    if (calls.length === 2) return new Response(null, { status: 200, headers: { Location: "https://upload.example/replacement" } })
+    return Response.json({ id: "drive-existing" })
+  }
+  try {
+    assert.equal((await uploadPdfDirectlyToDrive(item, new Blob(["nuevo"]))).id, "drive-existing")
+    assert.equal(calls[1].init?.method, "PATCH")
+    assert.match(calls[1].url, /files\/drive-existing\?uploadType=resumable/)
+    const metadata = JSON.parse(String(calls[1].init?.body))
+    assert.equal(metadata.name, "apunte.pdf")
+    assert.equal("parents" in metadata, false)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
