@@ -329,6 +329,7 @@ async function handleLocalApiRequest(request: Request) {
           : hasPinned
             ? await setLocalSubjectMaterialContainerPinned(containerId, body!.isPinned!)
             : await moveLocalSubjectMaterialContainer(containerId, body!.move!)
+        if (updated && (hasName || hasPinned)) void processLocalDriveSyncQueue()
         return updated ? jsonResponse(updated) : errorResponse("Container not found", 404)
       }
       if (method === "DELETE") {
@@ -509,6 +510,7 @@ async function handleLocalApiRequest(request: Request) {
           container_id: Number.isInteger(Number(body?.containerId)) ? Number(body.containerId) : undefined,
           material_type: body?.materialType === "theory" || body?.materialType === "practice" ? body.materialType : undefined,
         })
+        if (material && (body?.containerId !== undefined || body?.materialType !== undefined)) void processLocalDriveSyncQueue()
         return material ? jsonResponse(material) : errorResponse("Material not found", 404)
       }
       if (method === "DELETE") {

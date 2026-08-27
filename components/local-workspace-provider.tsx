@@ -23,7 +23,7 @@ import {
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
-import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, getLocalWidgetTargetSyncSummary, processLocalDriveSyncQueue, processLocalWidgetTargetSyncQueue } from "@/lib/local-workspace-data"
+import { enqueueAllLocalMaterialsForDrive, getLocalDriveSyncSummary, getLocalWidgetTargetSyncSummary, processLocalDriveSyncQueue, processLocalWidgetTargetSyncQueue, refreshAllLocalMaterialWidgetTargets } from "@/lib/local-workspace-data"
 
 type LocalWorkspaceContextValue = {
   isReady: boolean
@@ -509,21 +509,16 @@ export function LocalWorkspaceProvider({
       const status = await statusResponse.json().catch(() => ({ connected: false })) as DriveStatus
       if (!cancelled) setDriveStatus(status)
       if (!status.connected) return
-      await enqueueAllLocalMaterialsForDrive()
       const summary = await processLocalDriveSyncQueue()
       if (!cancelled) setDriveSummary(summary)
     }
     void run()
-    const timer = window.setInterval(() => { void run() }, 60_000)
-    return () => { cancelled = true; window.clearInterval(timer) }
+    return () => { cancelled = true }
   }, [bootState, enabled, rootHandle])
 
   useEffect(() => {
     if (!enabled || bootState !== "ready" || !rootHandle || !getReadyInscreenConfigHalf()) return
-    const run = () => { void processLocalWidgetTargetSyncQueue().then(setWidgetTargetSummary) }
-    run()
-    const timer = window.setInterval(run, 60_000)
-    return () => window.clearInterval(timer)
+    void processLocalWidgetTargetSyncQueue().then(setWidgetTargetSummary)
   }, [bootState, enabled, rootHandle])
 
   const reselectWorkspace = async () => {
@@ -726,6 +721,7 @@ export function LocalWorkspaceProvider({
     try {
       await enqueueAllLocalMaterialsForDrive()
       setDriveSummary(await processLocalDriveSyncQueue())
+      await refreshAllLocalMaterialWidgetTargets()
       setWidgetTargetSummary(await processLocalWidgetTargetSyncQueue())
     } catch (driveError) { setError(driveError instanceof Error ? driveError.message : "No se pudo sincronizar Drive.") }
     finally { setSavingConfig(false) }

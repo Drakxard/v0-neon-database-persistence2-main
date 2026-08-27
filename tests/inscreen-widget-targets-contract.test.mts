@@ -29,3 +29,15 @@ test("Drive separa fijos, crea shortcuts y publica solo carpetas sincronizadas n
   assert.match(workspace, /getWidgetTargetSignature/)
   assert.match(workspace, /processLocalWidgetTargetSyncQueue/)
 })
+
+test("Drive e InScreen trabajan por eventos y el barrido completo queda manual", () => {
+  const provider = readFileSync(new URL("../components/local-workspace-provider.tsx", import.meta.url), "utf8")
+  const interceptor = readFileSync(new URL("../components/local-fetch-interceptor.tsx", import.meta.url), "utf8")
+  const workspace = readFileSync(new URL("../lib/local-workspace-data.ts", import.meta.url), "utf8")
+  assert.doesNotMatch(provider, /setInterval\([^)]*processLocal(?:Drive|Widget)SyncQueue/s)
+  assert.doesNotMatch(provider.slice(provider.indexOf("const run = async () =>"), provider.indexOf("const reselectWorkspace")), /enqueueAllLocalMaterialsForDrive/)
+  assert.match(provider, /await enqueueAllLocalMaterialsForDrive\(\)[\s\S]*await refreshAllLocalMaterialWidgetTargets\(\)/)
+  assert.match(interceptor, /hasName \|\| hasPinned[\s\S]*processLocalDriveSyncQueue/)
+  assert.match(interceptor, /body\?\.containerId !== undefined \|\| body\?\.materialType !== undefined[\s\S]*processLocalDriveSyncQueue/)
+  assert.match(workspace, /entry\.item\.status !== "synced"\)\) continue/)
+})

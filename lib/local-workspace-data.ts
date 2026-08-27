@@ -363,15 +363,16 @@ export function processLocalWidgetTargetSyncQueue() {
   return widgetTargetSyncRun
 }
 
-async function refreshLocalMaterialWidgetTargets(additionalSubjectIds: Iterable<string> = []) {
+async function refreshLocalMaterialWidgetTargets(subjectIdsToRefresh: Iterable<string>) {
   const manifest = await readDriveSyncManifest()
   const resolvedItems = await Promise.all(manifest.items.map(async (item) => ({
     item,
     subjectId: await resolveLocalLogicalSubjectId(item.subjectId),
   })))
-  const resolvedAdditionalSubjectIds = await Promise.all([...additionalSubjectIds].map((subjectId) => resolveLocalLogicalSubjectId(subjectId)))
-  const subjectIds = new Set([...resolvedItems.map(({ subjectId }) => subjectId).filter(Boolean), ...resolvedAdditionalSubjectIds])
+  const resolvedSubjectIds = await Promise.all([...subjectIdsToRefresh].map((subjectId) => resolveLocalLogicalSubjectId(subjectId)))
+  const subjectIds = new Set(resolvedSubjectIds.filter(Boolean))
   for (const subjectId of subjectIds) {
+    if (resolvedItems.some((entry) => entry.subjectId === subjectId && entry.item.status !== "synced")) continue
     const latest = resolvedItems
       .filter((entry) => entry.subjectId === subjectId)
       .map(({ item }) => item)
@@ -384,6 +385,11 @@ async function refreshLocalMaterialWidgetTargets(additionalSubjectIds: Iterable<
       ...(latest ? { weekNumber: latest.weekNumber } : {}),
     })
   }
+}
+
+export async function refreshAllLocalMaterialWidgetTargets() {
+  const manifest = await readDriveSyncManifest()
+  await refreshLocalMaterialWidgetTargets(manifest.items.map((item) => item.subjectId).filter(Boolean))
 }
 
 async function readDriveSyncManifest() {
@@ -468,7 +474,7 @@ let driveSyncRun: Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> 
 
 async function runLocalDriveSyncQueue() {
   const manifest = await readDriveSyncManifest()
-  const affectedSubjectIds = new Set(manifest.items.map((item) => item.subjectId).filter(Boolean))
+  const affectedSubjectIds = new Set<string>()
   for (const candidate of manifest.items.filter((item) => item.status !== "synced")) {
     const item = (await readDriveSyncManifest()).items.find((current) => current.materialId === candidate.materialId)
     if (!item) continue
@@ -496,6 +502,7 @@ async function runLocalDriveSyncQueue() {
         lastError: "",
         updatedAt: nowIso(),
       } : current))
+      if (!item.isPinned) affectedSubjectIds.add(item.subjectId)
     } catch (error) {
       const latest = await readDriveSyncManifest()
       await writeDriveSyncManifest(latest.items.map((current) => current.materialId === item.materialId ? { ...current, status: "failed", attempts: current.attempts + 1, lastError: error instanceof Error ? error.message : "Error de sincronizacion.", updatedAt: nowIso() } : current))
@@ -3268,6 +3275,9 @@ export async function updateLocalMaterial(
     material.week_number,
     manifest.materials.map((candidate) => (candidate.id === materialId ? updatedMaterial : candidate))
   )
+  if (patch.container_id !== undefined || patch.material_type !== undefined) {
+    await enqueueLocalMaterialDriveUpload(updatedMaterial, "", true)
+  }
   return updatedMaterial
 }
 
