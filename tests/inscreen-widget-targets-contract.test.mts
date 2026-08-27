@@ -40,4 +40,6 @@ test("Drive e InScreen trabajan por eventos y el barrido completo queda manual",
   assert.match(interceptor, /hasName \|\| hasPinned[\s\S]*processLocalDriveSyncQueue/)
   assert.match(interceptor, /body\?\.containerId !== undefined \|\| body\?\.materialType !== undefined[\s\S]*processLocalDriveSyncQueue/)
   assert.match(workspace, /entry\.item\.status !== "synced"\)\) continue/)
+  assert.match(workspace, /widgetTargetSyncRequested = true[\s\S]*return processLocalWidgetTargetSyncQueue\(\)/)
+  assert.match(workspace, /driveSyncRequested = true[\s\S]*return processLocalDriveSyncQueue\(\)/)
 })

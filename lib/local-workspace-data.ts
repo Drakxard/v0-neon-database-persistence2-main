@@ -309,6 +309,7 @@ export async function getLocalWidgetTargetSyncSummary() {
 }
 
 let widgetTargetSyncRun: Promise<Awaited<ReturnType<typeof getLocalWidgetTargetSyncSummary>>> | null = null
+let widgetTargetSyncRequested = false
 
 async function runLocalWidgetTargetSyncQueue() {
   const configHalf = getReadyInscreenConfigHalf()
@@ -357,8 +358,15 @@ async function runLocalWidgetTargetSyncQueue() {
   return getLocalWidgetTargetSyncSummary()
 }
 
-export function processLocalWidgetTargetSyncQueue() {
-  if (widgetTargetSyncRun) return widgetTargetSyncRun
+export function processLocalWidgetTargetSyncQueue(): Promise<Awaited<ReturnType<typeof getLocalWidgetTargetSyncSummary>>> {
+  if (widgetTargetSyncRun) {
+    widgetTargetSyncRequested = true
+    return widgetTargetSyncRun.then(() => {
+      if (!widgetTargetSyncRequested) return getLocalWidgetTargetSyncSummary()
+      widgetTargetSyncRequested = false
+      return processLocalWidgetTargetSyncQueue()
+    })
+  }
   widgetTargetSyncRun = runLocalWidgetTargetSyncQueue().finally(() => { widgetTargetSyncRun = null })
   return widgetTargetSyncRun
 }
@@ -471,6 +479,7 @@ export async function enqueueAllLocalMaterialsForDrive() {
 }
 
 let driveSyncRun: Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> | null = null
+let driveSyncRequested = false
 
 async function runLocalDriveSyncQueue() {
   const manifest = await readDriveSyncManifest()
@@ -513,8 +522,15 @@ async function runLocalDriveSyncQueue() {
   return getLocalDriveSyncSummary()
 }
 
-export function processLocalDriveSyncQueue() {
-  if (driveSyncRun) return driveSyncRun
+export function processLocalDriveSyncQueue(): Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> {
+  if (driveSyncRun) {
+    driveSyncRequested = true
+    return driveSyncRun.then(() => {
+      if (!driveSyncRequested) return getLocalDriveSyncSummary()
+      driveSyncRequested = false
+      return processLocalDriveSyncQueue()
+    })
+  }
   const run = typeof navigator !== "undefined" && navigator.locks
     ? navigator.locks.request("cursado2026-drive-sync", { mode: "exclusive" }, () => runLocalDriveSyncQueue())
     : runLocalDriveSyncQueue()
