@@ -254,7 +254,7 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onClose }: {
+function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onRetryWidgets, onClose }: {
   apis: ApiStatus
   drive: DriveStatus
   summary: DriveSummary
@@ -266,6 +266,7 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onCon
   onConnect: () => void
   onDisconnect: () => void
   onSync: () => void
+  onRetryWidgets: () => void
   onClose: () => void
 }) {
   const service = (name: string, detail: string, ok = true) => (
@@ -286,12 +287,13 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, onCon
       <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>Widgets InScreen · {widgetSummary.pending} pendientes · {widgetSummary.failed} con error</p>
         {widgetSummary.errors.map((message, index) => <p className="mt-2 text-xs text-amber-800" key={`${index}-${message}`}>{message}</p>)}
+        {widgetSummary.pending > 0 || widgetSummary.failed > 0 ? <button type="button" onClick={onRetryWidgets} disabled={busy} className="mt-3 rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Reintentar widgets</button> : null}
       </div>
       {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>{summary.synced} sincronizados · {summary.pending} pendientes · {summary.failed} con error</p>
         {summary.errors.length ? <div className="mt-3 space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
           {summary.errors.map((message, index) => <p key={`${index}-${message}`}>{message}</p>)}
-          <p className="pt-1 text-amber-700">Se reintentan automaticamente mientras la web esta abierta.</p>
+          <p className="pt-1 text-amber-700">Se reintentan al iniciar, ante el proximo cambio o manualmente.</p>
         </div> : null}
         <div className="mt-3 flex flex-wrap gap-2">
           {drive.rootFolderLink ? <a href={drive.rootFolderLink} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-300 px-3 py-2">Abrir carpeta</a> : null}
@@ -727,6 +729,14 @@ export function LocalWorkspaceProvider({
     finally { setSavingConfig(false) }
   }
 
+  const retryWidgets = async () => {
+    setSavingConfig(true)
+    setError("")
+    try { setWidgetTargetSummary(await processLocalWidgetTargetSyncQueue()) }
+    catch (widgetError) { setError(widgetError instanceof Error ? widgetError.message : "No se pudieron reintentar los widgets.") }
+    finally { setSavingConfig(false) }
+  }
+
   const value = useMemo<LocalWorkspaceContextValue>(
     () => ({
       isReady,
@@ -742,7 +752,7 @@ export function LocalWorkspaceProvider({
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}

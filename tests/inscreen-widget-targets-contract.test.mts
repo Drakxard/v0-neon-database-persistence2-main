@@ -42,4 +42,6 @@ test("Drive e InScreen trabajan por eventos y el barrido completo queda manual",
   assert.match(workspace, /entry\.item\.status !== "synced"\)\) continue/)
   assert.match(workspace, /widgetTargetSyncRequested = true[\s\S]*return processLocalWidgetTargetSyncQueue\(\)/)
   assert.match(workspace, /driveSyncRequested = true[\s\S]*return processLocalDriveSyncQueue\(\)/)
+  assert.match(workspace, /cursado2026-widget-target-sync/)
+  assert.match(provider, /Reintentar widgets/)
 })

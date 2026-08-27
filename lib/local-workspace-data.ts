@@ -227,6 +227,12 @@ async function writeWidgetTargetSyncManifest(items: WidgetTargetSyncItem[], publ
   await writeJsonFile(WIDGET_TARGET_SYNC_MANIFEST, { version: 1, items, ...(published ? { published } : {}) } satisfies WidgetTargetSyncManifest)
 }
 
+function withWidgetTargetSyncLock<T>(callback: () => Promise<T>): Promise<T> {
+  return typeof navigator !== "undefined" && navigator.locks
+    ? navigator.locks.request("cursado2026-widget-target-sync", { mode: "exclusive" }, callback)
+    : callback()
+}
+
 function getWidgetTargetKey(target: WidgetTargetPatch) {
   return `${target.subjectId}:${target.kind}`
 }
@@ -258,33 +264,37 @@ async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]
 }
 
 export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]) {
-  const manifest = await readWidgetTargetSyncManifest()
-  const normalized = subjects
-    .map((subject) => ({ id: subject.id.trim(), name: subject.name.replace(/\s+/g, " ").trim(), color: subject.color.trim() }))
-    .filter((subject) => /^[a-zA-Z0-9_-]{1,180}$/.test(subject.id) && subject.name && /^#[0-9a-fA-F]{6}$/.test(subject.color))
-  const signature = JSON.stringify(normalized)
-  if (manifest.published?.catalogSignature === signature && !manifest.items.some((candidate) => candidate.kind === "catalog")) return
-  const item: WidgetTargetSyncItem = {
-    id: crypto.randomUUID(), kind: "catalog", subjects: normalized, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
-  }
-  await writeWidgetTargetSyncManifest([...manifest.items.filter((candidate) => candidate.kind !== "catalog"), item], manifest.published)
+  await withWidgetTargetSyncLock(async () => {
+    const manifest = await readWidgetTargetSyncManifest()
+    const normalized = subjects
+      .map((subject) => ({ id: subject.id.trim(), name: subject.name.replace(/\s+/g, " ").trim(), color: subject.color.trim() }))
+      .filter((subject) => /^[a-zA-Z0-9_-]{1,180}$/.test(subject.id) && subject.name && /^#[0-9a-fA-F]{6}$/.test(subject.color))
+    const signature = JSON.stringify(normalized)
+    if (manifest.published?.catalogSignature === signature && !manifest.items.some((candidate) => candidate.kind === "catalog")) return
+    const item: WidgetTargetSyncItem = {
+      id: crypto.randomUUID(), kind: "catalog", subjects: normalized, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
+    }
+    await writeWidgetTargetSyncManifest([...manifest.items.filter((candidate) => candidate.kind !== "catalog"), item], manifest.published)
+  })
 }
 
 export async function enqueueLocalWidgetTarget(target: WidgetTargetPatch) {
-  const manifest = await readWidgetTargetSyncManifest()
-  const subjectId = await resolveLocalLogicalSubjectId(target.subjectId)
-  const normalizedTarget = { ...target, subjectId }
-  const existing = await normalizeLocalWidgetTargetSyncItems(manifest.items)
-  const key = getWidgetTargetKey(normalizedTarget)
-  const signature = getWidgetTargetSignature(normalizedTarget)
-  if (manifest.published?.targetSignatures?.[key] === signature && !existing.some((candidate) => candidate.kind === "target" && candidate.target && getWidgetTargetKey(candidate.target) === key)) return
-  const item: WidgetTargetSyncItem = {
-    id: crypto.randomUUID(), kind: "target", target: normalizedTarget, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
-  }
-  await writeWidgetTargetSyncManifest([
-    ...existing.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== subjectId || candidate.target?.kind !== target.kind),
-    item,
-  ], manifest.published)
+  await withWidgetTargetSyncLock(async () => {
+    const manifest = await readWidgetTargetSyncManifest()
+    const subjectId = await resolveLocalLogicalSubjectId(target.subjectId)
+    const normalizedTarget = { ...target, subjectId }
+    const existing = await normalizeLocalWidgetTargetSyncItems(manifest.items)
+    const key = getWidgetTargetKey(normalizedTarget)
+    const signature = getWidgetTargetSignature(normalizedTarget)
+    if (manifest.published?.targetSignatures?.[key] === signature && !existing.some((candidate) => candidate.kind === "target" && candidate.target && getWidgetTargetKey(candidate.target) === key)) return
+    const item: WidgetTargetSyncItem = {
+      id: crypto.randomUUID(), kind: "target", target: normalizedTarget, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
+    }
+    await writeWidgetTargetSyncManifest([
+      ...existing.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== subjectId || candidate.target?.kind !== target.kind),
+      item,
+    ], manifest.published)
+  })
 }
 
 export async function enqueueLocalNotebookWidgetTargets(subjectIds: string[]) {
@@ -299,7 +309,7 @@ export async function enqueueLocalNotebookWidgetTargets(subjectIds: string[]) {
   }
 }
 
-export async function getLocalWidgetTargetSyncSummary() {
+async function getLocalWidgetTargetSyncSummaryUnlocked() {
   const items = (await readWidgetTargetSyncManifest()).items
   return {
     pending: items.filter((item) => item.status === "pending").length,
@@ -308,12 +318,16 @@ export async function getLocalWidgetTargetSyncSummary() {
   }
 }
 
+export function getLocalWidgetTargetSyncSummary() {
+  return withWidgetTargetSyncLock(getLocalWidgetTargetSyncSummaryUnlocked)
+}
+
 let widgetTargetSyncRun: Promise<Awaited<ReturnType<typeof getLocalWidgetTargetSyncSummary>>> | null = null
 let widgetTargetSyncRequested = false
 
 async function runLocalWidgetTargetSyncQueue() {
   const configHalf = getReadyInscreenConfigHalf()
-  if (!configHalf) return getLocalWidgetTargetSyncSummary()
+  if (!configHalf) return getLocalWidgetTargetSyncSummaryUnlocked()
   const manifest = await readWidgetTargetSyncManifest()
   const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
   await writeWidgetTargetSyncManifest(normalizedItems, manifest.published)
@@ -355,7 +369,7 @@ async function runLocalWidgetTargetSyncQueue() {
       break
     }
   }
-  return getLocalWidgetTargetSyncSummary()
+  return getLocalWidgetTargetSyncSummaryUnlocked()
 }
 
 export function processLocalWidgetTargetSyncQueue(): Promise<Awaited<ReturnType<typeof getLocalWidgetTargetSyncSummary>>> {
@@ -367,7 +381,7 @@ export function processLocalWidgetTargetSyncQueue(): Promise<Awaited<ReturnType<
       return processLocalWidgetTargetSyncQueue()
     })
   }
-  widgetTargetSyncRun = runLocalWidgetTargetSyncQueue().finally(() => { widgetTargetSyncRun = null })
+  widgetTargetSyncRun = withWidgetTargetSyncLock(runLocalWidgetTargetSyncQueue).finally(() => { widgetTargetSyncRun = null })
   return widgetTargetSyncRun
 }
 
