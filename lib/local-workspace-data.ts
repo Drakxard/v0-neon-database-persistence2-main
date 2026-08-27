@@ -212,15 +212,27 @@ type WidgetTargetSyncItem = {
   lastError: string
   updatedAt: string
 }
-type WidgetTargetSyncManifest = { version: 1; items: WidgetTargetSyncItem[] }
+type WidgetTargetPublishedState = {
+  catalogSignature?: string
+  targetSignatures?: Record<string, string>
+}
+type WidgetTargetSyncManifest = { version: 1; items: WidgetTargetSyncItem[]; published?: WidgetTargetPublishedState }
 
 async function readWidgetTargetSyncManifest() {
   const value = await readJsonFile<WidgetTargetSyncManifest | null>(WIDGET_TARGET_SYNC_MANIFEST, null)
   return value ?? { version: 1 as const, items: [] }
 }
 
-async function writeWidgetTargetSyncManifest(items: WidgetTargetSyncItem[]) {
-  await writeJsonFile(WIDGET_TARGET_SYNC_MANIFEST, { version: 1, items } satisfies WidgetTargetSyncManifest)
+async function writeWidgetTargetSyncManifest(items: WidgetTargetSyncItem[], published?: WidgetTargetPublishedState) {
+  await writeJsonFile(WIDGET_TARGET_SYNC_MANIFEST, { version: 1, items, ...(published ? { published } : {}) } satisfies WidgetTargetSyncManifest)
+}
+
+function getWidgetTargetKey(target: WidgetTargetPatch) {
+  return `${target.subjectId}:${target.kind}`
+}
+
+function getWidgetTargetSignature(target: WidgetTargetPatch) {
+  return JSON.stringify([target.subjectId, target.kind, target.url, target.sectionKey ?? null, target.weekNumber ?? null])
 }
 
 async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]) {
@@ -250,10 +262,12 @@ export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]
   const normalized = subjects
     .map((subject) => ({ id: subject.id.trim(), name: subject.name.replace(/\s+/g, " ").trim(), color: subject.color.trim() }))
     .filter((subject) => /^[a-zA-Z0-9_-]{1,180}$/.test(subject.id) && subject.name && /^#[0-9a-fA-F]{6}$/.test(subject.color))
+  const signature = JSON.stringify(normalized)
+  if (manifest.published?.catalogSignature === signature && !manifest.items.some((candidate) => candidate.kind === "catalog")) return
   const item: WidgetTargetSyncItem = {
     id: crypto.randomUUID(), kind: "catalog", subjects: normalized, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
   }
-  await writeWidgetTargetSyncManifest([...manifest.items.filter((candidate) => candidate.kind !== "catalog"), item])
+  await writeWidgetTargetSyncManifest([...manifest.items.filter((candidate) => candidate.kind !== "catalog"), item], manifest.published)
 }
 
 export async function enqueueLocalWidgetTarget(target: WidgetTargetPatch) {
@@ -261,13 +275,16 @@ export async function enqueueLocalWidgetTarget(target: WidgetTargetPatch) {
   const subjectId = await resolveLocalLogicalSubjectId(target.subjectId)
   const normalizedTarget = { ...target, subjectId }
   const existing = await normalizeLocalWidgetTargetSyncItems(manifest.items)
+  const key = getWidgetTargetKey(normalizedTarget)
+  const signature = getWidgetTargetSignature(normalizedTarget)
+  if (manifest.published?.targetSignatures?.[key] === signature && !existing.some((candidate) => candidate.kind === "target" && candidate.target && getWidgetTargetKey(candidate.target) === key)) return
   const item: WidgetTargetSyncItem = {
     id: crypto.randomUUID(), kind: "target", target: normalizedTarget, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
   }
   await writeWidgetTargetSyncManifest([
     ...existing.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== subjectId || candidate.target?.kind !== target.kind),
     item,
-  ])
+  ], manifest.published)
 }
 
 export async function enqueueLocalNotebookWidgetTargets(subjectIds: string[]) {
@@ -298,7 +315,7 @@ async function runLocalWidgetTargetSyncQueue() {
   if (!configHalf) return getLocalWidgetTargetSyncSummary()
   const manifest = await readWidgetTargetSyncManifest()
   const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
-  await writeWidgetTargetSyncManifest(normalizedItems)
+  await writeWidgetTargetSyncManifest(normalizedItems, manifest.published)
   const ordered = [...normalizedItems].sort((left, right) => {
     if (left.kind !== right.kind) return left.kind === "catalog" ? -1 : 1
     return left.updatedAt.localeCompare(right.updatedAt)
@@ -316,7 +333,15 @@ async function runLocalWidgetTargetSyncQueue() {
       const payload = await response.json().catch(() => null) as { error?: string } | null
       if (!response.ok) throw new Error(payload?.error || "No se pudo publicar el destino de InScreen.")
       const latest = await readWidgetTargetSyncManifest()
-      await writeWidgetTargetSyncManifest(latest.items.filter((item) => item.id !== current.id))
+      const published: WidgetTargetPublishedState = {
+        ...latest.published,
+        ...(current.kind === "catalog"
+          ? { catalogSignature: JSON.stringify(current.subjects ?? []) }
+          : current.target
+            ? { targetSignatures: { ...latest.published?.targetSignatures, [getWidgetTargetKey(current.target)]: getWidgetTargetSignature(current.target) } }
+            : {}),
+      }
+      await writeWidgetTargetSyncManifest(latest.items.filter((item) => item.id !== current.id), published)
     } catch (error) {
       const latest = await readWidgetTargetSyncManifest()
       await writeWidgetTargetSyncManifest(latest.items.map((item) => item.id === current.id ? {
@@ -325,7 +350,7 @@ async function runLocalWidgetTargetSyncQueue() {
         attempts: item.attempts + 1,
         lastError: error instanceof Error ? error.message : "No se pudo publicar el destino de InScreen.",
         updatedAt: nowIso(),
-      } : item))
+      } : item), latest.published)
       break
     }
   }

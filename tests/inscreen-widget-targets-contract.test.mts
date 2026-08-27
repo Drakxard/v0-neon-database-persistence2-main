@@ -25,5 +25,7 @@ test("Drive separa fijos, crea shortcuts y publica solo carpetas sincronizadas n
   assert.match(workspace, /subjectId: location\.subjectId/)
   assert.match(workspace, /resolveLocalLogicalSubjectId\(item\.subjectId\)/)
   assert.match(workspace, /normalizeLocalWidgetTargetSyncItems/)
+  assert.match(workspace, /published\?\.targetSignatures/)
+  assert.match(workspace, /getWidgetTargetSignature/)
   assert.match(workspace, /processLocalWidgetTargetSyncQueue/)
 })
