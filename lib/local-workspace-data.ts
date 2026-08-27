@@ -223,6 +223,28 @@ async function writeWidgetTargetSyncManifest(items: WidgetTargetSyncItem[]) {
   await writeJsonFile(WIDGET_TARGET_SYNC_MANIFEST, { version: 1, items } satisfies WidgetTargetSyncManifest)
 }
 
+async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]) {
+  const normalized: WidgetTargetSyncItem[] = []
+  const targetIndexes = new Map<string, number>()
+  for (const item of items) {
+    if (item.kind !== "target" || !item.target) {
+      normalized.push(item)
+      continue
+    }
+    const subjectId = await resolveLocalLogicalSubjectId(item.target.subjectId)
+    const next = subjectId === item.target.subjectId ? item : { ...item, target: { ...item.target, subjectId } }
+    const key = `${subjectId}:${item.target.kind}`
+    const previousIndex = targetIndexes.get(key)
+    if (previousIndex === undefined) {
+      targetIndexes.set(key, normalized.length)
+      normalized.push(next)
+      continue
+    }
+    if (normalized[previousIndex].updatedAt.localeCompare(next.updatedAt) <= 0) normalized[previousIndex] = next
+  }
+  return normalized
+}
+
 export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]) {
   const manifest = await readWidgetTargetSyncManifest()
   const normalized = subjects
@@ -236,11 +258,14 @@ export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]
 
 export async function enqueueLocalWidgetTarget(target: WidgetTargetPatch) {
   const manifest = await readWidgetTargetSyncManifest()
+  const subjectId = await resolveLocalLogicalSubjectId(target.subjectId)
+  const normalizedTarget = { ...target, subjectId }
+  const existing = await normalizeLocalWidgetTargetSyncItems(manifest.items)
   const item: WidgetTargetSyncItem = {
-    id: crypto.randomUUID(), kind: "target", target, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
+    id: crypto.randomUUID(), kind: "target", target: normalizedTarget, status: "pending", attempts: 0, lastError: "", updatedAt: nowIso(),
   }
   await writeWidgetTargetSyncManifest([
-    ...manifest.items.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== target.subjectId || candidate.target?.kind !== target.kind),
+    ...existing.filter((candidate) => candidate.kind !== "target" || candidate.target?.subjectId !== subjectId || candidate.target?.kind !== target.kind),
     item,
   ])
 }
@@ -271,7 +296,10 @@ let widgetTargetSyncRun: Promise<Awaited<ReturnType<typeof getLocalWidgetTargetS
 async function runLocalWidgetTargetSyncQueue() {
   const configHalf = getReadyInscreenConfigHalf()
   if (!configHalf) return getLocalWidgetTargetSyncSummary()
-  const ordered = [...(await readWidgetTargetSyncManifest()).items].sort((left, right) => {
+  const manifest = await readWidgetTargetSyncManifest()
+  const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
+  await writeWidgetTargetSyncManifest(normalizedItems)
+  const ordered = [...normalizedItems].sort((left, right) => {
     if (left.kind !== right.kind) return left.kind === "catalog" ? -1 : 1
     return left.updatedAt.localeCompare(right.updatedAt)
   })
@@ -312,10 +340,17 @@ export function processLocalWidgetTargetSyncQueue() {
 
 async function refreshLocalMaterialWidgetTargets(additionalSubjectIds: Iterable<string> = []) {
   const manifest = await readDriveSyncManifest()
-  const subjectIds = new Set([...manifest.items.map((item) => item.subjectId).filter(Boolean), ...additionalSubjectIds])
+  const resolvedItems = await Promise.all(manifest.items.map(async (item) => ({
+    item,
+    subjectId: await resolveLocalLogicalSubjectId(item.subjectId),
+  })))
+  const resolvedAdditionalSubjectIds = await Promise.all([...additionalSubjectIds].map((subjectId) => resolveLocalLogicalSubjectId(subjectId)))
+  const subjectIds = new Set([...resolvedItems.map(({ subjectId }) => subjectId).filter(Boolean), ...resolvedAdditionalSubjectIds])
   for (const subjectId of subjectIds) {
-    const latest = manifest.items
-      .filter((item) => item.subjectId === subjectId && item.operation === "upload" && item.status === "synced" && !item.isPinned && Boolean(item.weekFolderUrl))
+    const latest = resolvedItems
+      .filter((entry) => entry.subjectId === subjectId)
+      .map(({ item }) => item)
+      .filter((item) => item.operation === "upload" && item.status === "synced" && !item.isPinned && Boolean(item.weekFolderUrl))
       .sort((left, right) => right.weekNumber - left.weekNumber || right.updatedAt.localeCompare(left.updatedAt))[0]
     await enqueueLocalWidgetTarget({
       subjectId,
@@ -341,6 +376,7 @@ async function getDriveLocation(material: SubjectDayMaterial, preferredSubjectNa
   const containers = await listLocalSubjectMaterialContainers(material.subject_id)
   const container = containers.find((candidate) => candidate.id === material.container_id) || containers.find((candidate) => candidate.kind === material.material_type)
   return {
+    subjectId: entry?.id ?? material.subject_id,
     subjectName: subjectName.replace(/\n/g, " "),
     containerName: container?.name || (material.material_type === "theory" ? "Teoria" : "Practica"),
     isPinned: container?.kind === "custom" && container.isPinned,
@@ -351,9 +387,14 @@ export async function enqueueLocalMaterialDriveUpload(material: SubjectDayMateri
   const manifest = await readDriveSyncManifest()
   const location = await getDriveLocation(material, preferredSubjectName)
   const previous = manifest.items.find((item) => item.materialId === material.id)
-  if (!force && previous?.status === "synced" && previous.pathVersion === 2 && previous.localFileId === material.drive_file_id && previous.fileName === material.file_name && previous.subjectName === location.subjectName && previous.weekNumber === material.week_number && previous.containerName === location.containerName && previous.isPinned === location.isPinned) return previous
+  if (!force && previous?.status === "synced" && previous.pathVersion === 2 && previous.localFileId === material.drive_file_id && previous.fileName === material.file_name && previous.subjectName === location.subjectName && previous.weekNumber === material.week_number && previous.containerName === location.containerName && previous.isPinned === location.isPinned) {
+    if (previous.subjectId === location.subjectId) return previous
+    const migrated = { ...previous, subjectId: location.subjectId }
+    await writeDriveSyncManifest(manifest.items.map((item) => item.materialId === material.id ? migrated : item))
+    return migrated
+  }
   const next: DriveSyncItem = {
-    materialId: material.id, subjectId: material.subject_id, operation: "upload", localFileId: material.drive_file_id,
+    materialId: material.id, subjectId: location.subjectId, operation: "upload", localFileId: material.drive_file_id,
     driveFileId: previous?.driveFileId || "", subjectName: location.subjectName,
     weekNumber: material.week_number, containerName: location.containerName, fileName: material.file_name,
     status: "pending", attempts: previous?.attempts || 0, lastError: "", updatedAt: nowIso(),
