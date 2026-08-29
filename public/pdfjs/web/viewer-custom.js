@@ -65,7 +65,7 @@
     enhancedPdfReadability: false,
     workspaceMode: "remote",
     workspaceRootHandle: null,
-    inscreenConfigHalf: "",
+    inscreenConfigToken: "",
     localWorkspaceObjectUrl: "",
     isOpeningLocalWorkspaceDocument: false,
     tagButton: null,
@@ -385,18 +385,18 @@
     return handle;
   }
 
-  async function loadInscreenConfigFileHalf() {
-    if (state.inscreenConfigHalf) return state.inscreenConfigHalf;
+  async function loadInscreenConfigToken() {
+    if (state.inscreenConfigToken) return state.inscreenConfigToken;
     try {
       if (window.localStorage.getItem("inscreen.config-skipped.v1") === "1") throw new Error("skipped");
       const rootHandle = await ensureWorkspaceRootHandle();
-      const configHandle = await rootHandle.getFileHandle("User.InScreen", { create: false });
+      const configHandle = await rootHandle.getFileHandle("User.Services", { create: false });
       const configFile = await configHandle.getFile();
       const config = JSON.parse(await configFile.text());
-      const fileHalf = config?.version === 2 ? String(config.half || "").trim() : "";
-      if (!fileHalf) throw new Error("missing");
-      state.inscreenConfigHalf = fileHalf;
-      return fileHalf;
+      const token = config?.version === 1 ? String(config.inscreenToken || "").trim() : "";
+      if (!token) throw new Error("missing");
+      state.inscreenConfigToken = token;
+      return token;
     } catch {
       const error = new Error("Las funciones de IA no estan configuradas. Pulsa | en el inicio para configurarlas.");
       error.name = "InscreenConfigurationUnavailable";
@@ -406,7 +406,7 @@
 
   async function inscreenApiFetch(input, init = {}) {
     const headers = new Headers(init.headers || {});
-    headers.set("x-inscreen-config-half", await loadInscreenConfigFileHalf());
+    headers.set("x-inscreen-config-token", await loadInscreenConfigToken());
     return fetch(input, { ...init, headers });
   }
 
@@ -415,9 +415,9 @@
   }
 
   async function assertInscreenConfigurationAvailable() {
-    const fileHalf = await loadInscreenConfigFileHalf();
+    const token = await loadInscreenConfigToken();
     const response = await fetch("/api/inscreen/config/status", {
-      headers: { "x-inscreen-config-half": fileHalf },
+      headers: { "x-inscreen-config-token": token },
       cache: "no-store",
     });
     const payload = await response.json().catch(() => null);

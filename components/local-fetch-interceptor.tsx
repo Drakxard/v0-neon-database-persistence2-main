@@ -61,9 +61,9 @@ import {
   type LocalWorkspaceTabsState,
 } from "@/lib/local-workspace-data"
 import { SUBJECT_IDS } from "@/lib/subjects"
-import { getReadyDriveConfigHalf, getReadyInscreenConfigHalf } from "@/lib/local-workspace-client"
+import { getReadyDriveConfigToken, getReadyInscreenConfigToken } from "@/lib/local-workspace-client"
 
-const INSCREEN_CONFIG_HALF_HEADER = "x-inscreen-config-half"
+const INSCREEN_CONFIG_TOKEN_HEADER = "x-inscreen-config-token"
 
 function isProtectedInscreenRequest(pathname: string) {
   return pathname === "/api/pdf-translate" || (
@@ -801,14 +801,14 @@ export function LocalFetchInterceptor() {
       }
       if (url.pathname.startsWith("/api/google/drive/")) {
         const headers = new Headers(request.headers)
-        const fileHalf = getReadyDriveConfigHalf()
-        if (fileHalf) headers.set("x-drive-config-half", fileHalf)
+        const token = getReadyDriveConfigToken()
+        if (token) headers.set("x-drive-config-token", token)
         return originalFetch(new Request(request, { headers }))
       }
       if (isProtectedInscreenRequest(url.pathname)) {
-        const configHalf = getReadyInscreenConfigHalf()
+        const configToken = getReadyInscreenConfigToken()
         const headers = new Headers(request.headers)
-        if (configHalf) headers.set(INSCREEN_CONFIG_HALF_HEADER, configHalf)
+        if (configToken) headers.set(INSCREEN_CONFIG_TOKEN_HEADER, configToken)
         return originalFetch(new Request(request, { headers }))
       }
       if (url.pathname.startsWith("/api/inscreen/config/")) {

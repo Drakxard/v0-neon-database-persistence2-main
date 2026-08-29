@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 
 export const INSCREEN_CONFIG_COOKIE = "inscreen_config_b"
 export const INSCREEN_CONFIG_HALF_HEADER = "x-inscreen-config-half"
+export const INSCREEN_CONFIG_TOKEN_HEADER = "x-inscreen-config-token"
 
 export type InscreenUserConfig = {
   GROQ_API_KEY: string
@@ -32,6 +33,10 @@ function getSeed() {
   const seed = String(process.env.INSCREEN_CONFIG_SEED || "").trim()
   if (seed.length < 32) throw new Error("INSCREEN_CONFIG_SEED debe tener al menos 32 caracteres.")
   return createHash("sha256").update(seed).digest()
+}
+
+export function getInscreenConfigSeedFingerprint() {
+  return createHash("sha256").update(getSeed()).update("services-file-v1").digest("hex").slice(0, 16)
 }
 
 export function normalizeInscreenUserConfig(value: unknown): InscreenUserConfig {
@@ -106,17 +111,20 @@ function readCookie(request: Request, name: string) {
 }
 
 export function readInscreenUserConfig(request: Request) {
-  const fileHalf = String(request.headers.get(INSCREEN_CONFIG_HALF_HEADER) || "").trim()
+  const token = String(request.headers.get(INSCREEN_CONFIG_TOKEN_HEADER) || "").trim()
+  if (!token) throw new Error("Falta la configuracion InScreen en User.Services.")
+  return openInscreenUserConfig(token)
+}
+
+export function readLegacyInscreenUserConfig(request: Request, suppliedFileHalf = "") {
+  const fileHalf = String(suppliedFileHalf || request.headers.get(INSCREEN_CONFIG_HALF_HEADER) || "").trim()
   const cookieHalf = readCookie(request, INSCREEN_CONFIG_COOKIE)
   if (!fileHalf || !cookieHalf) throw new Error("Falta una mitad de la configuracion InScreen.")
   return openInscreenUserConfig(`${fileHalf}${cookieHalf}`)
 }
 
 export function openInscreenUserConfigParts(fileHalf: string, request: Request) {
-  const normalizedFileHalf = String(fileHalf || "").trim()
-  const cookieHalf = readCookie(request, INSCREEN_CONFIG_COOKIE)
-  if (!normalizedFileHalf || !cookieHalf) throw new Error("Falta una mitad de la configuracion InScreen.")
-  return openInscreenUserConfig(`${normalizedFileHalf}${cookieHalf}`)
+  return readLegacyInscreenUserConfig(request, fileHalf)
 }
 
 export async function withInscreenUserConfig(request: Request, handler: () => Promise<Response>) {
@@ -146,4 +154,8 @@ export function getInscreenRuntimeSecret(name: keyof InscreenUserConfig) {
 export function buildInscreenConfigCookie(cookieHalf: string) {
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : ""
   return `${INSCREEN_CONFIG_COOKIE}=${encodeURIComponent(cookieHalf)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${secure}`
+}
+
+export function clearInscreenConfigCookie() {
+  return buildInscreenConfigCookie("").replace("Max-Age=31536000", "Max-Age=0")
 }

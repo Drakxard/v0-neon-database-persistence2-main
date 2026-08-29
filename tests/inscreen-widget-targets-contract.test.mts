@@ -11,6 +11,8 @@ test("los destinos de widget usan R2 con control de concurrencia y proveedor Bea
   assert.match(manifest, /isR2PreconditionFailedError/)
   assert.match(publishRoute, /requireAuthSession/)
   assert.match(publishRoute, /withInscreenUserConfig/)
+  assert.match(publishRoute, /export async function GET/)
+  assert.match(publishRoute, /resolveInscreenWidgetTarget/)
   assert.match(providerRoute, /authorizeProviderToken/)
   assert.doesNotMatch(providerRoute, /token.*searchParams/i)
 })
@@ -28,6 +30,9 @@ test("Drive separa fijos, crea shortcuts y publica solo carpetas sincronizadas n
   assert.match(workspace, /published\?\.targetSignatures/)
   assert.match(workspace, /getWidgetTargetSignature/)
   assert.match(workspace, /processLocalWidgetTargetSyncQueue/)
+  assert.match(workspace, /No se pudo verificar el destino publicado/)
+  assert.match(workspace, /actualUrl !== current\.target\.url/)
+  assert.match(workspace, /lastPublishedAt/)
 })
 
 test("Drive e InScreen trabajan por eventos y el barrido completo queda manual", () => {
@@ -44,4 +49,18 @@ test("Drive e InScreen trabajan por eventos y el barrido completo queda manual",
   assert.match(workspace, /driveSyncRequested = true[\s\S]*return processLocalDriveSyncQueue\(\)/)
   assert.match(workspace, /cursado2026-widget-target-sync/)
   assert.match(provider, /Reintentar widgets/)
+  assert.match(provider, /R2 revision/)
+  assert.match(readFileSync(new URL("../components/subject-wheel.tsx", import.meta.url), "utf8"), /Enlace guardado localmente; pendiente para la APK/)
+})
+
+test("User.Services migra los sobres antiguos y OAuth devuelve un token completo", () => {
+  const provider = readFileSync(new URL("../components/local-workspace-provider.tsx", import.meta.url), "utf8")
+  const oauth = readFileSync(new URL("../app/api/google/oauth/callback/route.ts", import.meta.url), "utf8")
+  const migration = readFileSync(new URL("../app/api/google/drive/migrate/route.ts", import.meta.url), "utf8")
+  assert.match(provider, /loadInscreenFileHalf/)
+  assert.match(provider, /loadDriveFileHalf/)
+  assert.match(provider, /removeLegacyServiceFiles/)
+  assert.match(oauth, /driveToken/)
+  assert.doesNotMatch(oauth, /driveConfigCookie/)
+  assert.match(migration, /readLegacyDriveUserConfig/)
 })

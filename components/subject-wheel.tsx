@@ -4767,7 +4767,12 @@ export function SubjectWheel({
           url: target?.url ?? null,
           ...(target?.sectionKey ? { sectionKey: target.sectionKey } : {}),
         })
-        void processLocalWidgetTargetSyncQueue()
+        const publication = await processLocalWidgetTargetSyncQueue()
+        if (publication.pending > 0 || publication.failed > 0) {
+          setEntriesError(`Enlace guardado localmente; pendiente para la APK. ${publication.errors.at(-1) || "Configura R2 y usa Reintentar widgets."}`)
+        } else {
+          setEntriesError("")
+        }
       }
       closeShortcutDialog()
     } catch (error) {

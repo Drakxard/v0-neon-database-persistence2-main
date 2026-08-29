@@ -26,7 +26,7 @@ import {
 import {
   ensureWorkspaceSubdirectories,
   getReadyWorkspaceHandle,
-  getReadyInscreenConfigHalf,
+  getReadyInscreenConfigToken,
   loadWorkspaceHandle,
   queryWorkspacePermission,
   setReadyWorkspaceHandle,
@@ -215,6 +215,8 @@ type WidgetTargetSyncItem = {
 type WidgetTargetPublishedState = {
   catalogSignature?: string
   targetSignatures?: Record<string, string>
+  revision?: number
+  lastPublishedAt?: string
 }
 type WidgetTargetSyncManifest = { version: 1; items: WidgetTargetSyncItem[]; published?: WidgetTargetPublishedState }
 
@@ -310,11 +312,14 @@ export async function enqueueLocalNotebookWidgetTargets(subjectIds: string[]) {
 }
 
 async function getLocalWidgetTargetSyncSummaryUnlocked() {
-  const items = (await readWidgetTargetSyncManifest()).items
+  const manifest = await readWidgetTargetSyncManifest()
+  const items = manifest.items
   return {
     pending: items.filter((item) => item.status === "pending").length,
     failed: items.filter((item) => item.status === "failed").length,
     errors: items.filter((item) => item.lastError).map((item) => item.lastError).slice(-1),
+    revision: manifest.published?.revision ?? 0,
+    lastPublishedAt: manifest.published?.lastPublishedAt ?? "",
   }
 }
 
@@ -326,8 +331,8 @@ let widgetTargetSyncRun: Promise<Awaited<ReturnType<typeof getLocalWidgetTargetS
 let widgetTargetSyncRequested = false
 
 async function runLocalWidgetTargetSyncQueue() {
-  const configHalf = getReadyInscreenConfigHalf()
-  if (!configHalf) return getLocalWidgetTargetSyncSummaryUnlocked()
+  const configToken = getReadyInscreenConfigToken()
+  if (!configToken) return getLocalWidgetTargetSyncSummaryUnlocked()
   const manifest = await readWidgetTargetSyncManifest()
   const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
   await writeWidgetTargetSyncManifest(normalizedItems, manifest.published)
@@ -341,15 +346,31 @@ async function runLocalWidgetTargetSyncQueue() {
     try {
       const response = await fetch("/api/inscreen/widget-targets", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-inscreen-config-half": configHalf },
+        headers: { "Content-Type": "application/json", "x-inscreen-config-token": configToken },
         body: JSON.stringify(current.kind === "catalog" ? { subjects: current.subjects } : { target: current.target }),
         cache: "no-store",
       })
-      const payload = await response.json().catch(() => null) as { error?: string } | null
+      const payload = await response.json().catch(() => null) as { error?: string; revision?: number; updatedAt?: string } | null
       if (!response.ok) throw new Error(payload?.error || "No se pudo publicar el destino de InScreen.")
+      if (current.kind === "target" && current.target) {
+        const params = new URLSearchParams({ subjectId: current.target.subjectId, kind: current.target.kind })
+        const verifyResponse = await fetch(`/api/inscreen/widget-targets?${params.toString()}`, {
+          cache: "no-store",
+          headers: { "x-inscreen-config-token": configToken },
+        })
+        const verification = await verifyResponse.json().catch(() => null) as { target?: { url?: string; sectionKey?: string | null } | null; error?: string } | null
+        if (!verifyResponse.ok) throw new Error(verification?.error || "No se pudo verificar el destino publicado.")
+        const actualUrl = verification?.target?.url ?? null
+        const actualSection = verification?.target?.sectionKey ?? undefined
+        if (actualUrl !== current.target.url || actualSection !== current.target.sectionKey) {
+          throw new Error("R2 no devolvio el mismo enlace NLM que se acaba de guardar.")
+        }
+      }
       const latest = await readWidgetTargetSyncManifest()
       const published: WidgetTargetPublishedState = {
         ...latest.published,
+        revision: Number(payload?.revision) || latest.published?.revision || 0,
+        lastPublishedAt: payload?.updatedAt || new Date().toISOString(),
         ...(current.kind === "catalog"
           ? { catalogSignature: JSON.stringify(current.subjects ?? []) }
           : current.target

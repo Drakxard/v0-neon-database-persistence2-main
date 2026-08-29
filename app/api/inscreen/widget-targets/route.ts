@@ -1,9 +1,26 @@
 import { requireAuthSession } from "@/lib/authz"
-import { publishInscreenWidgetTargets, type InscreenWidgetTargetPatch } from "@/lib/inscreen-widget-targets"
+import { publishInscreenWidgetTargets, readInscreenWidgetTargets, resolveInscreenWidgetTarget, type InscreenWidgetTargetKind, type InscreenWidgetTargetPatch } from "@/lib/inscreen-widget-targets"
 import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+
+export async function GET(request: Request) {
+  return withInscreenUserConfig(request, async () => {
+    try {
+      const auth = await requireAuthSession()
+      if (auth.response) return auth.response
+      const url = new URL(request.url)
+      const subjectId = String(url.searchParams.get("subjectId") || "").trim()
+      const kind = String(url.searchParams.get("kind") || "").trim() as InscreenWidgetTargetKind
+      if (!subjectId || (kind !== "notebooklm" && kind !== "materials")) return Response.json({ error: "Destino invalido." }, { status: 400 })
+      const manifest = (await readInscreenWidgetTargets()).value
+      return Response.json({ ok: true, revision: manifest.revision, updatedAt: manifest.updatedAt, target: resolveInscreenWidgetTarget(manifest, subjectId, kind) }, { headers: { "Cache-Control": "no-store" } })
+    } catch (error) {
+      return Response.json({ error: error instanceof Error ? error.message : "No se pudo verificar el destino." }, { status: 400, headers: { "Cache-Control": "no-store" } })
+    }
+  })
+}
 
 export async function POST(request: Request) {
   return withInscreenUserConfig(request, async () => {

@@ -1,6 +1,9 @@
 import { requireAuthSession } from "@/lib/authz"
 import {
-  openInscreenUserConfigParts,
+  clearInscreenConfigCookie,
+  getInscreenConfigSeedFingerprint,
+  readLegacyInscreenUserConfig,
+  sealInscreenUserConfig,
 } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
@@ -10,8 +13,8 @@ export async function POST(request: Request) {
     const auth = await requireAuthSession()
     if (auth.response) return auth.response
     const body = await request.json().catch(() => null) as { fileHalf?: string } | null
-    openInscreenUserConfigParts(String(body?.fileHalf || ""), request)
-    return Response.json({ configured: true }, { headers: { "Cache-Control": "no-store" } })
+    const config = readLegacyInscreenUserConfig(request, String(body?.fileHalf || ""))
+    return Response.json({ configured: true, token: sealInscreenUserConfig(config), seedFingerprint: getInscreenConfigSeedFingerprint() }, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo desbloquear la configuracion."
     if (message === "Falta una mitad de la configuracion InScreen.") {
@@ -22,4 +25,8 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
+}
+
+export async function DELETE() {
+  return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store", "Set-Cookie": clearInscreenConfigCookie() } })
 }

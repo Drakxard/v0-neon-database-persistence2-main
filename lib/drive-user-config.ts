@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEq
 
 export const DRIVE_CONFIG_COOKIE = "drive_config_b"
 export const DRIVE_CONFIG_HALF_HEADER = "x-drive-config-half"
+export const DRIVE_CONFIG_TOKEN_HEADER = "x-drive-config-token"
 export const DRIVE_OAUTH_STATE_COOKIE = "drive_oauth_state"
 
 export type DriveUserConfig = {
@@ -40,14 +41,14 @@ function normalize(value: unknown): DriveUserConfig {
   return config
 }
 
-function seal(value: DriveUserConfig) {
+export function sealDriveUserConfig(value: DriveUserConfig) {
   const iv = randomBytes(12)
   const cipher = createCipheriv("aes-256-gcm", key(), iv)
   const ciphertext = Buffer.concat([cipher.update(JSON.stringify(normalize(value)), "utf8"), cipher.final()])
   return ["v1", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ciphertext.toString("base64url")].join(".")
 }
 
-function open(token: string) {
+export function openDriveUserConfig(token: string) {
   const [version, iv, tag, ciphertext] = token.split(".")
   if (version !== "v1" || !iv || !tag || !ciphertext) throw new Error("Configuracion de Drive invalida.")
   try {
@@ -63,16 +64,22 @@ function open(token: string) {
 }
 
 export function splitDriveUserConfig(config: DriveUserConfig) {
-  const token = seal(config)
+  const token = sealDriveUserConfig(config)
   const midpoint = Math.ceil(token.length / 2)
   return { fileHalf: token.slice(0, midpoint), cookieHalf: token.slice(midpoint) }
 }
 
 export function readDriveUserConfig(request: Request) {
-  const fileHalf = String(request.headers.get(DRIVE_CONFIG_HALF_HEADER) || "").trim()
+  const token = String(request.headers.get(DRIVE_CONFIG_TOKEN_HEADER) || "").trim()
+  if (!token) throw new Error("Google Drive no esta conectado en User.Services.")
+  return openDriveUserConfig(token)
+}
+
+export function readLegacyDriveUserConfig(request: Request, suppliedFileHalf = "") {
+  const fileHalf = String(suppliedFileHalf || request.headers.get(DRIVE_CONFIG_HALF_HEADER) || "").trim()
   const cookieHalf = cookie(request, DRIVE_CONFIG_COOKIE)
   if (!fileHalf || !cookieHalf) throw new Error("Google Drive no esta conectado.")
-  return open(`${fileHalf}${cookieHalf}`)
+  return openDriveUserConfig(`${fileHalf}${cookieHalf}`)
 }
 
 export function driveConfigCookie(value: string, maxAge = 31536000) {

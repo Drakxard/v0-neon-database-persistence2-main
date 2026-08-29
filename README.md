@@ -26,7 +26,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Storage
 
-Los PDF de materiales pueden replicarse en el Google Drive conectado por cada navegador desde el panel `|`. La copia semanal usa `Cursado2026/{materia}/Semana {n}/{contenedor}`; los contenedores fijados se guardan una sola vez en `Cursado2026/{materia}/Fijos/{contenedor}` y cada semana contiene un acceso directo a `Fijos`. La replica no reemplaza el workspace local. Vercel conserva solamente las credenciales OAuth de la aplicacion; cada refresh token se cifra y divide entre `User.Drive` y una cookie HttpOnly.
+Los PDF de materiales pueden replicarse en el Google Drive conectado desde el panel `|`. La copia semanal usa `Cursado2026/{materia}/Semana {n}/{contenedor}`; los contenedores fijados se guardan una sola vez en `Cursado2026/{materia}/Fijos/{contenedor}` y cada semana contiene un acceso directo a `Fijos`. La replica no reemplaza el workspace local. El refresh token se cifra en el servidor y se conserva como un sobre opaco dentro de `User.Services`.
 
 La aplicación usa un workspace local elegido por el usuario para materias, PDFs y manifiestos. No requiere una base de datos SQL.
 
@@ -133,18 +133,9 @@ En el despliegue solo debe configurarse una semilla privada del servidor:
 INSCREEN_CONFIG_SEED=una-cadena-aleatoria-de-al-menos-32-caracteres
 ```
 
-No compartas esa semilla ni la incluyas en Git. Debe conservarse estable: si se
-cambia, las configuraciones `User.InScreen` creadas anteriormente dejaran de
-poder descifrarse y el asistente solicitara las credenciales de nuevo.
+No compartas esa semilla ni la incluyas en Git. Debe conservarse estable y respaldarse fuera de Vercel: si cambia, los sobres de `User.Services` dejaran de poder descifrarse y el panel mostrara un diagnostico de semilla incompatible.
 
-Al abrir el modo local por primera vez, la aplicacion pide una carpeta y luego
-muestra un asistente claro de tres pasos para Groq, Marker y Cloudflare R2. Las
-credenciales se cifran en el servidor. La Mitad A del sobre cifrado se guarda en
-`User.InScreen`, dentro de la carpeta elegida. La Mitad B vuelve directamente
-como una cookie persistente `HttpOnly`, `SameSite=Strict` y `Secure` en
-produccion; JavaScript nunca recibe esa mitad. Cada operacion remota envia A y
-el navegador adjunta B solamente al mismo origen. Ninguna mitad contiene por si
-sola las API keys en texto plano.
+Al abrir el modo local por primera vez, la aplicacion pide una carpeta y luego muestra el asistente de Groq y Cloudflare R2. Las credenciales y la conexion de Drive se cifran en el servidor como sobres independientes y se guardan juntas en `User.Services`, dentro de la carpeta elegida. El archivo puede reutilizarse desde ambos sistemas operativos y no contiene secretos en texto plano. Cada guardado se relee y valida; R2 se comprueba escribiendo, leyendo y borrando un objeto temporal. Las versiones anteriores `User.InScreen` y `User.Drive` se migran automaticamente cuando sus cookies antiguas todavia permiten descifrarlas.
 
 El asistente puede omitirse para usar la aplicacion sin Groq, Marker ni R2. La
 preferencia queda guardada en ese navegador y no vuelve a interrumpir las

@@ -1,4 +1,5 @@
-import { driveConfigCookie, oauthStateCookie, splitDriveUserConfig, verifyOAuthState } from "@/lib/drive-user-config"
+import { oauthStateCookie, sealDriveUserConfig, verifyOAuthState } from "@/lib/drive-user-config"
+import { getInscreenConfigSeedFingerprint } from "@/lib/inscreen-user-config"
 import { ensureUserDriveFolder, getUserDriveIdentity } from "@/lib/google-drive"
 import { exchangeCodeForRefreshToken } from "@/lib/google-oauth"
 
@@ -27,11 +28,10 @@ export async function GET(request: Request) {
     const email = String(identity.user?.emailAddress || "").trim()
     if (!email) throw new Error("Google Drive no devolvio la cuenta conectada.")
     const rootFolderLink = root.webViewLink || `https://drive.google.com/drive/folders/${root.id}`
-    const halves = splitDriveUserConfig({ refreshToken: token.refresh_token, rootFolderId: root.id, rootFolderName, rootFolderLink, email })
+    const driveToken = sealDriveUserConfig({ refreshToken: token.refresh_token, rootFolderId: root.id, rootFolderName, rootFolderLink, email })
     const headers = new Headers()
-    headers.append("Set-Cookie", driveConfigCookie(halves.cookieHalf))
     headers.append("Set-Cookie", oauthStateCookie("", 0))
-    return popupPage({ type: "drive-oauth", ok: true, fileHalf: halves.fileHalf, email, rootFolderName, rootFolderLink }, headers)
+    return popupPage({ type: "drive-oauth", ok: true, driveToken, seedFingerprint: getInscreenConfigSeedFingerprint(), email, rootFolderName, rootFolderLink }, headers)
   } catch (error) {
     return popupPage({ type: "drive-oauth", ok: false, error: error instanceof Error ? error.message : "No se pudo conectar Google Drive." }, undefined, 500)
   }

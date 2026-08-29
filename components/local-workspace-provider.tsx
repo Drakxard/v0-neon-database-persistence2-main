@@ -10,16 +10,18 @@ import {
   ensureWorkspaceSubdirectories,
   loadInscreenFileHalf,
   loadDriveFileHalf,
+  loadServicesFile,
   loadWorkspaceHandle,
   pickWorkspaceRootHandle,
   queryWorkspacePermission,
   requestWorkspacePermission,
-  persistInscreenFileHalf,
-  persistDriveFileHalf,
-  removeDriveFileHalf,
-  setReadyInscreenConfigHalf,
-  getReadyInscreenConfigHalf,
-  setReadyDriveConfigHalf,
+  persistServicesFile,
+  removeLegacyServiceFiles,
+  removeServicesFile,
+  setReadyInscreenConfigToken,
+  getReadyInscreenConfigToken,
+  setReadyDriveConfigToken,
+  getReadyDriveConfigToken,
   setReadyWorkspaceHandle,
   supportsWorkspacePicker,
 } from "@/lib/local-workspace-client"
@@ -36,7 +38,7 @@ type LocalWorkspaceBootState = "checking" | "prompt" | "recover" | "unsupported"
 
 type DriveStatus = { connected: boolean; email?: string; rootFolderName?: string; rootFolderLink?: string; error?: string }
 type DriveSummary = { synced: number; pending: number; failed: number; errors: string[] }
-type WidgetTargetSummary = { pending: number; failed: number; errors: string[] }
+type WidgetTargetSummary = { pending: number; failed: number; errors: string[]; revision: number; lastPublishedAt: string }
 type ApiStatus = { groq: boolean; r2: boolean }
 
 type InscreenConfigValues = {
@@ -198,7 +200,7 @@ function InscreenConfigModal({
           <span className="rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">{step === 0 ? "Groq" : "Cloudflare R2"}</span>
         </div>
         <p className="mt-3 text-sm leading-6 text-slate-600">
-          Tus credenciales se cifran en el servidor. `User.InScreen` conserva la Mitad A y Vercel instala la Mitad B como cookie HttpOnly, fuera del alcance del JavaScript.
+          Tus credenciales se cifran en el servidor y se guardan como sobres opacos dentro de `User.Services`. El archivo puede compartirse entre tus dos sistemas operativos y nunca contiene claves en texto plano.
         </p>
         <div className="mt-6 space-y-4">
           {step === 0 ? (
@@ -254,11 +256,12 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, driveCleanupMessage, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onCleanupDrive, onRetryWidgets, onClose }: {
+function ServicesPanel({ apis, drive, summary, widgetSummary, servicesFileMessage, busy, error, driveCleanupMessage, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onCleanupDrive, onRetryWidgets, onClose }: {
   apis: ApiStatus
   drive: DriveStatus
   summary: DriveSummary
   widgetSummary: WidgetTargetSummary
+  servicesFileMessage: string
   busy: boolean
   error: string
   driveCleanupMessage: string
@@ -282,12 +285,14 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, drive
       <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Servicios</p>
       <h2 className="mt-2 text-2xl font-semibold">Conexiones de este navegador</h2>
       <div className="mt-6 space-y-3">
-        <button type="button" onClick={onConfigureGroq} className="block w-full text-left">{service("Groq", apis.groq ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.groq)}</button>
-        <button type="button" onClick={onConfigureR2} className="block w-full text-left">{service("Cloudflare R2", apis.r2 ? "Configurado en User.InScreen" : "Selecciona para configurarlo", apis.r2)}</button>
+        <button type="button" onClick={onConfigureGroq} className="block w-full text-left">{service("Groq", apis.groq ? "Verificado en User.Services" : "Selecciona para configurarlo", apis.groq)}</button>
+        <button type="button" onClick={onConfigureR2} className="block w-full text-left">{service("Cloudflare R2", apis.r2 ? "Verificado en User.Services" : "Selecciona para configurarlo", apis.r2)}</button>
         {service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
       </div>
+      {servicesFileMessage ? <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{servicesFileMessage}</p> : null}
       <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>Widgets InScreen · {widgetSummary.pending} pendientes · {widgetSummary.failed} con error</p>
+        {widgetSummary.revision > 0 ? <p className="mt-1 text-xs text-slate-500">R2 revision {widgetSummary.revision} · verificado {widgetSummary.lastPublishedAt ? new Date(widgetSummary.lastPublishedAt).toLocaleString() : "-"}</p> : null}
         {widgetSummary.errors.map((message, index) => <p className="mt-2 text-xs text-amber-800" key={`${index}-${message}`}>{message}</p>)}
         {widgetSummary.pending > 0 || widgetSummary.failed > 0 ? <button type="button" onClick={onRetryWidgets} disabled={busy} className="mt-3 rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Reintentar widgets</button> : null}
       </div>
@@ -312,25 +317,80 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, busy, error, drive
   </div>
 }
 
-async function unlockWorkspaceInscreenConfig(handle: FileSystemDirectoryHandle): Promise<{ ok: boolean; missing?: boolean; error: string }> {
+async function unlockWorkspaceServices(handle: FileSystemDirectoryHandle): Promise<{ ok: boolean; missing?: boolean; error: string; migrated?: boolean }> {
   await clearLegacyInscreenBrowserHalf()
-  const fileHalf = await loadInscreenFileHalf(handle)
-  if (!fileHalf) {
-    setReadyInscreenConfigHalf("")
-    return { ok: false, missing: true, error: "No se encontro una configuracion completa. Completa los tres pasos para crear User.InScreen." }
+  const services = await loadServicesFile(handle)
+  if (services) {
+    setReadyInscreenConfigToken(services.inscreenToken)
+    setReadyDriveConfigToken(services.driveToken)
+    const failures: string[] = []
+    if (services.inscreenToken) {
+      const response = await fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-token": services.inscreenToken } })
+      const payload = await response.json().catch(() => null) as { configured?: boolean; seedFingerprint?: string; error?: string } | null
+      if (!response.ok || !payload?.configured) failures.push(
+        services.seedFingerprint && payload?.seedFingerprint && services.seedFingerprint !== payload.seedFingerprint
+          ? "User.Services/InScreen: INSCREEN_CONFIG_SEED no coincide con la usada para crear el archivo."
+          : `User.Services/InScreen: ${payload?.error || "no se pudo validar"}`
+      )
+    }
+    if (services.driveToken) {
+      const response = await fetch("/api/google/drive/status", { cache: "no-store", headers: { "x-drive-config-token": services.driveToken } })
+      const payload = await response.json().catch(() => null) as (DriveStatus & { seedFingerprint?: string }) | null
+      if (!response.ok || !payload?.connected) failures.push(
+        services.seedFingerprint && payload?.seedFingerprint && services.seedFingerprint !== payload.seedFingerprint
+          ? "User.Services/Drive: INSCREEN_CONFIG_SEED no coincide con la usada para crear el archivo."
+          : `User.Services/Drive: ${payload?.error || "no se pudo validar"}`
+      )
+    }
+    return { ok: true, error: failures.join(" · ") }
   }
-  const response = await fetch("/api/inscreen/config/unlock", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileHalf }),
-  })
-  const payload = await response.json().catch(() => null) as { configured?: boolean; error?: string } | null
-  if (!response.ok || payload?.configured === false) {
-    setReadyInscreenConfigHalf("")
-    return { ok: false, error: payload?.error || "No se pudo desbloquear User.InScreen." }
+
+  let inscreenToken = ""
+  let driveToken = ""
+  let seedFingerprint = ""
+  const errors: string[] = []
+  const inscreenHalf = await loadInscreenFileHalf(handle)
+  if (inscreenHalf) {
+    const response = await fetch("/api/inscreen/config/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fileHalf: inscreenHalf }) })
+    const payload = await response.json().catch(() => null) as { token?: string; seedFingerprint?: string; error?: string } | null
+    if (response.ok && payload?.token) { inscreenToken = payload.token; seedFingerprint = payload.seedFingerprint || "" }
+    else errors.push(`InScreen: ${payload?.error || "no se pudo migrar"}`)
   }
-  setReadyInscreenConfigHalf(fileHalf)
-  return { ok: true, error: "" }
+  const driveHalf = await loadDriveFileHalf(handle)
+  if (driveHalf) {
+    const response = await fetch("/api/google/drive/migrate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fileHalf: driveHalf }) })
+    const payload = await response.json().catch(() => null) as { driveToken?: string; seedFingerprint?: string; error?: string } | null
+    if (response.ok && payload?.driveToken) { driveToken = payload.driveToken; seedFingerprint ||= payload.seedFingerprint || "" }
+    else errors.push(`Drive: ${payload?.error || "no se pudo migrar"}`)
+  }
+  if (!inscreenToken && !driveToken) {
+    setReadyInscreenConfigToken("")
+    setReadyDriveConfigToken("")
+    return { ok: false, missing: !inscreenHalf && !driveHalf, error: errors.join(" · ") || "No se encontro User.Services. Configura los servicios para crearlo." }
+  }
+  const saved = await persistServicesFile(handle, { inscreenToken, driveToken, seedFingerprint, validatedAt: new Date().toISOString() })
+  setReadyInscreenConfigToken(saved.inscreenToken)
+  setReadyDriveConfigToken(saved.driveToken)
+  let inscreenVerified = false
+  let driveVerified = false
+  if (inscreenToken) {
+    const response = await fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-token": inscreenToken } })
+    const payload = await response.json().catch(() => null) as { configured?: boolean; error?: string } | null
+    inscreenVerified = response.ok && payload?.configured === true
+    if (!inscreenVerified) errors.push(`InScreen migrado sin verificacion final: ${payload?.error || "error desconocido"}`)
+  }
+  if (driveToken) {
+    const response = await fetch("/api/google/drive/status", { cache: "no-store", headers: { "x-drive-config-token": driveToken } })
+    const payload = await response.json().catch(() => null) as DriveStatus | null
+    driveVerified = response.ok && payload?.connected === true
+    if (!driveVerified) errors.push(`Drive migrado sin verificacion final: ${payload?.error || "error desconocido"}`)
+  }
+  await Promise.all([
+    inscreenVerified ? fetch("/api/inscreen/config/unlock", { method: "DELETE" }) : Promise.resolve(),
+    driveVerified ? fetch("/api/google/drive/migrate", { method: "DELETE" }) : Promise.resolve(),
+  ])
+  await removeLegacyServiceFiles(handle, { inscreen: inscreenVerified, drive: driveVerified })
+  return { ok: true, error: errors.join(" · "), migrated: true }
 }
 
 export function LocalWorkspaceProvider({
@@ -358,7 +418,8 @@ export function LocalWorkspaceProvider({
   const [apiStatus, setApiStatus] = useState<ApiStatus>({ groq: false, r2: false })
   const [driveSummary, setDriveSummary] = useState<DriveSummary>({ synced: 0, pending: 0, failed: 0, errors: [] })
   const [driveCleanupMessage, setDriveCleanupMessage] = useState("")
-  const [widgetTargetSummary, setWidgetTargetSummary] = useState<WidgetTargetSummary>({ pending: 0, failed: 0, errors: [] })
+  const [servicesFileMessage, setServicesFileMessage] = useState("")
+  const [widgetTargetSummary, setWidgetTargetSummary] = useState<WidgetTargetSummary>({ pending: 0, failed: 0, errors: [], revision: 0, lastPublishedAt: "" })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
 
@@ -408,9 +469,11 @@ export function LocalWorkspaceProvider({
 
         await ensureWorkspaceSubdirectories(storedHandle)
         if (cancelled) return
-        await unlockWorkspaceInscreenConfig(storedHandle)
-        setReadyDriveConfigHalf(await loadDriveFileHalf(storedHandle))
-        if (isInscreenConfigurationSkipped()) setReadyInscreenConfigHalf("")
+        const unlocked = await unlockWorkspaceServices(storedHandle)
+        const services = await loadServicesFile(storedHandle)
+        if (services) setServicesFileMessage(`User.Services ${unlocked.error ? "cargado con observaciones" : "verificado"} · ${new Date(services.validatedAt || services.savedAt).toLocaleString()}`)
+        if (!unlocked.ok || unlocked.error) setError(unlocked.error)
+        if (isInscreenConfigurationSkipped()) setReadyInscreenConfigToken("")
         setReadyWorkspaceHandle(storedHandle)
         setRootHandle(storedHandle)
         setPermissionState("granted")
@@ -473,13 +536,14 @@ export function LocalWorkspaceProvider({
       setPairingExpiresAt("")
       setError("")
 
-      const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
+      const unlocked = await unlockWorkspaceServices(rootHandle)
       if (unlocked.ok) {
+        setError(unlocked.error)
         setConfigStep(4)
         setBootState("configure")
         const [statusResponse, inscreenStatusResponse, summary, widgetSummary] = await Promise.all([
           fetch("/api/google/drive/status", { cache: "no-store" }),
-          fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-half": getReadyInscreenConfigHalf() } }),
+          fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-token": getReadyInscreenConfigToken() } }),
           getLocalDriveSyncSummary(),
           getLocalWidgetTargetSyncSummary(),
         ])
@@ -493,7 +557,7 @@ export function LocalWorkspaceProvider({
 
       setApiStatus({ groq: false, r2: false })
       setConfigStep(4)
-      setError("")
+      setError(unlocked.error)
       setBootState("configure")
     }
 
@@ -509,9 +573,7 @@ export function LocalWorkspaceProvider({
     if (!enabled || bootState !== "ready" || !rootHandle) return
     let cancelled = false
     const run = async () => {
-      const fileHalf = await loadDriveFileHalf(rootHandle)
-      setReadyDriveConfigHalf(fileHalf)
-      if (!fileHalf) return
+      if (!getReadyDriveConfigToken()) return
       const statusResponse = await fetch("/api/google/drive/status", { cache: "no-store" })
       const status = await statusResponse.json().catch(() => ({ connected: false })) as DriveStatus
       if (!cancelled) setDriveStatus(status)
@@ -524,7 +586,7 @@ export function LocalWorkspaceProvider({
   }, [bootState, enabled, rootHandle])
 
   useEffect(() => {
-    if (!enabled || bootState !== "ready" || !rootHandle || !getReadyInscreenConfigHalf()) return
+    if (!enabled || bootState !== "ready" || !rootHandle || !getReadyInscreenConfigToken()) return
     void processLocalWidgetTargetSyncQueue().then(setWidgetTargetSummary)
   }, [bootState, enabled, rootHandle])
 
@@ -534,17 +596,18 @@ export function LocalWorkspaceProvider({
       setBootState("checking")
       const handle = await pickWorkspaceRootHandle()
       setReadyWorkspaceHandle(null)
-      setReadyInscreenConfigHalf("")
+      setReadyInscreenConfigToken("")
       setRootHandle(handle)
       setStoredHandle(handle)
       setPermissionState("granted")
-      await unlockWorkspaceInscreenConfig(handle)
-      setReadyDriveConfigHalf(await loadDriveFileHalf(handle))
+      const unlocked = await unlockWorkspaceServices(handle)
+      if (!unlocked.ok || unlocked.error) setError(unlocked.error)
       setReadyWorkspaceHandle(handle)
       setBootState("ready")
     } catch (workspaceError) {
       setReadyWorkspaceHandle(null)
-      setReadyInscreenConfigHalf("")
+      setReadyInscreenConfigToken("")
+      setReadyDriveConfigToken("")
       setRootHandle(null)
       setPermissionState("prompt")
       setBootState(supportsWorkspacePicker() ? "prompt" : "unsupported")
@@ -565,7 +628,7 @@ export function LocalWorkspaceProvider({
       const permission = await requestWorkspacePermission(storedHandle, "readwrite")
       if (permission !== "granted") {
         setReadyWorkspaceHandle(null)
-        setReadyInscreenConfigHalf("")
+        setReadyInscreenConfigToken("")
         setRootHandle(null)
         setPermissionState(permission)
         setBootState("recover")
@@ -574,8 +637,9 @@ export function LocalWorkspaceProvider({
       }
 
       await ensureWorkspaceSubdirectories(storedHandle)
-      await unlockWorkspaceInscreenConfig(storedHandle)
-      if (isInscreenConfigurationSkipped()) setReadyInscreenConfigHalf("")
+      const unlocked = await unlockWorkspaceServices(storedHandle)
+      if (!unlocked.ok || unlocked.error) setError(unlocked.error)
+      if (isInscreenConfigurationSkipped()) setReadyInscreenConfigToken("")
       setReadyWorkspaceHandle(storedHandle)
       setRootHandle(storedHandle)
       setPermissionState("granted")
@@ -634,19 +698,30 @@ export function LocalWorkspaceProvider({
       setError("")
       const sealedResponse = await fetch("/api/inscreen/config/seal", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(getReadyInscreenConfigHalf() ? { "x-inscreen-config-half": getReadyInscreenConfigHalf() } : {}) },
+        headers: { "Content-Type": "application/json", ...(getReadyInscreenConfigToken() ? { "x-inscreen-config-token": getReadyInscreenConfigToken() } : {}) },
         body: JSON.stringify(configValues),
       })
-      const sealedPayload = await sealedResponse.json().catch(() => null) as { fileHalf?: string; error?: string } | null
-      if (!sealedResponse.ok || !sealedPayload?.fileHalf) {
+      const sealedPayload = await sealedResponse.json().catch(() => null) as { token?: string; seedFingerprint?: string; validatedAt?: string; services?: ApiStatus; error?: string } | null
+      if (!sealedResponse.ok || !sealedPayload?.token) {
         throw new Error(sealedPayload?.error || "No se pudo proteger la configuracion.")
       }
-      await persistInscreenFileHalf(rootHandle, sealedPayload.fileHalf)
-      const unlocked = await unlockWorkspaceInscreenConfig(rootHandle)
-      if (!unlocked.ok) throw new Error(unlocked.error)
+      const current = await loadServicesFile(rootHandle)
+      const saved = await persistServicesFile(rootHandle, {
+        inscreenToken: sealedPayload.token,
+        driveToken: current?.driveToken || getReadyDriveConfigToken(),
+        seedFingerprint: sealedPayload.seedFingerprint || current?.seedFingerprint || "",
+        validatedAt: sealedPayload.validatedAt || new Date().toISOString(),
+      })
+      setReadyInscreenConfigToken(saved.inscreenToken)
+      setReadyDriveConfigToken(saved.driveToken)
+      const statusResponse = await fetch("/api/inscreen/config/status", { cache: "no-store", headers: { "x-inscreen-config-token": saved.inscreenToken } })
+      const status = await statusResponse.json().catch(() => null) as { configured?: boolean; services?: ApiStatus; error?: string } | null
+      if (!statusResponse.ok || !status?.configured) throw new Error(status?.error || "User.Services se creo, pero no pudo validarse.")
       setInscreenConfigurationSkipped(false)
       setReadyWorkspaceHandle(rootHandle)
-      setApiStatus((current) => ({ ...current, ...(configStep === 0 ? { groq: true } : { r2: true }) }))
+      setApiStatus(status.services ?? sealedPayload.services ?? { groq: false, r2: false })
+      setServicesFileMessage(`User.Services creado y verificado · ${new Date(saved.validatedAt || saved.savedAt).toLocaleString()}`)
+      if (configStep === 1) setWidgetTargetSummary(await processLocalWidgetTargetSyncQueue())
       setConfigValues(EMPTY_INSCREEN_CONFIG)
       setConfigStep(4)
     } catch (configError) {
@@ -659,7 +734,7 @@ export function LocalWorkspaceProvider({
   const skipInscreenConfiguration = () => {
     if (!rootHandle) return
     setInscreenConfigurationSkipped(true)
-    setReadyInscreenConfigHalf("")
+    setReadyInscreenConfigToken("")
     setConfigValues(EMPTY_INSCREEN_CONFIG)
     setConfigStep(0)
     setError("")
@@ -700,11 +775,18 @@ export function LocalWorkspaceProvider({
       if (event.origin !== window.location.origin || event.data?.type !== "drive-oauth") return
       window.removeEventListener("message", handleMessage)
       try {
-        if (!event.data.ok || !event.data.fileHalf) throw new Error(event.data.error || "No se pudo conectar Google Drive.")
-        await persistDriveFileHalf(rootHandle, String(event.data.fileHalf))
-        setReadyDriveConfigHalf(String(event.data.fileHalf))
+        if (!event.data.ok || !event.data.driveToken) throw new Error(event.data.error || "No se pudo conectar Google Drive.")
+        const current = await loadServicesFile(rootHandle)
+        const saved = await persistServicesFile(rootHandle, {
+          inscreenToken: current?.inscreenToken || getReadyInscreenConfigToken(),
+          driveToken: String(event.data.driveToken),
+          seedFingerprint: String(event.data.seedFingerprint || current?.seedFingerprint || ""),
+          validatedAt: new Date().toISOString(),
+        })
+        setReadyDriveConfigToken(saved.driveToken)
         const response = await fetch("/api/google/drive/status", { cache: "no-store" })
         setDriveStatus(await response.json())
+        setServicesFileMessage(`User.Services actualizado y Drive verificado · ${new Date(saved.validatedAt || saved.savedAt).toLocaleString()}`)
         setDriveSummary(await getLocalDriveSyncSummary())
       } catch (driveError) { setError(driveError instanceof Error ? driveError.message : "No se pudo guardar la conexion.") }
       finally { setSavingConfig(false) }
@@ -716,8 +798,15 @@ export function LocalWorkspaceProvider({
     if (!rootHandle) return
     setSavingConfig(true)
     await fetch("/api/google/drive/status", { method: "DELETE" }).catch(() => undefined)
-    await removeDriveFileHalf(rootHandle)
-    setReadyDriveConfigHalf("")
+    const current = await loadServicesFile(rootHandle)
+    if (current?.inscreenToken) await persistServicesFile(rootHandle, {
+      inscreenToken: current.inscreenToken,
+      driveToken: "",
+      seedFingerprint: current.seedFingerprint,
+      validatedAt: new Date().toISOString(),
+    })
+    else await removeServicesFile(rootHandle)
+    setReadyDriveConfigToken("")
     setDriveStatus({ connected: false })
     setSavingConfig(false)
   }
@@ -780,7 +869,7 @@ export function LocalWorkspaceProvider({
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} servicesFileMessage={servicesFileMessage} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}

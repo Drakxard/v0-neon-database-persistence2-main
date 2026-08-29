@@ -6,6 +6,7 @@ import {
   buildInscreenConfigCookie,
   openInscreenUserConfig,
   openInscreenUserConfigParts,
+  readInscreenUserConfig,
   sealInscreenUserConfig,
   splitInscreenUserConfig,
 } from "../lib/inscreen-user-config.ts"
@@ -27,6 +28,7 @@ test("User.InScreen cifra todas las credenciales y solo abre con la semilla del 
     assert.ok(sealed.startsWith("v1."))
     assert.doesNotMatch(sealed, /gsk_example_secret|marker_example_secret|r2-secret/)
     assert.deepEqual(openInscreenUserConfig(sealed), config)
+    assert.deepEqual(readInscreenUserConfig(new Request("https://example.test", { headers: { "x-inscreen-config-token": sealed } })), config)
 
     process.env.INSCREEN_CONFIG_SEED = "otra-semilla-distinta-con-mas-de-treinta-y-dos"
     assert.throws(() => openInscreenUserConfig(sealed), /No se pudo desbloquear/)
@@ -73,8 +75,11 @@ test("el panel muestra servicios seleccionables sin solicitar Marker", () => {
   const client = readFileSync(new URL("../lib/local-workspace-client.ts", import.meta.url), "utf8")
   const r2 = readFileSync(new URL("../lib/r2.ts", import.meta.url), "utf8")
 
-  assert.match(client, /User\.InScreen/)
-  assert.match(client, /version === 2/)
+  assert.match(client, /User\.Services/)
+  assert.match(client, /User\.Services\.backup/)
+  assert.match(client, /version: 1/)
+  assert.match(client, /persistServicesFile/)
+  assert.match(client, /JSON\.stringify\(verified\) !== JSON\.stringify\(next\)/)
   assert.doesNotMatch(client, /persistInscreenBrowserHalf/)
   assert.match(provider, /ServicesPanel/)
   assert.match(provider, /onConfigureGroq/)
@@ -83,23 +88,25 @@ test("el panel muestra servicios seleccionables sin solicitar Marker", () => {
   assert.match(provider, /bg-white/)
   assert.match(provider, /config\/seal/)
   assert.match(provider, /config\/unlock/)
-  assert.match(provider, /fileHalf/)
+  assert.match(provider, /inscreenToken/)
   assert.match(provider, /event\.key !== "\|"/)
   assert.match(provider, /target\.closest\("input, textarea, select, \[contenteditable='true'\]"\)/)
-  assert.match(provider, /const unlocked = await unlockWorkspaceInscreenConfig\(rootHandle\)/)
+  assert.match(provider, /const unlocked = await unlockWorkspaceServices\(rootHandle\)/)
   assert.match(provider, /if \(unlocked\.ok\) \{[\s\S]*?setConfigStep\(4\)/)
   assert.match(provider, /setApiStatus\(\{ groq: false, r2: false \}\)[\s\S]*?setConfigStep\(4\)/)
   assert.match(provider, /inscreen\.config-skipped\.v1/)
   assert.match(r2, /getInscreenRuntimeSecret/)
 })
 
-test("la aplicacion y el iframe PDF.js envian la Mitad A en cada llamada protegida", () => {
+test("la aplicacion y el iframe PDF.js envian el sobre cifrado de User.Services", () => {
   const interceptor = readFileSync(new URL("../components/local-fetch-interceptor.tsx", import.meta.url), "utf8")
   const viewer = readFileSync(new URL("../public/pdfjs/web/viewer-custom.js", import.meta.url), "utf8")
 
-  assert.match(interceptor, /x-inscreen-config-half/)
-  assert.match(viewer, /loadInscreenConfigFileHalf/)
-  assert.match(viewer, /x-inscreen-config-half/)
+  assert.match(interceptor, /x-inscreen-config-token/)
+  assert.match(viewer, /loadInscreenConfigToken/)
+  assert.match(viewer, /x-inscreen-config-token/)
+  assert.match(viewer, /User\.Services/)
+  assert.doesNotMatch(interceptor, /x-inscreen-config-half/)
   assert.match(viewer, /inscreen\.config-skipped\.v1/)
   assert.match(viewer, /InscreenConfigurationUnavailable/)
   assert.match(viewer, /inscreenApiFetch\("\/api\/pdf-translate"/)

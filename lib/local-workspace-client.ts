@@ -7,6 +7,17 @@ const WORKSPACE_ROOT_KEY = "root-handle"
 const LEGACY_INSCREEN_BROWSER_HALF_KEY = "inscreen-config-half"
 export const INSCREEN_CONFIG_FILE_NAME = "User.InScreen"
 export const DRIVE_CONFIG_FILE_NAME = "User.Drive"
+export const SERVICES_FILE_NAME = "User.Services"
+export const SERVICES_BACKUP_FILE_NAME = "User.Services.backup"
+
+export type ServicesFileV1 = {
+  version: 1
+  inscreenToken: string
+  driveToken: string
+  seedFingerprint: string
+  savedAt: string
+  validatedAt: string
+}
 
 type WorkspaceRecord = {
   id: string
@@ -16,8 +27,71 @@ type WorkspaceRecord = {
 let cachedWorkspaceHandle: FileSystemDirectoryHandle | null = null
 let workspaceHandleLoad: Promise<FileSystemDirectoryHandle | null> | null = null
 let readyWorkspaceHandle: FileSystemDirectoryHandle | null = null
-let readyInscreenConfigHalf = ""
-let readyDriveConfigHalf = ""
+let readyInscreenConfigToken = ""
+let readyDriveConfigToken = ""
+
+function normalizeServicesFile(value: unknown): ServicesFileV1 {
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {}
+  if (input.version !== 1) throw new Error("User.Services tiene una version no compatible.")
+  const result: ServicesFileV1 = {
+    version: 1,
+    inscreenToken: String(input.inscreenToken || "").trim(),
+    driveToken: String(input.driveToken || "").trim(),
+    seedFingerprint: String(input.seedFingerprint || "").trim(),
+    savedAt: String(input.savedAt || "").trim(),
+    validatedAt: String(input.validatedAt || "").trim(),
+  }
+  if (!result.inscreenToken && !result.driveToken) throw new Error("User.Services no contiene ningun servicio.")
+  if (result.inscreenToken.length > 12_000 || result.driveToken.length > 12_000) throw new Error("User.Services excede el tamano permitido.")
+  if (!Number.isFinite(Date.parse(result.savedAt))) throw new Error("User.Services no tiene una fecha valida.")
+  return result
+}
+
+async function readServicesFileByName(rootHandle: FileSystemDirectoryHandle, name: string) {
+  const handle = await rootHandle.getFileHandle(name)
+  return normalizeServicesFile(JSON.parse(await (await handle.getFile()).text()))
+}
+
+export async function loadServicesFile(rootHandle: FileSystemDirectoryHandle) {
+  try {
+    return await readServicesFileByName(rootHandle, SERVICES_FILE_NAME)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "NotFoundError") return null
+    try { return await readServicesFileByName(rootHandle, SERVICES_BACKUP_FILE_NAME) }
+    catch { throw error }
+  }
+}
+
+async function writeTextFile(rootHandle: FileSystemDirectoryHandle, name: string, contents: string) {
+  const handle = await rootHandle.getFileHandle(name, { create: true })
+  const writable = await handle.createWritable()
+  try { await writable.write(contents) } finally { await writable.close() }
+}
+
+export async function persistServicesFile(rootHandle: FileSystemDirectoryHandle, input: Omit<ServicesFileV1, "version" | "savedAt"> & { savedAt?: string }) {
+  const current = await readServicesFileByName(rootHandle, SERVICES_FILE_NAME).catch(() => null)
+  if (current) await writeTextFile(rootHandle, SERVICES_BACKUP_FILE_NAME, JSON.stringify(current, null, 2))
+  const next = normalizeServicesFile({ ...input, version: 1, savedAt: input.savedAt || new Date().toISOString() })
+  await writeTextFile(rootHandle, SERVICES_FILE_NAME, JSON.stringify(next, null, 2))
+  const verified = await readServicesFileByName(rootHandle, SERVICES_FILE_NAME)
+  if (JSON.stringify(verified) !== JSON.stringify(next)) throw new Error("User.Services se escribio, pero no pudo verificarse.")
+  return verified
+}
+
+export async function removeLegacyServiceFiles(rootHandle: FileSystemDirectoryHandle, services: { inscreen: boolean; drive: boolean }) {
+  const names = [services.inscreen ? INSCREEN_CONFIG_FILE_NAME : "", services.drive ? DRIVE_CONFIG_FILE_NAME : ""].filter(Boolean)
+  for (const name of names) {
+    try { await rootHandle.removeEntry(name) } catch (error) {
+      if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error
+    }
+  }
+}
+
+export async function removeServicesFile(rootHandle: FileSystemDirectoryHandle) {
+  try { await rootHandle.removeEntry(SERVICES_FILE_NAME) } catch (error) {
+    if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error
+  }
+}
 
 function openWorkspaceDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -148,19 +222,22 @@ export function getReadyWorkspaceHandle() {
 export function setReadyWorkspaceHandle(handle: FileSystemDirectoryHandle | null) {
   readyWorkspaceHandle = handle
   if (handle) cachedWorkspaceHandle = handle
-  else readyInscreenConfigHalf = ""
+  else {
+    readyInscreenConfigToken = ""
+    readyDriveConfigToken = ""
+  }
 }
 
-export function getReadyInscreenConfigHalf() {
-  return readyInscreenConfigHalf
+export function getReadyInscreenConfigToken() {
+  return readyInscreenConfigToken
 }
 
-export function setReadyInscreenConfigHalf(value: string) {
-  readyInscreenConfigHalf = String(value || "")
+export function setReadyInscreenConfigToken(value: string) {
+  readyInscreenConfigToken = String(value || "")
 }
 
-export function getReadyDriveConfigHalf() { return readyDriveConfigHalf }
-export function setReadyDriveConfigHalf(value: string) { readyDriveConfigHalf = String(value || "") }
+export function getReadyDriveConfigToken() { return readyDriveConfigToken }
+export function setReadyDriveConfigToken(value: string) { readyDriveConfigToken = String(value || "") }
 
 export async function queryWorkspacePermission(handle: FileSystemDirectoryHandle, mode: FileSystemPermissionMode = "readwrite") {
   try {
