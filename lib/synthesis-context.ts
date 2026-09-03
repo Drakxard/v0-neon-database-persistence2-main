@@ -39,3 +39,8 @@ export function buildSynthesisTreeObjectKey(context: SynthesisContext) {
   const normalized = parseSynthesisContext(context.subjectId, context.weekNumber)
   return `manifests/inscreen/sintesis/by-subject/${normalized.subjectId}/semana-${normalized.weekNumber}/tree-v1.json`
 }
+
+export function buildSynthesisWorkspaceObjectKey(context: SynthesisContext) {
+  const normalized = parseSynthesisContext(context.subjectId, context.weekNumber)
+  return `manifests/inscreen/sintesis/by-subject/${normalized.subjectId}/semana-${normalized.weekNumber}/synthesis-v2.json`
+}

@@ -18,8 +18,18 @@ import {
 import {
   buildSynthesisLocalStorageKey,
   buildSynthesisTreeObjectKey,
+  buildSynthesisWorkspaceObjectKey,
   parseSynthesisContext,
 } from "../lib/synthesis-context.ts"
+import {
+  SYNTHESIS_LOCAL_IMAGE_PREFIX,
+  deriveSynthesisNodes,
+  ensureSynthesisDocument,
+  extractSynthesisBranchDocument,
+  normalizeSynthesisWorkspace,
+  referencedLocalImageIds,
+  replaceSynthesisBranch,
+} from "../lib/synthesis-workspace.ts"
 
 function sampleTree() {
   let tree = createEmptySynthesisTree()
@@ -105,18 +115,75 @@ test("el contrato R2 usa clave estable, autenticación y ETag", () => {
   const route = readFileSync(new URL("../app/api/inscreen/synthesis-tree/route.ts", import.meta.url), "utf8")
   const client = readFileSync(new URL("../app/sintesis/synthesis-client.tsx", import.meta.url), "utf8")
   const home = readFileSync(new URL("../components/subject-wheel.tsx", import.meta.url), "utf8")
-  assert.match(storage, /buildSynthesisTreeObjectKey/)
+  assert.match(storage, /buildSynthesisWorkspaceObjectKey/)
   assert.match(storage, /ifMatch|ifNoneMatch/)
-  assert.match(storage, /SynthesisTreeConflictError/)
+  assert.match(storage, /SynthesisWorkspaceConflictError/)
   assert.match(route, /requireAuthSession/)
   assert.match(route, /withInscreenUserConfig/)
   assert.match(client, /beforeunload/)
-  assert.match(client, /SYNTHESIS_PENDING_KEY/)
+  assert.match(client, /SYNTHESIS_WORKSPACE_PENDING_KEY/)
   assert.match(route, /parseSynthesisContext/)
   assert.match(client, /buildSynthesisLocalStorageKey/)
-  assert.match(client, /applyStructuredMarkdownTree/)
+  assert.match(client, /replaceSynthesisBranch/)
   assert.match(client, /NumpadAdd/)
   assert.match(home, /openCurrentSubjectSynthesis/)
   assert.match(home, /wood-plaque\.png/)
   assert.doesNotMatch(home, /href="\/sintesis"/)
+})
+
+test("v2 deriva H1/H2/H3 y listas simples, numeradas, de tareas y anidadas", () => {
+  const document = ensureSynthesisDocument({ type: "doc", content: [
+    { type: "heading", attrs: { level: 1, synthesisId: "h1" }, content: [{ type: "text", text: "Tema" }] },
+    { type: "paragraph", content: [{ type: "text", marks: [{ type: "bold" }], text: "Introducción" }] },
+    { type: "heading", attrs: { level: 2, synthesisId: "h2" }, content: [{ type: "text", text: "Subtema" }] },
+    { type: "heading", attrs: { level: 3, synthesisId: "h3" }, content: [{ type: "text", text: "Concepto" }] },
+    { type: "bulletList", content: [{ type: "listItem", attrs: { synthesisId: "bullet" }, content: [
+      { type: "paragraph", content: [{ type: "text", text: "Viñeta" }] },
+      { type: "orderedList", content: [{ type: "listItem", attrs: { synthesisId: "ordered" }, content: [{ type: "paragraph", content: [{ type: "text", text: "Numerada" }] }] }] },
+      { type: "taskList", content: [{ type: "taskItem", attrs: { synthesisId: "task", checked: true }, content: [{ type: "paragraph", content: [{ type: "text", text: "Tarea" }] }] }] },
+    ] }] },
+  ] }, () => "unused")
+  const nodes = deriveSynthesisNodes(document)
+  assert.deepEqual(nodes.map(({ id, parentId }) => [id, parentId]), [
+    ["h1", null], ["h2", "h1"], ["h3", "h2"], ["bullet", "h3"], ["ordered", "bullet"], ["task", "bullet"],
+  ])
+  assert.equal(nodes[0].body[0].content?.[0].marks?.[0].type, "bold")
+})
+
+test("v2 normaliza contenido huérfano y conserva IDs, posiciones y formato", () => {
+  let sequence = 0
+  const document = ensureSynthesisDocument({ type: "doc", content: [
+    { type: "paragraph", content: [{ type: "text", marks: [{ type: "italic" }], text: "Antes del título" }] },
+    { type: "heading", attrs: { level: 1, synthesisId: "tema" }, content: [{ type: "text", text: "Tema" }] },
+  ] }, () => `auto-${++sequence}`)
+  assert.equal(document.content?.[0].type, "heading")
+  assert.equal(document.content?.[0].content?.[0].text, "Sin título")
+  assert.equal(document.content?.[0].attrs?.synthesisId, "auto-1")
+  const workspace = normalizeSynthesisWorkspace({ version: 2, document, layout: { tema: { x: .8, y: .7, scale: 1.2 } } })
+  assert.deepEqual(workspace.layout.tema, { x: .8, y: .7, scale: 1.2 })
+  assert.equal(JSON.stringify(workspace.document).includes("italic"), true)
+})
+
+test("v2 extrae y reintegra una rama sin inferir identidad por texto", () => {
+  const document = ensureSynthesisDocument({ type: "doc", content: [
+    { type: "heading", attrs: { level: 1, synthesisId: "a" }, content: [{ type: "text", text: "A" }] },
+    { type: "paragraph", content: [{ type: "text", text: "cuerpo" }] },
+    { type: "heading", attrs: { level: 1, synthesisId: "b" }, content: [{ type: "text", text: "B" }] },
+  ] }, () => "unused")
+  const branch = extractSynthesisBranchDocument(document, "a")
+  branch.content![0].content![0].text = "Renombrado"
+  const replaced = replaceSynthesisBranch(document, "a", branch)
+  const derived = deriveSynthesisNodes(replaced)
+  assert.equal(derived[0].id, "a")
+  assert.equal(derived[0].name, "Renombrado")
+  assert.equal(derived[1].id, "b")
+})
+
+test("v2 guarda imágenes como IDs locales y usa una clave R2 nueva y aislada", () => {
+  const document = { type: "doc", content: [{ type: "image", attrs: { src: `${SYNTHESIS_LOCAL_IMAGE_PREFIX}asset-1` } }] }
+  assert.deepEqual(referencedLocalImageIds(document), ["asset-1"])
+  const first = parseSynthesisContext("materia-custom", 23)
+  const second = parseSynthesisContext("materia-custom", 24)
+  assert.match(buildSynthesisWorkspaceObjectKey(first), /semana-23\/synthesis-v2\.json$/)
+  assert.notEqual(buildSynthesisWorkspaceObjectKey(first), buildSynthesisWorkspaceObjectKey(second))
 })
