@@ -897,6 +897,18 @@ function getShortcutUrl(shortcuts: SubjectShortcuts, shortcutId: string) {
   return shortcuts.buttons.find((button) => button.id === shortcutId)?.url ?? null
 }
 
+function storeViewerReturnSnapshot(snapshot: Omit<ViewerReturnSnapshot, "version" | "createdAt">) {
+  if (typeof window === "undefined") return ""
+  cleanupExpiredViewerReturnSnapshots()
+  const returnToken = generatePairId()
+  window.sessionStorage.setItem(buildViewerReturnStorageKey(returnToken), JSON.stringify({
+    ...snapshot,
+    version: 1,
+    createdAt: Date.now(),
+  } satisfies ViewerReturnSnapshot))
+  return returnToken
+}
+
 function buildMaterialRegionPresentationHref(material: SubjectDayMaterial, subjectName: string, tagIds: number[]) {
   const params = new URLSearchParams()
   appendMaterialViewerParams(params, material)
@@ -6602,6 +6614,47 @@ export function SubjectWheel({
     continueMode === "theory"
       ? selectedTheoryMaterial ?? continuePayload?.material ?? null
       : selectedPracticeMaterial ?? continuePayload?.material ?? null
+  const openCurrentSubjectSynthesis = useCallback(async () => {
+    if (!currentSubject) return
+    await flushPendingFeaturedUpdate()
+    const returnToken = storeViewerReturnSnapshot({
+      currentDateKey,
+      showAllSubjectsForDay,
+      currentSubjectId: currentSubject.id,
+      dialogDateKey,
+      practiceSectionView,
+      exerciseWeeklyScopeEnabled,
+      subjectViewDateOverride,
+      dialogShowAllSubjectsForDay,
+      selectedPracticeMaterialId,
+      isContinueOpen,
+      continueMode,
+      continueMaterialId: currentContinueMaterial?.id ?? null,
+    })
+    const params = new URLSearchParams({
+      subjectId: currentSubject.id,
+      weekNumber: String(dialogSelectedWeekNumber),
+      subjectName: getSubjectDisplayName(currentSubject),
+    })
+    if (returnToken) params.set("returnToken", returnToken)
+    router.push(`/sintesis?${params.toString()}`)
+  }, [
+    continueMode,
+    currentContinueMaterial?.id,
+    currentDateKey,
+    currentSubject,
+    dialogDateKey,
+    dialogSelectedWeekNumber,
+    dialogShowAllSubjectsForDay,
+    exerciseWeeklyScopeEnabled,
+    flushPendingFeaturedUpdate,
+    isContinueOpen,
+    practiceSectionView,
+    router,
+    selectedPracticeMaterialId,
+    showAllSubjectsForDay,
+    subjectViewDateOverride,
+  ])
   const visiblePracticeMaterials = useMemo(
     () => practiceMaterials.filter((material): material is SubjectDayMaterial => !("is_pending_upload" in material)),
     [practiceMaterials]
@@ -7300,15 +7353,6 @@ export function SubjectWheel({
       ) : null}
       {/* Header */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
-        <a
-          href="/sintesis"
-          className="pointer-events-auto absolute right-0 top-0 z-30 flex h-12 w-24 items-center justify-center bg-amber-800 pl-3 text-sm font-semibold tracking-wide text-amber-50 shadow-lg transition-[filter,transform] hover:brightness-110 active:scale-[0.98] sm:h-16 sm:w-36 sm:text-base"
-          style={{ clipPath: "polygon(24% 0, 100% 0, 100% 100%, 0 100%)" }}
-          aria-label="Abrir Síntesis"
-          title="Abrir Síntesis"
-        >
-          Síntesis
-        </a>
         <div className="flex items-start justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="pointer-events-auto flex max-h-[calc(100dvh-8rem)] min-w-0 flex-col items-start gap-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -7388,7 +7432,7 @@ export function SubjectWheel({
             </div>
           </div>
 
-          <div className="pointer-events-auto mr-24 flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:mr-36 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <Button
                 variant="outline"
                 size="icon"
@@ -8298,11 +8342,13 @@ export function SubjectWheel({
                     <DialogTitle asChild>
                       <button
                         type="button"
-                        onClick={() => openCustomSubjectEditDialog(currentSubject)}
-                        className="min-w-0 truncate text-left text-[1.15rem] font-normal leading-tight text-foreground underline-offset-4 hover:underline sm:text-[clamp(1.35rem,4.2vw,2rem)]"
-                        title="Editar materia"
+                        onClick={() => void openCurrentSubjectSynthesis()}
+                        className="flex min-w-0 items-center gap-2 text-left text-[1.15rem] font-normal leading-tight text-foreground underline-offset-4 hover:underline sm:text-[clamp(1.35rem,4.2vw,2rem)]"
+                        aria-label={`Abrir Síntesis de ${getSubjectDisplayName(currentSubject)}, semana ${dialogSelectedWeekNumber}`}
+                        title={`Abrir Síntesis · Semana ${dialogSelectedWeekNumber}`}
                       >
-                        {getSubjectDisplayName(currentSubject)}
+                        <img src="/sintesis/wood-plaque.png" alt="" aria-hidden="true" className="h-8 w-7 shrink-0 object-contain drop-shadow-sm sm:h-10 sm:w-9" />
+                        <span className="truncate">{getSubjectDisplayName(currentSubject)}</span>
                       </button>
                     </DialogTitle>
                   ) : (
@@ -8310,6 +8356,19 @@ export function SubjectWheel({
                       {getSubjectDisplayName(currentSubject)}
                     </DialogTitle>
                   )}
+                  {currentSubject ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => openCustomSubjectEditDialog(currentSubject)}
+                      className="h-8 w-8 shrink-0 text-muted-foreground"
+                      aria-label={`Editar ${getSubjectDisplayName(currentSubject)}`}
+                      title="Editar materia"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  ) : null}
                   {currentSubject ? (
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                       {subjectShortcuts.buttons.map((shortcut) => {

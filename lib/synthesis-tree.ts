@@ -246,6 +246,18 @@ export function serializeSynthesisBranch(tree: SynthesisTree, rootId: string) {
   return lines.join("\n").trim()
 }
 
+export function serializeSynthesisTree(tree: SynthesisTree) {
+  const lines: string[] = []
+  const writeNode = (node: SynthesisNode, depth: number) => {
+    if (lines.length && lines.at(-1) !== "") lines.push("")
+    lines.push(depth === 1 ? `# ${node.name}` : `${"  ".repeat(depth - 2)}- ${node.name}`)
+    if (node.content) lines.push(node.content.trimEnd())
+    synthesisChildren(tree, node.id).forEach(child => writeNode(child, depth + 1))
+  }
+  synthesisChildren(tree, null).forEach(node => writeNode(node, 1))
+  return lines.join("\n").trim()
+}
+
 function parseStructuredMarkdown(source: string) {
   const root: DraftNode = { name: "", contentLines: [], children: [] }
   const headingStack: DraftNode[] = [root]
@@ -299,6 +311,7 @@ export function applyStructuredMarkdown(tree: SynthesisTree, rootId: string, sou
       if (!item.name) return
       if (++count > SYNTHESIS_MAX_NODES) throw new Error("El esquema supera los doscientos elementos.")
       const old = oldChildren.find(candidate => !usedIds.has(candidate.id) && candidate.name === item.name)
+        ?? (oldChildren[index] && !usedIds.has(oldChildren[index].id) ? oldChildren[index] : undefined)
       const id = old?.id ?? idFactory()
       usedIds.add(id)
       const position = old ?? newNodePosition(index)
@@ -311,6 +324,49 @@ export function applyStructuredMarkdown(tree: SynthesisTree, rootId: string, sou
   }
   materialize(draft.children, rootId, 2)
   synthesisBranchIds(oldTree, rootId).slice(1).forEach(id => {
+    if (!usedIds.has(id)) delete next.nodes[id]
+  })
+  return assertValidSynthesisTree(next)
+}
+
+export function applyStructuredMarkdownTree(tree: SynthesisTree, source: string, idFactory: () => string) {
+  const next = structuredClone(normalizeSynthesisTree(tree))
+  const oldTree = normalizeSynthesisTree(tree)
+  const draft = parseStructuredMarkdown(source)
+  if (trimContent([...draft.contentLines])) {
+    throw new Error("El esquema completo debe comenzar con un título de tema.")
+  }
+
+  const usedIds = new Set<string>()
+  let count = 0
+  const materialize = (items: DraftNode[], parentId: string | null, depth: number) => {
+    if (items.length > SYNTHESIS_MAX_CHILDREN) throw new Error("Una sección supera los doce elementos.")
+    if (depth > SYNTHESIS_MAX_DEPTH) throw new Error("El esquema supera los doce niveles.")
+    const oldChildren = synthesisChildren(oldTree, parentId)
+
+    items.forEach((item, index) => {
+      if (!item.name) return
+      if (++count > SYNTHESIS_MAX_NODES) throw new Error("El esquema supera los doscientos elementos.")
+      const old = oldChildren.find(candidate => !usedIds.has(candidate.id) && candidate.name === item.name)
+        ?? (oldChildren[index] && !usedIds.has(oldChildren[index].id) ? oldChildren[index] : undefined)
+      const id = old?.id ?? idFactory()
+      usedIds.add(id)
+      const position = old ?? newNodePosition(index)
+      next.nodes[id] = {
+        id,
+        parentId,
+        name: item.name,
+        x: position.x,
+        y: position.y,
+        scale: old?.scale ?? next.defaultScale,
+        content: trimContent(item.contentLines),
+      }
+      materialize(item.children, id, depth + 1)
+    })
+  }
+
+  materialize(draft.children, null, 1)
+  Object.keys(oldTree.nodes).forEach(id => {
     if (!usedIds.has(id)) delete next.nodes[id]
   })
   return assertValidSynthesisTree(next)

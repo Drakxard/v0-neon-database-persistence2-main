@@ -3,16 +3,23 @@ import { readFileSync } from "node:fs"
 import test from "node:test"
 import {
   addSynthesisNode,
+  applyStructuredMarkdownTree,
   applyStructuredMarkdown,
   assertValidSynthesisTree,
   createEmptySynthesisTree,
   deleteSynthesisBranch,
   normalizeSynthesisTree,
   serializeSynthesisBranch,
+  serializeSynthesisTree,
   synthesisChildren,
   synthesisPath,
   updateSynthesisNode,
 } from "../lib/synthesis-tree.ts"
+import {
+  buildSynthesisLocalStorageKey,
+  buildSynthesisTreeObjectKey,
+  parseSynthesisContext,
+} from "../lib/synthesis-context.ts"
 
 function sampleTree() {
   let tree = createEmptySynthesisTree()
@@ -62,18 +69,54 @@ test("serializa y reaplica títulos, viñetas y sangría conservando ids", () =>
   assert.equal(deep.name, "Nivel profundo")
 })
 
+test("serializa y reaplica el árbol completo conservando identidad y posiciones", () => {
+  let tree = sampleTree()
+  tree = addSynthesisNode(tree, { id: "tema_b", parentId: null, name: "Tema B", x: .8, y: .3 })
+  tree = updateSynthesisNode(tree, "detalle", { content: "Concepto interno" })
+  const source = serializeSynthesisTree(tree)
+  assert.match(source, /^# Tema[\s\S]*- Subtema[\s\S]*  - Detalle[\s\S]*# Tema B/)
+
+  const updated = applyStructuredMarkdownTree(tree, source.replace("# Tema", "# Tema A renombrado") + "\n\n# Tema C", () => "tema_c")
+  assert.equal(updated.nodes.tema.name, "Tema A renombrado")
+  assert.equal(updated.nodes.tema.x, .2)
+  assert.equal(updated.nodes.subtema.parentId, "tema")
+  assert.equal(updated.nodes.detalle.content, "Concepto interno")
+  assert.equal(updated.nodes.tema_c.name, "Tema C")
+
+  const emptied = applyStructuredMarkdownTree(updated, "", () => "unused")
+  assert.deepEqual(emptied.nodes, {})
+  assert.throws(() => applyStructuredMarkdownTree(tree, "texto sin tema", () => "unused"), /comenzar con un título/)
+})
+
+test("aísla las claves de Síntesis por materia y semana", () => {
+  const algebraWeek = parseSynthesisContext("algebra", "12")
+  const physicsWeek = parseSynthesisContext("fisica", 12)
+  const algebraNextWeek = parseSynthesisContext("algebra", 13)
+  assert.notEqual(buildSynthesisTreeObjectKey(algebraWeek), buildSynthesisTreeObjectKey(physicsWeek))
+  assert.notEqual(buildSynthesisTreeObjectKey(algebraWeek), buildSynthesisTreeObjectKey(algebraNextWeek))
+  assert.notEqual(buildSynthesisLocalStorageKey("pending", algebraWeek), buildSynthesisLocalStorageKey("pending", physicsWeek))
+  assert.match(buildSynthesisTreeObjectKey(algebraWeek), /by-subject\/algebra\/semana-12\/tree-v1\.json$/)
+  assert.throws(() => parseSynthesisContext("../materia", 12), /materia/)
+  assert.throws(() => parseSynthesisContext("algebra", -1), /semana/)
+})
+
 test("el contrato R2 usa clave estable, autenticación y ETag", () => {
   const storage = readFileSync(new URL("../lib/synthesis-tree-storage.ts", import.meta.url), "utf8")
   const route = readFileSync(new URL("../app/api/inscreen/synthesis-tree/route.ts", import.meta.url), "utf8")
   const client = readFileSync(new URL("../app/sintesis/synthesis-client.tsx", import.meta.url), "utf8")
   const home = readFileSync(new URL("../components/subject-wheel.tsx", import.meta.url), "utf8")
-  assert.match(storage, /manifests\/inscreen\/sintesis\/tree-v1\.json/)
+  assert.match(storage, /buildSynthesisTreeObjectKey/)
   assert.match(storage, /ifMatch|ifNoneMatch/)
   assert.match(storage, /SynthesisTreeConflictError/)
   assert.match(route, /requireAuthSession/)
   assert.match(route, /withInscreenUserConfig/)
   assert.match(client, /beforeunload/)
   assert.match(client, /SYNTHESIS_PENDING_KEY/)
-  assert.match(home, /href="\/sintesis"/)
-  assert.match(home, /clipPath: "polygon/)
+  assert.match(route, /parseSynthesisContext/)
+  assert.match(client, /buildSynthesisLocalStorageKey/)
+  assert.match(client, /applyStructuredMarkdownTree/)
+  assert.match(client, /NumpadAdd/)
+  assert.match(home, /openCurrentSubjectSynthesis/)
+  assert.match(home, /wood-plaque\.png/)
+  assert.doesNotMatch(home, /href="\/sintesis"/)
 })
