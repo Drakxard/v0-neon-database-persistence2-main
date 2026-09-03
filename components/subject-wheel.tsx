@@ -7300,6 +7300,15 @@ export function SubjectWheel({
       ) : null}
       {/* Header */}
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
+        <a
+          href="/sintesis"
+          className="pointer-events-auto absolute right-0 top-0 z-30 flex h-12 w-24 items-center justify-center bg-amber-800 pl-3 text-sm font-semibold tracking-wide text-amber-50 shadow-lg transition-[filter,transform] hover:brightness-110 active:scale-[0.98] sm:h-16 sm:w-36 sm:text-base"
+          style={{ clipPath: "polygon(24% 0, 100% 0, 100% 100%, 0 100%)" }}
+          aria-label="Abrir Síntesis"
+          title="Abrir Síntesis"
+        >
+          Síntesis
+        </a>
         <div className="flex items-start justify-between gap-3 px-3 py-3 sm:px-4 sm:py-4">
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="pointer-events-auto flex max-h-[calc(100dvh-8rem)] min-w-0 flex-col items-start gap-1.5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -7379,7 +7388,7 @@ export function SubjectWheel({
             </div>
           </div>
 
-          <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="pointer-events-auto mr-24 flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:mr-36 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <Button
                 variant="outline"
                 size="icon"

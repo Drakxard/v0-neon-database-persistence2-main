@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Síntesis</title>
+  <link rel="preload" href="sintesis-fondo.jpg" as="image" fetchpriority="high">
+  <link rel="stylesheet" href="/app-assets/katex/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body aria-label="Módulo Síntesis">
+  <main id="treeView" class="view"><header id="treeHeader" class="tree-header" hidden></header><button id="outlineButton" class="tree-import" type="button" aria-label="Importar temas y subtemas desde JSON">↓</button><section id="board" aria-label="Elementos de Síntesis"></section></main>
+  <main id="sheetView" class="view sheet-view" hidden><header class="sheet-toolbar"><div id="sheetBack"></div><div class="sheet-actions"><button id="clipboardButton" class="arrow-button" type="button" aria-label="Pegar contenido; mantener para copiar la ruta">↓</button><button id="menuButton" class="menu-button" type="button" aria-label="Opciones del elemento">⋮</button></div></header><article id="sheetContent" class="sheet-content"></article><p id="sheetEmpty" class="sheet-empty">Toca ↓ para pegar una explicación desde el portapapeles.</p></main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="menuOverlay" class="overlay" hidden><section class="dialog icon-dialog" role="dialog" aria-modal="true" aria-label="Opciones del elemento"><button id="renameAction" class="icon-action" type="button" aria-label="Cambiar nombre" title="Cambiar nombre">✎</button><button id="deleteAction" class="icon-action danger" type="button" aria-label="Eliminar rama" title="Eliminar rama">🗑</button></section></div>
+  <div id="renameOverlay" class="overlay" hidden><form id="renameForm" class="dialog" role="dialog" aria-modal="true" aria-labelledby="renameTitle"><h2 id="renameTitle">Renombrar elemento</h2><input id="renameInput" maxlength="80" autocomplete="off" required><div class="dialog-actions"><button id="cancelRename" type="button">Cancelar</button><button type="submit">Guardar</button></div></form></div>
+  <script src="/app-assets/katex/katex.min.js"></script><script src="/app-assets/katex/contrib/auto-render.min.js"></script><script src="core.js"></script><script src="markdown.js"></script><script src="app.js"></script>
+</body>
+</html>

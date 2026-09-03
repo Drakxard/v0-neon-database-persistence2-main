@@ -32,6 +32,13 @@ La aplicación usa un workspace local elegido por el usuario para materias, PDFs
 
 Las salidas de InSreen usan Cloudflare R2 para que otro programa pueda consumir los TXT. Su estado técnico se guarda por separado bajo `manifests/inscreen/`.
 
+La página `/sintesis` conserva un árbol único en el R2 personal bajo
+`manifests/inscreen/sintesis/tree-v1.json`. El documento incluye `version`,
+`revision`, `updatedAt`, `defaultScale` y el mapa estable `nodes`; cada nodo guarda
+`id`, `parentId`, `name`, `x`, `y`, `scale` y `content`. Las escrituras de la web
+usan ETag para detectar ediciones concurrentes. Este objeto es el contrato que
+podrá consumir posteriormente el cliente Android.
+
 Required environment variables for R2:
 
 ```bash
