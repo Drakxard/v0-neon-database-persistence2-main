@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, Pencil } from "lucide-react"
 import backgroundImage from "../../sintesis/sintesis-fondo.jpg"
-import { buildSynthesisLocalStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
+import { buildSynthesisLocalStorageKey, buildSynthesisReturnTokenStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
 import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
@@ -23,7 +23,7 @@ const SimpleEditor = dynamic(
 )
 
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
-type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; returnSheetId: string | null; key: number }
+type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
 
 function readLocalWorkspace(key: string) {
   try {
@@ -34,15 +34,15 @@ function readLocalWorkspace(key: string) {
   } catch { return null }
 }
 
-export function SynthesisClient({ context, subjectName, returnToken }: { context: SynthesisContext; subjectName: string; returnToken: string }) {
+export function SynthesisClient({ context, legacyReturnToken }: { context: SynthesisContext; legacyReturnToken: string }) {
   const router = useRouter()
   const storageKey = buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_STORAGE_KEY, context)
   const pendingKey = buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_PENDING_KEY, context)
+  const returnTokenKey = buildSynthesisReturnTokenStorageKey(context)
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
   const [message, setMessage] = useState("")
   const [currentParentId, setCurrentParentId] = useState<string | null>(null)
-  const [sheetNodeId, setSheetNodeId] = useState<string | null>(null)
   const [editorSession, setEditorSession] = useState<EditorSession | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const suppressClickRef = useRef(false)
@@ -67,6 +67,17 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
   }, [pendingKey, storageKey])
 
   useEffect(() => {
+    if (legacyReturnToken) sessionStorage.setItem(returnTokenKey, legacyReturnToken)
+    const canonicalParams = new URLSearchParams({
+      subjectId: context.subjectId,
+      weekNumber: String(context.weekNumber),
+    })
+    if (window.location.search !== `?${canonicalParams.toString()}`) {
+      router.replace(`/sintesis?${canonicalParams.toString()}`)
+    }
+  }, [context.subjectId, context.weekNumber, legacyReturnToken, returnTokenKey, router])
+
+  useEffect(() => {
     const persistBeforeLeaving = () => {
       localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
     }
@@ -81,7 +92,7 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
     const removedImageIds = [...removedImageIdsRef.current]
     removedImageIdsRef.current.clear()
     await Promise.allSettled(removedImageIds.map(deleteSynthesisImage))
-    setCurrentParentId(session.returnParentId); setSheetNodeId(session.returnSheetId); setEditorSession(null); editorHistoryRef.current = false
+    setCurrentParentId(session.returnParentId); setEditorSession(null); editorHistoryRef.current = false
   }, [editorSession, storageKey])
 
   useEffect(() => {
@@ -93,7 +104,7 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
   const openEditor = (nodeId: string | null) => {
     const document = nodeId ? extractSynthesisBranchDocument(workspaceRef.current.document, nodeId) : workspaceRef.current.document
     removedImageIdsRef.current.clear()
-    setEditorSession({ nodeId, document, baseDocument: workspaceRef.current.document, normalizationId: createSynthesisId(), returnParentId: currentParentId, returnSheetId: sheetNodeId, key: Date.now() })
+    setEditorSession({ nodeId, document, baseDocument: workspaceRef.current.document, normalizationId: createSynthesisId(), returnParentId: currentParentId, key: Date.now() })
     window.history.pushState({ synthesisEditor: true }, ""); editorHistoryRef.current = true
   }
 
@@ -116,19 +127,20 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
 
   const goHome = useCallback(() => {
     localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
+    const returnToken = sessionStorage.getItem(returnTokenKey) || legacyReturnToken
+    sessionStorage.removeItem(returnTokenKey)
     router.push(returnToken ? `/?returnToken=${encodeURIComponent(returnToken)}` : "/")
-  }, [returnToken, router, storageKey])
+  }, [legacyReturnToken, returnTokenKey, router, storageKey])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault()
         if (editorSession) { window.history.back(); return }
-        if (sheetNodeId) { setSheetNodeId(null); return }
         if (currentParentId) { setCurrentParentId(nodes.find((node) => node.id === currentParentId)?.parentId ?? null); return }
         void goHome(); return
       }
-      if ((!event.ctrlKey && !event.metaKey) || editorSession || sheetNodeId) return
+      if ((!event.ctrlKey && !event.metaKey) || editorSession) return
       const increase = event.key === "+" || event.key === "=" || event.code === "NumpadAdd"
       const decrease = event.key === "-" || event.code === "NumpadSubtract"
       if (!increase && !decrease) return
@@ -137,7 +149,7 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
     }
     window.addEventListener("keydown", keydown, { passive: false })
     return () => window.removeEventListener("keydown", keydown)
-  }, [acceptWorkspace, currentParentId, editorSession, goHome, nodes, sheetNodeId])
+  }, [acceptWorkspace, currentParentId, editorSession, goHome, nodes])
 
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
@@ -145,24 +157,19 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
   </main>
 
   const currentNodes = childrenOf(nodes, currentParentId)
-  const sheetNode = sheetNodeId ? nodes.find((node) => node.id === sheetNodeId) ?? null : null
+  const currentNode = currentParentId ? nodes.find((node) => node.id === currentParentId) ?? null : null
 
   return <main className={styles.root} style={{ backgroundImage: `linear-gradient(rgba(74,30,14,.2),rgba(74,30,14,.2)), url(${backgroundImage.src})` }}>
     <header className={styles.topbar}>
       <button className={styles.backPlaque} onClick={() => {
-        if (sheetNodeId) setSheetNodeId(null)
-        else if (currentParentId) setCurrentParentId(nodes.find((node) => node.id === currentParentId)?.parentId ?? null)
+        if (currentParentId) setCurrentParentId(currentNode?.parentId ?? null)
         else void goHome()
-      }} aria-label="Volver"><ArrowLeft aria-hidden="true" /></button>
-      <div className={styles.location}><strong>{subjectName}</strong></div>
-      <div className={styles.zoom}><button onClick={() => openEditor(sheetNodeId)} aria-label={sheetNodeId ? "Editar esta rama" : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
+      }} aria-label={currentNode ? `Volver desde ${currentNode.name}` : "Volver"}><ArrowLeft aria-hidden="true" /></button>
+      <div className={styles.zoom}><button onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
     </header>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
-    {sheetNode ? <section className={styles.sheet}><SimpleEditor key={`read-${sheetNode.id}`} content={extractSynthesisBranchDocument(workspace.document, sheetNode.id)} editable={false} /></section>
-      : <section className={styles.board} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
+    <section className={styles.board} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
         const position = workspace.layout[node.id] ?? { x: 0.5, y: 0.4, scale: 1 }
-        const hasChildren = nodes.some((candidate) => candidate.parentId === node.id)
-        const hasBody = node.body.some((block) => Boolean(block.content?.length || block.type === "image" || block.type === "horizontalRule"))
         return <div key={node.id} className={styles.nodeWrap} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}dvh`, "--node-scale": position.scale } as React.CSSProperties}>
           <button className={styles.plaque} onPointerDown={(event) => {
             if (event.button !== 0) return
@@ -176,10 +183,10 @@ export function SynthesisClient({ context, subjectName, returnToken }: { context
             workspaceRef.current = next; setWorkspace(next); setDrag({ ...drag, moved: true }); suppressClickRef.current = true
           }} onPointerUp={() => { if (drag?.id === node.id && drag.moved) acceptWorkspace(workspaceRef.current); setDrag(null) }} onClick={() => {
             if (suppressClickRef.current) { suppressClickRef.current = false; return }
-            if (hasChildren) setCurrentParentId(node.id); else if (hasBody) setSheetNodeId(node.id)
-          }} aria-label={hasChildren ? `Abrir ${node.name}` : hasBody ? `Leer ${node.name}` : node.name}>{node.name}</button>
+            setCurrentParentId(node.id)
+          }} aria-label={`Abrir ${node.name}`}>{node.name}</button>
           <button className={styles.nodeEdit} onPointerDown={(event) => event.stopPropagation()} onClick={() => openEditor(node.id)} aria-label={`Editar ${node.name}`} title="Editar"><Pencil /></button>
         </div>
-      })}</section>}
+      })}</section>
   </main>
 }

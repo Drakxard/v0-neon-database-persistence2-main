@@ -17,6 +17,7 @@ import {
 } from "../lib/synthesis-tree.ts"
 import {
   buildSynthesisLocalStorageKey,
+  buildSynthesisReturnTokenStorageKey,
   buildSynthesisTreeObjectKey,
   buildSynthesisWorkspaceObjectKey,
   parseSynthesisContext,
@@ -106,6 +107,8 @@ test("aísla las claves de Síntesis por materia y semana", () => {
   assert.notEqual(buildSynthesisTreeObjectKey(algebraWeek), buildSynthesisTreeObjectKey(physicsWeek))
   assert.notEqual(buildSynthesisTreeObjectKey(algebraWeek), buildSynthesisTreeObjectKey(algebraNextWeek))
   assert.notEqual(buildSynthesisLocalStorageKey("pending", algebraWeek), buildSynthesisLocalStorageKey("pending", physicsWeek))
+  assert.notEqual(buildSynthesisReturnTokenStorageKey(algebraWeek), buildSynthesisReturnTokenStorageKey(physicsWeek))
+  assert.notEqual(buildSynthesisReturnTokenStorageKey(algebraWeek), buildSynthesisReturnTokenStorageKey(algebraNextWeek))
   assert.match(buildSynthesisTreeObjectKey(algebraWeek), /by-subject\/algebra\/semana-12\/tree-v1\.json$/)
   assert.throws(() => parseSynthesisContext("../materia", 12), /materia/)
   assert.throws(() => parseSynthesisContext("algebra", -1), /semana/)
@@ -114,16 +117,26 @@ test("aísla las claves de Síntesis por materia y semana", () => {
 test("Síntesis queda solo local y su endpoint R2 está desactivado", () => {
   const route = readFileSync(new URL("../app/api/inscreen/synthesis-tree/route.ts", import.meta.url), "utf8")
   const client = readFileSync(new URL("../app/sintesis/synthesis-client.tsx", import.meta.url), "utf8")
+  const page = readFileSync(new URL("../app/sintesis/page.tsx", import.meta.url), "utf8")
+  const styles = readFileSync(new URL("../app/sintesis/sintesis.module.css", import.meta.url), "utf8")
   const home = readFileSync(new URL("../components/subject-wheel.tsx", import.meta.url), "utf8")
+  const openSynthesis = home.match(/const openCurrentSubjectSynthesis = useCallback\(async \(\) => \{[\s\S]*?\n  \}, \[/)?.[0] ?? ""
   assert.match(client, /beforeunload/)
   assert.match(client, /buildSynthesisLocalStorageKey/)
   assert.match(client, /replaceSynthesisBranch/)
   assert.match(client, /NumpadAdd/)
   assert.doesNotMatch(client, /fetch\("\/api\/inscreen\/synthesis-tree/)
   assert.doesNotMatch(client, /etagRef|syncNowRef|Guardado en R2/)
+  assert.doesNotMatch(client, /sheetNodeId|editable=\{false\}/)
+  assert.match(client, /setCurrentParentId\(node\.id\)/)
+  assert.match(client, /openEditor\(currentParentId\)/)
+  assert.match(styles, /\.backPlaque[^}]*wood-plaque\.png/)
+  assert.doesNotMatch(page, /subjectName/)
   assert.match(route, /status: 503/)
   assert.doesNotMatch(route, /readSynthesisWorkspace|writeSynthesisWorkspace|uploadR2Object/)
   assert.match(home, /openCurrentSubjectSynthesis/)
+  assert.match(openSynthesis, /sessionStorage\.setItem\(buildSynthesisReturnTokenStorageKey/)
+  assert.doesNotMatch(openSynthesis, /subjectName:|params\.set\("returnToken"/)
   assert.match(home, /wood-plaque\.png/)
   assert.doesNotMatch(home, /href="\/sintesis"/)
 })

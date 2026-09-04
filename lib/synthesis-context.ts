@@ -1,5 +1,6 @@
 export const SYNTHESIS_MAX_SUBJECT_ID_LENGTH = 160
 export const SYNTHESIS_MAX_WEEK_NUMBER = 9999
+export const SYNTHESIS_RETURN_TOKEN_STORAGE_KEY = "inscreen:synthesis:return-token"
 
 export type SynthesisContext = {
   subjectId: string
@@ -33,6 +34,10 @@ export function parseSynthesisContext(subjectIdInput: unknown, weekNumberInput: 
 export function buildSynthesisLocalStorageKey(baseKey: string, context: SynthesisContext) {
   const normalized = parseSynthesisContext(context.subjectId, context.weekNumber)
   return `${baseKey}:${encodeURIComponent(normalized.subjectId)}:week-${normalized.weekNumber}`
+}
+
+export function buildSynthesisReturnTokenStorageKey(context: SynthesisContext) {
+  return buildSynthesisLocalStorageKey(SYNTHESIS_RETURN_TOKEN_STORAGE_KEY, context)
 }
 
 export function buildSynthesisTreeObjectKey(context: SynthesisContext) {

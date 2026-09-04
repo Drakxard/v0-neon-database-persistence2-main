@@ -2,12 +2,9 @@
 .editorOnly { position:fixed; z-index:100; inset:0; overflow:hidden; color:#1f1f1f; background:var(--tt-bg-color,#fff); }
 .editorLoading { min-height:100dvh; display:grid; place-items:center; color:#625f5a; background:#fff; font:14px system-ui,sans-serif; }
 .topbar { position:fixed; z-index:30; top:0; left:0; right:0; min-height:84px; padding:10px 14px; display:flex; align-items:flex-start; gap:12px; background:linear-gradient(rgba(48,18,8,.68),rgba(48,18,8,0)); pointer-events:none; }
-.topbar button,.topbar .location { pointer-events:auto; }
-.backPlaque { border:2px solid rgba(255,231,183,.75); color:#fff4dc; background:linear-gradient(145deg,rgba(117,53,27,.96),rgba(58,20,9,.96)); box-shadow:inset 0 0 0 4px rgba(255,219,155,.1),0 10px 28px rgba(31,10,3,.35); }
-.backPlaque { width:62px; height:64px; flex:0 0 auto; display:grid; place-items:center; clip-path:polygon(50% 0,100% 25%,88% 100%,12% 100%,0 25%); cursor:pointer; }
+.topbar button { pointer-events:auto; }
+.backPlaque { width:62px; height:64px; padding:17px; border:0; flex:0 0 auto; display:grid; place-items:center; color:#fff4dc; background:transparent url("/sintesis/wood-plaque.png") center/100% 100% no-repeat; filter:drop-shadow(0 7px 10px rgba(31,10,3,.4)); cursor:pointer; }
 .backPlaque svg { width:25px; }
-.location { min-width:0; display:flex; flex-direction:column; gap:4px; padding-top:4px; text-shadow:0 1px 4px #2d0f05; }
-.location strong { max-width:min(52vw,560px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:20px; }
 .sync { display:flex; align-items:center; gap:5px; font:12px/1.2 system-ui,sans-serif; }
 .sync svg { width:14px; height:14px; }.spinner { animation:spin 1s linear infinite; }
 .zoom { margin-left:auto; display:flex; gap:5px; pointer-events:auto; }

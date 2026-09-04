@@ -73,6 +73,7 @@ import {
   setSubjectMaterialContainerPinned,
 } from "@/lib/material-containers-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
+import { buildSynthesisReturnTokenStorageKey } from "@/lib/synthesis-context"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type {
@@ -6634,9 +6635,13 @@ export function SubjectWheel({
     const params = new URLSearchParams({
       subjectId: currentSubject.id,
       weekNumber: String(dialogSelectedWeekNumber),
-      subjectName: getSubjectDisplayName(currentSubject),
     })
-    if (returnToken) params.set("returnToken", returnToken)
+    if (returnToken) {
+      window.sessionStorage.setItem(buildSynthesisReturnTokenStorageKey({
+        subjectId: currentSubject.id,
+        weekNumber: dialogSelectedWeekNumber,
+      }), returnToken)
+    }
     router.push(`/sintesis?${params.toString()}`)
   }, [
     continueMode,
