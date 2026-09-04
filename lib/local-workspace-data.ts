@@ -243,6 +243,32 @@ function getWidgetTargetSignature(target: WidgetTargetPatch) {
   return JSON.stringify([target.subjectId, target.kind, target.url, target.sectionKey ?? null, target.weekNumber ?? null])
 }
 
+function normalizeWidgetCatalogSubjects(subjects: WidgetCatalogSubject[]) {
+  const normalized: WidgetCatalogSubject[] = []
+  const ids = new Set<string>()
+  for (const subject of subjects) {
+    const next = {
+      id: subject.id.trim(),
+      name: subject.name.replace(/\s+/g, " ").trim(),
+      color: subject.color.trim(),
+    }
+    if (!/^[a-zA-Z0-9_-]{1,180}$/.test(next.id) || !next.name || !/^#[0-9a-fA-F]{6}$/.test(next.color) || ids.has(next.id)) continue
+    ids.add(next.id)
+    normalized.push(next)
+  }
+  return normalized
+}
+
+async function readCurrentLocalWidgetCatalog() {
+  const { state } = await readLocalWorkspaceTabsState()
+  const subjects = await Promise.all(Object.values(state.customSubjects).map(async ({ id, name, color }) => ({
+    id: await resolveLocalLogicalSubjectId(id),
+    name,
+    color,
+  })))
+  return normalizeWidgetCatalogSubjects(subjects)
+}
+
 async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]) {
   const normalized: WidgetTargetSyncItem[] = []
   const targetIndexes = new Map<string, number>()
@@ -268,9 +294,7 @@ async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]
 export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]) {
   await withWidgetTargetSyncLock(async () => {
     const manifest = await readWidgetTargetSyncManifest()
-    const normalized = subjects
-      .map((subject) => ({ id: subject.id.trim(), name: subject.name.replace(/\s+/g, " ").trim(), color: subject.color.trim() }))
-      .filter((subject) => /^[a-zA-Z0-9_-]{1,180}$/.test(subject.id) && subject.name && /^#[0-9a-fA-F]{6}$/.test(subject.color))
+    const normalized = normalizeWidgetCatalogSubjects(subjects)
     const signature = JSON.stringify(normalized)
     if (manifest.published?.catalogSignature === signature && !manifest.items.some((candidate) => candidate.kind === "catalog")) return
     const item: WidgetTargetSyncItem = {
@@ -344,10 +368,21 @@ async function runLocalWidgetTargetSyncQueue() {
     const current = (await readWidgetTargetSyncManifest()).items.find((item) => item.id === candidate.id)
     if (!current) continue
     try {
+      let publishedCatalog: WidgetCatalogSubject[] | undefined
+      if (current.kind === "catalog") {
+        publishedCatalog = normalizeWidgetCatalogSubjects(current.subjects ?? [])
+      } else if (current.target) {
+        const currentCatalog = await readCurrentLocalWidgetCatalog()
+        if (currentCatalog.some((subject) => subject.id === current.target!.subjectId)) publishedCatalog = currentCatalog
+      }
       const response = await fetch("/api/inscreen/widget-targets", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-inscreen-config-token": configToken },
-        body: JSON.stringify(current.kind === "catalog" ? { subjects: current.subjects } : { target: current.target }),
+        body: JSON.stringify(current.kind === "catalog"
+          ? { subjects: publishedCatalog }
+          : publishedCatalog
+            ? { subjects: publishedCatalog, target: current.target }
+            : { target: current.target }),
         cache: "no-store",
       })
       const payload = await response.json().catch(() => null) as { error?: string; revision?: number; updatedAt?: string } | null
@@ -371,11 +406,10 @@ async function runLocalWidgetTargetSyncQueue() {
         ...latest.published,
         revision: Number(payload?.revision) || latest.published?.revision || 0,
         lastPublishedAt: payload?.updatedAt || new Date().toISOString(),
-        ...(current.kind === "catalog"
-          ? { catalogSignature: JSON.stringify(current.subjects ?? []) }
-          : current.target
-            ? { targetSignatures: { ...latest.published?.targetSignatures, [getWidgetTargetKey(current.target)]: getWidgetTargetSignature(current.target) } }
-            : {}),
+        ...(publishedCatalog ? { catalogSignature: JSON.stringify(publishedCatalog) } : {}),
+        ...(current.kind === "target" && current.target
+          ? { targetSignatures: { ...latest.published?.targetSignatures, [getWidgetTargetKey(current.target)]: getWidgetTargetSignature(current.target) } }
+          : {}),
       }
       await writeWidgetTargetSyncManifest(latest.items.filter((item) => item.id !== current.id), published)
     } catch (error) {

@@ -1,5 +1,5 @@
 .root { position:fixed; inset:0; overflow:hidden; color:#fff4dc; background:#a65d3b center/cover no-repeat; font-family:Georgia,"Times New Roman",serif; }
-.editorOnly { position:fixed; z-index:100; inset:0; overflow:hidden; color:#1f1f1f; background:var(--tt-bg-color,#fff); }
+.editorOnly { position:fixed; z-index:40; inset:0; overflow:hidden; color:#1f1f1f; background:var(--tt-bg-color,#fff); }
 .editorLoading { min-height:100dvh; display:grid; place-items:center; color:#625f5a; background:#fff; font:14px system-ui,sans-serif; }
 .topbar { position:fixed; z-index:30; top:0; left:0; right:0; min-height:84px; padding:10px 14px; display:flex; align-items:flex-start; gap:12px; background:linear-gradient(rgba(48,18,8,.68),rgba(48,18,8,0)); pointer-events:none; }
 .topbar button { pointer-events:auto; }

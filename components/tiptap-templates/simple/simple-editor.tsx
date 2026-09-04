@@ -285,6 +285,10 @@ export function SimpleEditor({
     }
   }, [isMobile, mobileView])
 
+  useEffect(() => {
+    if (mobileView !== "main") toolbarRef.current?.scrollTo({ left: 0, behavior: "auto" })
+  }, [mobileView])
+
   const openSearchAndReplace = useCallback(() => {
     setMobileView("main")
     setIsSearchAndReplaceOpen(true)
