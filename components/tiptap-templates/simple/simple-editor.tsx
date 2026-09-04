@@ -307,7 +307,7 @@ export function SimpleEditor({
   return (
     <div className={editable ? "simple-editor-wrapper" : "simple-editor-wrapper simple-editor-readonly"}>
       <EditorContext.Provider value={{ editor }}>
-        {editable ? <Toolbar
+        {editable && editor ? <Toolbar
           ref={toolbarRef}
           style={{
             ...(isMobile
@@ -334,7 +334,7 @@ export function SimpleEditor({
           )}
         </Toolbar> : null}
 
-        {editable ? <SearchAndReplace
+        {editable && editor ? <SearchAndReplace
           className="simple-editor-search-and-replace"
           open={isSearchAndReplaceOpen}
           onOpen={openSearchAndReplace}

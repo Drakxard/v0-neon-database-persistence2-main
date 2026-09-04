@@ -49,7 +49,7 @@ export function createEmptySynthesisWorkspace(): SynthesisWorkspaceV2 {
     revision: 0,
     updatedAt: new Date(0).toISOString(),
     defaultScale: 1,
-    document: { type: "doc", content: [] },
+    document: { type: "doc", content: [{ type: "paragraph" }] },
     layout: {},
   }
 }
@@ -77,8 +77,15 @@ export function ensureSynthesisDocument(
   candidate.type = "doc"
   candidate.content = Array.isArray(candidate.content) ? candidate.content : []
 
+  if (candidate.content.length === 0) {
+    candidate.content.push({ type: "paragraph" })
+  }
+
+  const isEmptyDocument = candidate.content.length === 1
+    && candidate.content[0]?.type === "paragraph"
+    && (candidate.content[0].content?.length ?? 0) === 0
   const firstHeading = candidate.content.findIndex((node) => node?.type === "heading")
-  if (candidate.content.length && firstHeading !== 0) {
+  if (!isEmptyDocument && firstHeading !== 0) {
     const orphanEnd = firstHeading < 0 ? candidate.content.length : firstHeading
     const orphan = candidate.content.splice(0, orphanEnd)
     candidate.content.unshift(

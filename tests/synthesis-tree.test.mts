@@ -23,6 +23,7 @@ import {
 } from "../lib/synthesis-context.ts"
 import {
   SYNTHESIS_LOCAL_IMAGE_PREFIX,
+  createEmptySynthesisWorkspace,
   deriveSynthesisNodes,
   ensureSynthesisDocument,
   extractSynthesisBranchDocument,
@@ -125,6 +126,29 @@ test("Síntesis queda solo local y su endpoint R2 está desactivado", () => {
   assert.match(home, /openCurrentSubjectSynthesis/)
   assert.match(home, /wood-plaque\.png/)
   assert.doesNotMatch(home, /href="\/sintesis"/)
+})
+
+test("v2 representa una Síntesis vacía con un párrafo editable sin crear nodos", () => {
+  const emptyDocument = { type: "doc", content: [{ type: "paragraph" }] }
+  const workspace = createEmptySynthesisWorkspace()
+  assert.deepEqual(workspace.document, emptyDocument)
+  assert.deepEqual(deriveSynthesisNodes(workspace.document), [])
+
+  let generatedIds = 0
+  const migratedDocument = ensureSynthesisDocument(
+    { type: "doc", content: [] },
+    () => `unexpected-${++generatedIds}`
+  )
+  assert.deepEqual(migratedDocument, emptyDocument)
+  assert.equal(generatedIds, 0)
+  assert.deepEqual(deriveSynthesisNodes(migratedDocument), [])
+
+  const normalizedWorkspace = normalizeSynthesisWorkspace({
+    version: 2,
+    document: { type: "doc", content: [] },
+    layout: {},
+  })
+  assert.deepEqual(normalizedWorkspace.document, emptyDocument)
 })
 
 test("v2 deriva H1/H2/H3 y listas simples, numeradas, de tareas y anidadas", () => {
