@@ -1,10 +1,5 @@
 .root { position:fixed; inset:0; overflow:hidden; color:#fff4dc; background:#a65d3b center/cover no-repeat; font-family:Georgia,"Times New Roman",serif; }
 .editorOnly { position:fixed; z-index:40; inset:0; overflow:hidden; color:#1f1f1f; background:var(--tt-bg-color,#fff); }
-.editorOnly { display:flex; flex-direction:column; }
-.editorOnly > :global(.simple-editor-wrapper) { flex:1; min-height:0; height:auto; }
-.saveBar { display:flex; flex:0 0 auto; align-items:center; justify-content:space-between; gap:12px; padding:6px 12px; border-bottom:1px solid #ccc; color:var(--tt-theme-text,#222); font:12px/1.4 system-ui,sans-serif; }
-.saveBar button { padding:6px 12px; border:1px solid #aaa; border-radius:6px; background:transparent; color:inherit; cursor:pointer; }
-.saveBar button:disabled { opacity:.5; cursor:default; }
 .editorLoading { min-height:100dvh; display:grid; place-items:center; color:#625f5a; background:#fff; font:14px system-ui,sans-serif; }
 .topbar { position:fixed; z-index:30; top:0; left:0; right:0; min-height:84px; padding:10px 14px; display:flex; align-items:flex-start; gap:12px; background:linear-gradient(rgba(48,18,8,.68),rgba(48,18,8,0)); pointer-events:none; }
 .topbar button { pointer-events:auto; }

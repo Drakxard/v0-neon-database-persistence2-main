@@ -29,6 +29,7 @@ const SimpleEditor = dynamic(
 )
 
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
+const SAVE_ERROR_MESSAGE = "No se pudo guardar. Tus cambios siguen en memoria; reintentá con Ctrl+S antes de salir."
 type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
 
 function readLocalWorkspace(key: string) {
@@ -47,11 +48,13 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
   const [message, setMessage] = useState("")
-  const [saveStatus, setSaveStatus] = useState<"pending" | "saved" | "error">("saved")
   const autosave = useMemo(() => createLocalAutosave(() => {
     localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
     localStorage.removeItem(pendingKey)
-  }, setSaveStatus), [pendingKey, storageKey])
+  }, (status) => {
+    if (status === "error") setMessage(SAVE_ERROR_MESSAGE)
+    else if (status === "saved") setMessage((current) => current === SAVE_ERROR_MESSAGE ? "" : current)
+  }), [pendingKey, storageKey])
   const [currentParentId, setCurrentParentId] = useState<string | null>(null)
   const [editorSession, setEditorSession] = useState<EditorSession | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
@@ -238,11 +241,6 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes])
 
   if (editorSession) return <main className={styles.editorOnly}>
-    <div className={styles.saveBar}>
-      <button onClick={() => { if (autosave.flush()) window.history.back() }}>Volver</button>
-      <span role="status">{saveStatus === "saved" ? "Guardado en este navegador" : saveStatus === "pending" ? "Cambios sin guardar…" : "No se pudo guardar. Reintentá antes de salir."}</span>
-      <button onClick={() => autosave.flush()} disabled={saveStatus === "saved"}>Guardar</button>
-    </div>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
