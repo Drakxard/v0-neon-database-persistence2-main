@@ -37,7 +37,6 @@ import "@/components/tiptap-node/paragraph-node/paragraph-node.scss"
 
 // --- Tiptap UI ---
 import { HeadingDropdownMenu } from "@/components/tiptap-ui/heading-dropdown-menu"
-import { ImageUploadButton } from "@/components/tiptap-ui/image-upload-button"
 import { ListDropdownMenu } from "@/components/tiptap-ui/list-dropdown-menu"
 import { BlockquoteButton } from "@/components/tiptap-ui/blockquote-button"
 import { CodeBlockButton } from "@/components/tiptap-ui/code-block-button"
@@ -73,6 +72,7 @@ import { useCursorVisibility } from "@/hooks/use-cursor-visibility"
 import { ThemeToggle } from "@/components/tiptap-templates/simple/theme-toggle"
 import { FontSizeMenu } from "@/components/tiptap-templates/simple/font-size-menu"
 import { LocalImage } from "@/components/synthesis/local-image-extension"
+import { LocalImagePaste } from "@/components/synthesis/local-image-paste"
 import { StructuralId } from "@/components/synthesis/structural-id-extension"
 
 // --- Lib ---
@@ -158,12 +158,6 @@ const MainToolbarContent = ({
         <TextAlignButton align="center" />
         <TextAlignButton align="right" />
         <TextAlignButton align="justify" />
-      </ToolbarGroup>
-
-      <ToolbarSeparator />
-
-      <ToolbarGroup>
-        <ImageUploadButton text="Add" />
       </ToolbarGroup>
 
       <Spacer />
@@ -262,6 +256,7 @@ export function SimpleEditor({
       TaskItem.configure({ nested: true }),
       Highlight.configure({ multicolor: true }),
       LocalImage,
+      LocalImagePaste.configure({ onError: (message) => onError?.(message) }),
       StructuralId,
       Typography,
       Superscript,
