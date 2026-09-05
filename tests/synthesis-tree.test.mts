@@ -173,7 +173,7 @@ test("v2 representa una Síntesis vacía con un párrafo editable sin crear nodo
   assert.deepEqual(normalizedWorkspace.document, emptyDocument)
 })
 
-test("v2 deriva H1/H2/H3 y listas simples, numeradas, de tareas y anidadas", () => {
+test("v2 deriva nodos por encabezados y conserva las listas como contenido", () => {
   const document = ensureSynthesisDocument({ type: "doc", content: [
     { type: "heading", attrs: { level: 1, synthesisId: "h1" }, content: [{ type: "text", text: "Tema" }] },
     { type: "paragraph", content: [{ type: "text", marks: [{ type: "bold" }], text: "Introducción" }] },
@@ -187,9 +187,10 @@ test("v2 deriva H1/H2/H3 y listas simples, numeradas, de tareas y anidadas", () 
   ] }, () => "unused")
   const nodes = deriveSynthesisNodes(document)
   assert.deepEqual(nodes.map(({ id, parentId }) => [id, parentId]), [
-    ["h1", null], ["h2", "h1"], ["h3", "h2"], ["bullet", "h3"], ["ordered", "bullet"], ["task", "bullet"],
+    ["h1", null], ["h2", "h1"], ["h3", "h2"],
   ])
   assert.equal(nodes[0].body[0].content?.[0].marks?.[0].type, "bold")
+  assert.deepEqual(nodes[2].body, [document.content![4]])
 })
 
 test("v2 normaliza contenido huérfano y conserva IDs, posiciones y formato", () => {

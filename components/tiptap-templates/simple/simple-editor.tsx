@@ -120,7 +120,7 @@ const MainToolbarContent = ({
       <ToolbarSeparator />
 
       <ToolbarGroup>
-        <HeadingDropdownMenu modal={false} levels={[1, 2, 3]} />
+        <HeadingDropdownMenu modal={false} levels={[1, 2, 3, 4, 5, 6]} />
         <ListDropdownMenu
           modal={false}
           types={["bulletList", "orderedList", "taskList"]}
@@ -247,7 +247,7 @@ export function SimpleEditor({
     extensions: [
       StarterKit.configure({
         horizontalRule: false,
-        heading: { levels: [1, 2, 3] },
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         link: {
           openOnClick: false,
           enableClickSelection: true,

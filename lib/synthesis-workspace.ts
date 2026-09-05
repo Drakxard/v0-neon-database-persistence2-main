@@ -109,7 +109,7 @@ export function ensureSynthesisDocument(
   const isEmptyDocument = candidate.content.length === 1
     && candidate.content[0]?.type === "paragraph"
     && (candidate.content[0].content?.length ?? 0) === 0
-  const firstHeading = candidate.content.findIndex((node) => node?.type === "heading")
+  const firstHeading = candidate.content.findIndex((node) => node?.type === "heading" && (Number(node.attrs?.level) || 1) === 1)
   if (!isEmptyDocument && firstHeading !== 0) {
     const orphanEnd = firstHeading < 0 ? candidate.content.length : firstHeading
     const orphan = candidate.content.splice(0, orphanEnd)
@@ -133,41 +133,21 @@ export function ensureSynthesisDocument(
   return candidate
 }
 
-function firstLabelBlock(node: TiptapJSON) {
-  return (node.content ?? []).find((child) => !LIST_TYPES.has(child.type ?? ""))
-}
-
 export function deriveSynthesisNodes(documentInput: TiptapJSON): DerivedSynthesisNode[] {
   const document = ensureSynthesisDocument(documentInput)
   const nodes: DerivedSynthesisNode[] = []
   const headings: Array<{ id: string; level: number }> = []
   let activeHeadingId: string | null = null
 
-  const addList = (list: TiptapJSON, parentId: string | null, depth: number) => {
-    for (const item of list.content ?? []) {
-      if (item.type !== "listItem" && item.type !== "taskItem") continue
-      const id = structuralId(item)!
-      const label = plainText(firstLabelBlock(item)) || "Sin título"
-      const labelBlock = firstLabelBlock(item)
-      const body = (item.content ?? []).filter((child) => child !== labelBlock && !LIST_TYPES.has(child.type ?? ""))
-      nodes.push({ id, parentId, name: label, kind: item.type, level: depth, body, source: item })
-      for (const child of item.content ?? []) if (LIST_TYPES.has(child.type ?? "")) addList(child, id, depth + 1)
-    }
-  }
-
   for (const block of document.content ?? []) {
     if (block.type === "heading") {
-      const level = Math.max(1, Math.min(3, Number(block.attrs?.level) || 1))
+      const level = Math.max(1, Math.min(6, Number(block.attrs?.level) || 1))
       while (headings.length && headings[headings.length - 1].level >= level) headings.pop()
       const id = structuralId(block)!
       const parentId = headings.at(-1)?.id ?? null
       nodes.push({ id, parentId, name: plainText(block) || "Sin título", kind: "heading", level, body: [], source: block })
       headings.push({ id, level })
       activeHeadingId = id
-      continue
-    }
-    if (LIST_TYPES.has(block.type ?? "")) {
-      addList(block, activeHeadingId, (headings.at(-1)?.level ?? 0) + 1)
       continue
     }
     if (activeHeadingId) nodes.find((node) => node.id === activeHeadingId)?.body.push(block)
