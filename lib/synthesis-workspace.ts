@@ -141,7 +141,7 @@ export function deriveSynthesisNodes(documentInput: TiptapJSON): DerivedSynthesi
 
   for (const block of document.content ?? []) {
     if (block.type === "heading") {
-      const level = Math.max(1, Math.min(6, Number(block.attrs?.level) || 1))
+      const level = Math.max(1, Math.min(3, Number(block.attrs?.level) || 1))
       while (headings.length && headings[headings.length - 1].level >= level) headings.pop()
       const id = structuralId(block)!
       const parentId = headings.at(-1)?.id ?? null
