@@ -14,6 +14,7 @@ import { Subscript } from "@tiptap/extension-subscript"
 import { Superscript } from "@tiptap/extension-superscript"
 import { FindAndReplace } from "@tiptap/extension-find-and-replace"
 import { Selection } from "@tiptap/extensions"
+import { TableKit } from "@tiptap/extension-table"
 
 // --- UI Primitives ---
 import { Button } from "@/components/tiptap-ui-primitive/button"
@@ -71,6 +72,7 @@ import { useCursorVisibility } from "@/hooks/use-cursor-visibility"
 // --- Components ---
 import { ThemeToggle } from "@/components/tiptap-templates/simple/theme-toggle"
 import { FontSizeMenu } from "@/components/tiptap-templates/simple/font-size-menu"
+import { TableMenu } from "@/components/tiptap-templates/simple/table-menu"
 import { LocalImage } from "@/components/synthesis/local-image-extension"
 import { LocalImagePaste } from "@/components/synthesis/local-image-paste"
 import { StructuralId } from "@/components/synthesis/structural-id-extension"
@@ -126,6 +128,7 @@ const MainToolbarContent = ({
         {onFontSizeChange ? <FontSizeMenu value={fontSize} onChange={onFontSizeChange} /> : null}
         <BlockquoteButton />
         <CodeBlockButton />
+        <TableMenu />
       </ToolbarGroup>
 
       <ToolbarSeparator />
@@ -251,6 +254,7 @@ export function SimpleEditor({
         },
       }),
       HorizontalRule,
+      TableKit.configure({ table: { resizable: true, renderWrapper: true } }),
       TextAlign.configure({ types: ["heading", "paragraph", "image"] }),
       TaskList,
       TaskItem.configure({ nested: true }),
