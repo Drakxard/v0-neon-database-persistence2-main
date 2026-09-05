@@ -17,13 +17,14 @@
 .notice button { position:absolute; right:8px; top:4px; border:0; color:inherit; background:transparent; font-size:24px; cursor:pointer; }
 .conflict { position:fixed; z-index:44; top:88px; right:15px; width:min(92vw,420px); padding:14px; border:1px solid #e2b963; border-radius:14px; color:#382311; background:#fff8e9; box-shadow:0 12px 38px rgba(0,0,0,.32); font:14px system-ui,sans-serif; }
 .conflict p { margin:0 0 10px; }.conflict button { margin-right:7px; padding:8px 10px; display:inline-flex; align-items:center; gap:5px; border:1px solid #ac8c59; border-radius:8px; color:inherit; background:#fff; cursor:pointer; }.conflict svg { width:16px; }
-.board { position:absolute; inset:0; min-height:150dvh; overflow-x:hidden; overflow-y:auto; touch-action:pan-y; }
-.board::after { content:""; position:absolute; top:150dvh; left:0; width:1px; height:1px; pointer-events:none; }
+.board { position:absolute; inset:0; overflow-x:hidden; overflow-y:auto; touch-action:pan-y; }
+.board::after { content:""; position:absolute; top:var(--board-height,150dvh); left:0; width:1px; height:1px; pointer-events:none; }
 .nodeWrap { --node-scale:1; position:absolute; z-index:3; width:calc(164px * var(--node-scale)); height:calc(150px * var(--node-scale)); transform:translate(-50%,-50%); }
 .plaque,.draft { width:100%; height:100%; padding:25% 18% 20%; border:0; display:grid; place-items:center; color:#fff4dc; background:transparent url("/sintesis/wood-plaque.png") center/100% 100% no-repeat; filter:drop-shadow(0 10px 14px rgba(31,10,3,.38)); text-align:center; font:700 clamp(14px,calc(18px * var(--node-scale)),28px)/1.12 Georgia,serif; text-shadow:0 1px 4px #1e0903; overflow-wrap:anywhere; cursor:pointer; touch-action:none; }
 .plaque:hover,.plaque:focus-visible { filter:brightness(1.13) drop-shadow(0 10px 14px rgba(31,10,3,.38)); outline:0; }
 .nodeEdit { position:absolute; z-index:4; right:-8px; top:-8px; width:38px; height:38px; display:grid; place-items:center; border:1px solid #ffe9bd; border-radius:50%; opacity:0; transform:scale(.85); color:#4a250f; background:#fff2d0; box-shadow:0 4px 12px rgba(0,0,0,.35); transition:.14s; cursor:pointer; }
 .nodeEdit svg { width:17px; }.nodeWrap:hover .nodeEdit,.nodeWrap:focus-within .nodeEdit { opacity:1; transform:scale(1); }
+.nodeDelete { top:36px; }
 .draft { position:absolute; z-index:8; width:164px; height:150px; transform:translate(-50%,-50%); }
 .draft input { width:80%; padding:6px 3px; border:0; border-bottom:1px solid #ffe9bd; outline:0; color:#fff4dc; background:rgba(35,11,4,.38); text-align:center; font:700 17px Georgia,serif; }
 .emptyBoard { position:fixed; left:50%; top:50%; width:min(86vw,380px); transform:translate(-50%,-50%); text-align:center; color:#fff2d5; text-shadow:0 2px 5px #321006; font:17px/1.5 system-ui,sans-serif; pointer-events:none; }.emptyBoard svg { width:36px; height:36px; }

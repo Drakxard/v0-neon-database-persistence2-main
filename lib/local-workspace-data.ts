@@ -3873,27 +3873,42 @@ export async function syncLocalMaterialPdf(materialId: number, formData: FormDat
   const file = new File([fileEntry], normalizePdfFileName(String(formData.get("fileName") || material.file_name)), {
     type: "application/pdf",
   })
-  await persistWorkspaceBlob(material.drive_file_id, file)
+  // Read the bytes before overwriting: File System Access File snapshots become
+  // unreadable once their underlying file changes.
+  const originalFile = new Blob([await (await getWorkspaceFile(material.drive_file_id)).arrayBuffer()], { type: "application/pdf" })
+  const manifest = await readMaterialManifest(material.subject_id, material.week_number)
+  const tagManifest = await readTagManifest()
   const updatedMaterial = {
     ...material,
     file_name: file.name,
     drive_mime_type: file.type || "application/pdf",
     updated_at: nowIso(),
   }
-  const manifest = await readMaterialManifest(material.subject_id, material.week_number)
-  await writeMaterialManifest(
-    material.subject_id,
-    material.week_number,
-    manifest.materials.map((candidate) => (candidate.id === materialId ? updatedMaterial : candidate))
-  )
-  await enqueueLocalMaterialDriveUpload(updatedMaterial, "", true)
-  const tagManifest = await readTagManifest()
-  await writeTagManifest({
-    ...tagManifest,
-    regions: Object.fromEntries(
-      Object.entries(tagManifest.regions).filter(([key]) => !key.startsWith(`${materialId}:`))
-    ),
-  })
+  try {
+    await persistWorkspaceBlob(material.drive_file_id, file)
+    await writeMaterialManifest(
+      material.subject_id,
+      material.week_number,
+      manifest.materials.map((candidate) => (candidate.id === materialId ? updatedMaterial : candidate))
+    )
+    await writeTagManifest({
+      ...tagManifest,
+      regions: Object.fromEntries(
+        Object.entries(tagManifest.regions).filter(([key]) => !key.startsWith(`${materialId}:`))
+      ),
+    })
+    await enqueueLocalMaterialDriveUpload(updatedMaterial, "", true)
+  } catch (error) {
+    const restored = await Promise.allSettled([
+      persistWorkspaceBlob(material.drive_file_id, originalFile),
+      writeMaterialManifest(material.subject_id, material.week_number, manifest.materials),
+      writeTagManifest(tagManifest),
+    ])
+    if (restored.some((result) => result.status === "rejected")) {
+      throw new Error("No se pudo completar el reemplazo ni restaurar todos los datos del PDF. El desarrollo de Síntesis se conservó.", { cause: error })
+    }
+    throw error
+  }
   return updatedMaterial
 }
 

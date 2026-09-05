@@ -16,6 +16,23 @@ export type TiptapJSON = {
 
 export type SynthesisNodeLayout = { x: number; y: number; scale: number }
 
+export type SynthesisSourceLink = { nodeId: string; autoTitle: string; containerId?: number; dismissed?: boolean }
+export type SynthesisSources = {
+  containers: Record<string, SynthesisSourceLink>
+  materials: Record<string, SynthesisSourceLink>
+}
+
+function normalizeSynthesisSources(input: SynthesisSources): SynthesisSources {
+  const normalizeLinks = (links: Record<string, SynthesisSourceLink>) => Object.fromEntries(
+    Object.entries(links ?? {}).filter(([, link]) => link && typeof link.nodeId === "string" && typeof link.autoTitle === "string")
+      .map(([id, link]) => [id, { nodeId: link.nodeId, autoTitle: link.autoTitle,
+        ...(Number.isInteger(link.containerId) ? { containerId: link.containerId } : {}),
+        ...(link.dismissed ? { dismissed: true } : {}),
+      }])
+  )
+  return { containers: normalizeLinks(input.containers), materials: normalizeLinks(input.materials) }
+}
+
 export type SynthesisWorkspaceV2 = {
   version: typeof SYNTHESIS_WORKSPACE_VERSION
   revision: number
@@ -23,6 +40,7 @@ export type SynthesisWorkspaceV2 = {
   defaultScale: number
   document: TiptapJSON
   layout: Record<string, SynthesisNodeLayout>
+  sources?: SynthesisSources
 }
 
 export type DerivedSynthesisNode = {
@@ -156,16 +174,34 @@ export function reconcileSynthesisLayout(
   defaultScale = 1
 ) {
   const next: Record<string, SynthesisNodeLayout> = {}
-  const siblingCounts = new Map<string, number>()
+  const viewportWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1366
+  const viewportHeight = typeof window !== "undefined" && window.innerHeight ? window.innerHeight : 768
+  const plaqueWidth = viewportWidth <= 640 ? 139 : 164
+  const plaqueHeight = viewportWidth <= 640 ? 127 : 150
+  const columns = Math.max(1, Math.min(4, Math.floor(viewportWidth / (plaqueWidth * defaultScale + 45))))
+  const rowHeight = (plaqueHeight * defaultScale + 45) / viewportHeight
+  const occupied = new Map<string, SynthesisNodeLayout[]>()
+  for (const node of nodes) {
+    if (!layout[node.id]) continue
+    const key = node.parentId ?? "root"
+    occupied.set(key, [...(occupied.get(key) ?? []), layout[node.id]])
+  }
   for (const node of nodes) {
     if (layout[node.id]) {
       next[node.id] = layout[node.id]
       continue
     }
     const key = node.parentId ?? "root"
-    const index = siblingCounts.get(key) ?? 0
-    siblingCounts.set(key, index + 1)
-    next[node.id] = { x: 0.22 + (index % 4) * 0.19, y: 0.28 + Math.floor(index / 4) * 0.24, scale: defaultScale }
+    const positions = occupied.get(key) ?? []
+    let index = 0
+    let position: SynthesisNodeLayout
+    do {
+      position = { x: ((index % columns) + 0.5) / columns, y: Math.max(0.28, (100 + plaqueHeight * defaultScale / 2) / viewportHeight) + Math.floor(index / columns) * rowHeight, scale: defaultScale }
+      index++
+    } while (positions.some((p) => Math.abs(p.x - position.x) < (plaqueWidth * (p.scale + defaultScale) / 2 + 35) / viewportWidth
+      && Math.abs(p.y - position.y) < (plaqueHeight * (p.scale + defaultScale) / 2 + 35) / viewportHeight))
+    next[node.id] = position
+    occupied.set(key, [...positions, position])
   }
   return next
 }
@@ -180,7 +216,7 @@ export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV
     if (!position || typeof position !== "object") continue
     const p = position as Partial<SynthesisNodeLayout>
     if ([p.x, p.y, p.scale].every(Number.isFinite)) layout[id] = {
-      x: Math.max(0, Math.min(1, Number(p.x))), y: Math.max(0.1, Math.min(4, Number(p.y))), scale: Math.max(0.5, Math.min(2, Number(p.scale))),
+      x: Math.max(0, Math.min(1, Number(p.x))), y: Math.max(0.1, Number(p.y)), scale: Math.max(0.5, Math.min(2, Number(p.scale))),
     }
   }
   const nodes = deriveSynthesisNodes(document)
@@ -191,6 +227,7 @@ export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV
     defaultScale,
     document,
     layout: reconcileSynthesisLayout(nodes, layout, defaultScale),
+    ...(value.sources ? { sources: normalizeSynthesisSources(value.sources) } : {}),
   }
 }
 

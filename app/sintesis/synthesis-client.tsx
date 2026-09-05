@@ -3,7 +3,12 @@
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Pencil } from "lucide-react"
+import { ArrowLeft, Pencil, Trash2 } from "lucide-react"
+import { fetchSubjectMaterialContainers } from "@/lib/material-containers-client"
+import { requireOkJson } from "@/lib/client/api"
+import type { SubjectDayMaterial } from "@/lib/study-types"
+import { reconcileSynthesisMaterials, recordSynthesisRemovals, removeSynthesisNode } from "@/lib/synthesis-material-links"
+import { readMaterialSynthesis, SYNTHESIS_MATERIALS_CHANGED_EVENT } from "@/lib/client/synthesis-materials"
 import backgroundImage from "../../sintesis/sintesis-fondo.jpg"
 import { buildSynthesisLocalStorageKey, buildSynthesisReturnTokenStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
 import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
@@ -11,7 +16,7 @@ import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
   extractSynthesisBranchDocument, normalizeSynthesisWorkspace,
-  reconcileSynthesisLayout, replaceSynthesisBranch, scaleSynthesisWorkspace,
+  replaceSynthesisBranch, scaleSynthesisWorkspace,
   referencedLocalImageIds,
   type SynthesisWorkspaceV2, type TiptapJSON,
 } from "@/lib/synthesis-workspace"
@@ -48,23 +53,65 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const suppressClickRef = useRef(false)
   const editorHistoryRef = useRef(false)
   const removedImageIdsRef = useRef(new Set<string>())
+  const editorOpenRef = useRef(false)
   const nodes = useMemo(() => deriveSynthesisNodes(workspace.document), [workspace.document])
 
   const acceptWorkspace = useCallback((input: SynthesisWorkspaceV2) => {
     const normalized = normalizeSynthesisWorkspace(input)
+    localStorage.setItem(storageKey, JSON.stringify(normalized))
     workspaceRef.current = normalized
     setWorkspace(normalized)
-    localStorage.setItem(storageKey, JSON.stringify(normalized))
     return normalized
   }, [storageKey])
 
   useEffect(() => {
     const cached = readLocalWorkspace(storageKey)
     const pending = readLocalWorkspace(pendingKey)
-    const local = pending ?? cached
-    if (local) { workspaceRef.current = local; setWorkspace(local); localStorage.setItem(storageKey, JSON.stringify(local)) }
+    const local = pending ?? cached ?? createEmptySynthesisWorkspace()
+    workspaceRef.current = local; setWorkspace(local); localStorage.setItem(storageKey, JSON.stringify(local))
+    setCurrentParentId(null); setEditorSession(null); editorOpenRef.current = false
     if (pending) localStorage.removeItem(pendingKey)
   }, [pendingKey, storageKey])
+
+  useEffect(() => {
+    if (currentParentId && !nodes.some((node) => node.id === currentParentId)) setCurrentParentId(null)
+  }, [currentParentId, nodes])
+
+  useEffect(() => {
+    let disposed = false
+    let loading = false
+    const refresh = async () => {
+      if (loading || editorOpenRef.current) return
+      loading = true
+      try {
+        const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: String(context.weekNumber), scope: "week" })
+        const results = await Promise.allSettled([
+          fetchSubjectMaterialContainers(context.subjectId),
+          fetch(`/api/subject-day-materials?${params}`, { cache: "no-store" })
+            .then((response) => requireOkJson<SubjectDayMaterial[]>(response, "No se pudieron cargar los PDF de Síntesis.")),
+        ])
+        const [containers, materials] = results
+        if (containers.status === "rejected") throw containers.reason
+        if (materials.status === "rejected") throw materials.reason
+        if (disposed || editorOpenRef.current) return
+        const latest = readMaterialSynthesis(context) ?? workspaceRef.current
+        acceptWorkspace(reconcileSynthesisMaterials(latest, containers.value, materials.value))
+      } catch (error) {
+        if (!disposed) setMessage(error instanceof Error ? error.message : "No se pudo actualizar Síntesis.")
+      } finally { loading = false }
+    }
+    const onStorage = (event: StorageEvent) => { if (event.key === storageKey) void refresh() }
+    void refresh()
+    window.addEventListener("focus", refresh)
+    window.addEventListener("storage", onStorage)
+    window.addEventListener(SYNTHESIS_MATERIALS_CHANGED_EVENT, refresh)
+    return () => {
+      disposed = true
+      window.removeEventListener("focus", refresh)
+      window.removeEventListener("storage", onStorage)
+      window.removeEventListener(SYNTHESIS_MATERIALS_CHANGED_EVENT, refresh)
+    }
+  }, [acceptWorkspace, context.subjectId, context.weekNumber, storageKey])
 
   useEffect(() => {
     if (legacyReturnToken) sessionStorage.setItem(returnTokenKey, legacyReturnToken)
@@ -92,7 +139,8 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const removedImageIds = [...removedImageIdsRef.current]
     removedImageIdsRef.current.clear()
     await Promise.allSettled(removedImageIds.map(deleteSynthesisImage))
-    setCurrentParentId(session.returnParentId); setEditorSession(null); editorHistoryRef.current = false
+    setCurrentParentId(session.returnParentId); setEditorSession(null); editorHistoryRef.current = false; editorOpenRef.current = false
+    window.dispatchEvent(new Event(SYNTHESIS_MATERIALS_CHANGED_EVENT))
   }, [editorSession, storageKey])
 
   useEffect(() => {
@@ -102,6 +150,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [closeEditor])
 
   const openEditor = (nodeId: string | null) => {
+    editorOpenRef.current = true
     const document = nodeId ? extractSynthesisBranchDocument(workspaceRef.current.document, nodeId) : workspaceRef.current.document
     removedImageIdsRef.current.clear()
     setEditorSession({ nodeId, document, baseDocument: workspaceRef.current.document, normalizationId: createSynthesisId(), returnParentId: currentParentId, key: Date.now() })
@@ -121,8 +170,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const nextImageIds = new Set(referencedLocalImageIds(completeDocument))
     for (const id of previousImageIds) if (!nextImageIds.has(id)) removedImageIdsRef.current.add(id)
     for (const id of nextImageIds) removedImageIdsRef.current.delete(id)
-    const derived = deriveSynthesisNodes(completeDocument)
-    acceptWorkspace({ ...workspaceRef.current, document: completeDocument, layout: reconcileSynthesisLayout(derived, workspaceRef.current.layout, workspaceRef.current.defaultScale) })
+    acceptWorkspace(recordSynthesisRemovals(workspaceRef.current, completeDocument))
   }, [acceptWorkspace, editorSession])
 
   const goHome = useCallback(() => {
@@ -159,6 +207,16 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const currentNodes = childrenOf(nodes, currentParentId)
   const currentNode = currentParentId ? nodes.find((node) => node.id === currentParentId) ?? null : null
 
+  const deleteNode = (nodeId: string) => {
+    const next = removeSynthesisNode(workspaceRef.current, nodeId)
+    const retainedImages = new Set(referencedLocalImageIds(next.document))
+    const removed = referencedLocalImageIds(workspaceRef.current.document).filter((id) => !retainedImages.has(id))
+    try {
+      acceptWorkspace(next)
+      void Promise.allSettled(removed.map(deleteSynthesisImage))
+    } catch { setMessage("No se pudo guardar la eliminación del nodo.") }
+  }
+
   return <main className={styles.root} style={{ backgroundImage: `linear-gradient(rgba(74,30,14,.2),rgba(74,30,14,.2)), url(${backgroundImage.src})` }}>
     <header className={styles.topbar}>
       <button className={styles.backPlaque} onClick={() => {
@@ -168,7 +226,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       <div className={styles.zoom}><button onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
     </header>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
-    <section className={styles.board} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
+    <section className={styles.board} style={{ "--board-height": `${Math.max(1.5, ...currentNodes.map((node) => (workspace.layout[node.id]?.y ?? 0) + 0.3)) * 100}dvh` } as React.CSSProperties} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
         const position = workspace.layout[node.id] ?? { x: 0.5, y: 0.4, scale: 1 }
         return <div key={node.id} className={styles.nodeWrap} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}dvh`, "--node-scale": position.scale } as React.CSSProperties}>
           <button className={styles.plaque} onPointerDown={(event) => {
@@ -186,6 +244,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
             setCurrentParentId(node.id)
           }} aria-label={`Abrir ${node.name}`}>{node.name}</button>
           <button className={styles.nodeEdit} onPointerDown={(event) => event.stopPropagation()} onClick={() => openEditor(node.id)} aria-label={`Editar ${node.name}`} title="Editar"><Pencil /></button>
+          <button className={`${styles.nodeEdit} ${styles.nodeDelete}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => deleteNode(node.id)} aria-label={`Eliminar ${node.name} de Síntesis`} title="Eliminar de Síntesis"><Trash2 /></button>
         </div>
       })}</section>
   </main>

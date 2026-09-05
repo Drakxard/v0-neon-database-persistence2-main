@@ -74,6 +74,8 @@ import {
 } from "@/lib/material-containers-client"
 import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { buildSynthesisReturnTokenStorageKey } from "@/lib/synthesis-context"
+import { readMaterialSynthesis, writeMaterialSynthesis } from "@/lib/client/synthesis-materials"
+import { hasSynthesisMaterialDevelopment, removeSynthesisMaterial, renameSynthesisMaterial } from "@/lib/synthesis-material-links"
 import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type {
@@ -1983,6 +1985,9 @@ export function SubjectWheel({
   const [dialogShowAllSubjectsForDay, setDialogShowAllSubjectsForDay] = useState(false)
   const [selectedPracticeMaterialId, setSelectedPracticeMaterialId] = useState<number | null>(null)
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<number | null>(null)
+  const [synthesisDeleteTarget, setSynthesisDeleteTarget] = useState<SubjectDayMaterial | null>(null)
+  const [synthesisDeleteError, setSynthesisDeleteError] = useState("")
+  const replacementPdfInputRef = useRef<HTMLInputElement>(null)
   const [tagDropMaterialId, setTagDropMaterialId] = useState<number | null>(null)
   const [isLinkDialogOpen, setIsLinkDialogOpen] = useState(false)
   const [linkEntryId, setLinkEntryId] = useState<number | null>(null)
@@ -5579,8 +5584,53 @@ export function SubjectWheel({
     pendingMaterialCheckupTimersRef.current.set(materialToUpdate.id, timerId)
   }
 
-  const deleteMaterial = async (materialToDelete: SubjectDayMaterial) => {
-    if (isDeletingMaterialId === materialToDelete.id) return
+  const materialSynthesisContext = (material: SubjectDayMaterial) => ({
+    subjectId: currentSubject?.id ?? material.subject_id,
+    weekNumber: material.week_number,
+  })
+
+  const replaceSynthesisPdf = async (file: File) => {
+    const target = synthesisDeleteTarget
+    if (!target || isDeletingMaterialId !== null) return
+    setIsDeletingMaterialId(target.id)
+    setSynthesisDeleteError("")
+    try {
+      const signature = new TextDecoder().decode(await file.slice(0, 1024).arrayBuffer())
+      if (!/\.pdf$/i.test(file.name) || !signature.includes("%PDF-")) throw new Error("Seleccioná un archivo PDF válido.")
+      const context = materialSynthesisContext(target)
+      // Verify the development can be read before changing the PDF.
+      readMaterialSynthesis(context)
+      const formData = new FormData()
+      formData.set("file", file)
+      formData.set("fileName", file.name)
+      const response = await fetch(`/api/subject-day-materials/${target.id}/sync`, { method: "POST", body: formData })
+      const updated = await requireOkJson<SubjectDayMaterial>(response, "No se pudo reemplazar el PDF.")
+      setMaterials((previous) => previous.map((material) => material.id === target.id ? updated : material))
+      setPendingMaterials((previous) => previous.map((material) => material.id === target.id ? { ...material, ...updated } : material))
+      setContinuePayload((previous) => previous?.material?.id === target.id ? { ...previous, material: updated } : previous)
+      const latest = readMaterialSynthesis(context)
+      if (latest) writeMaterialSynthesis(context, renameSynthesisMaterial(latest, target.id, updated.file_name))
+      setSynthesisDeleteTarget(null)
+    } catch (error) {
+      setSynthesisDeleteError(error instanceof Error ? error.message : "No se pudo reemplazar el PDF.")
+    } finally { setIsDeletingMaterialId(null) }
+  }
+
+  const deleteMaterial = async (materialToDelete: SubjectDayMaterial, deleteDevelopment = false) => {
+    if (isDeletingMaterialId !== null) return
+    const context = materialSynthesisContext(materialToDelete)
+    try {
+      const synthesis = readMaterialSynthesis(context)
+      if (!deleteDevelopment && synthesis && hasSynthesisMaterialDevelopment(synthesis, materialToDelete.id)) {
+        setSynthesisDeleteError("")
+        setSynthesisDeleteTarget(materialToDelete)
+        return
+      }
+    } catch {
+      setEntriesError("No se pudo leer el desarrollo de Síntesis. El PDF no se eliminó.")
+      setContinueError("No se pudo leer el desarrollo de Síntesis. El PDF no se eliminó.")
+      return
+    }
 
     const mode: ContinueMode = materialToDelete.material_type === "theory" ? "theory" : "practice"
     const existingTimer = pendingMaterialCheckupTimersRef.current.get(materialToDelete.id)
@@ -5632,11 +5682,15 @@ export function SubjectWheel({
         setSelectedPracticeMaterialId(null)
       }
       if (currentSubject) void loadMaterialContainers(currentSubject.id)
+      const latestSynthesis = readMaterialSynthesis(context)
+      if (latestSynthesis) writeMaterialSynthesis(context, removeSynthesisMaterial(latestSynthesis, materialToDelete.id))
+      setSynthesisDeleteTarget(null)
     } catch (error) {
       console.error("Failed to delete material:", error)
       const message = error instanceof Error ? error.message : "No se pudo borrar el archivo."
       setEntriesError(message)
       setContinueError(message)
+      setSynthesisDeleteError(message)
     } finally {
       setIsDeletingMaterialId(null)
     }
@@ -7919,6 +7973,33 @@ export function SubjectWheel({
             >
               {isCreatingTextPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Crear
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(synthesisDeleteTarget)} onOpenChange={(open) => {
+        if (!open && isDeletingMaterialId === null) setSynthesisDeleteTarget(null)
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>PDF con desarrollo en Síntesis</DialogTitle>
+            <DialogDescription>Este PDF tiene desarrollo en Síntesis. ¿Querés reemplazar el archivo o borrar también el desarrollo?</DialogDescription>
+          </DialogHeader>
+          <p className="break-all text-sm">{synthesisDeleteTarget?.file_name}</p>
+          <input ref={replacementPdfInputRef} type="file" accept=".pdf,application/pdf" className="hidden" aria-label="Seleccionar PDF de reemplazo" onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ""
+            if (file) void replaceSynthesisPdf(file)
+          }} />
+          {synthesisDeleteError ? <p role="alert" className="text-sm text-red-600">{synthesisDeleteError}</p> : null}
+          <DialogFooter className="gap-2 sm:flex-wrap">
+            <Button variant="outline" disabled={isDeletingMaterialId !== null} onClick={() => setSynthesisDeleteTarget(null)}>Cancelar</Button>
+            <Button variant="destructive" disabled={isDeletingMaterialId !== null} onClick={() => {
+              if (synthesisDeleteTarget) void deleteMaterial(synthesisDeleteTarget, true)
+            }}>Borrar PDF y desarrollo</Button>
+            <Button disabled={isDeletingMaterialId !== null} onClick={() => replacementPdfInputRef.current?.click()}>
+              {isDeletingMaterialId !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Reemplazar PDF
             </Button>
           </DialogFooter>
         </DialogContent>
