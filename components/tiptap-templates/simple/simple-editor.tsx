@@ -75,6 +75,7 @@ import { FontSizeMenu } from "@/components/tiptap-templates/simple/font-size-men
 import { TableMenu } from "@/components/tiptap-templates/simple/table-menu"
 import { LocalImage } from "@/components/synthesis/local-image-extension"
 import { LocalImagePaste } from "@/components/synthesis/local-image-paste"
+import { CleanReferencePaste } from "@/components/synthesis/clean-reference-paste"
 import { StructuralId } from "@/components/synthesis/structural-id-extension"
 
 // --- Lib ---
@@ -261,6 +262,7 @@ export function SimpleEditor({
       Highlight.configure({ multicolor: true }),
       LocalImage,
       LocalImagePaste.configure({ onError: (message) => onError?.(message) }),
+      CleanReferencePaste,
       StructuralId,
       Typography,
       Superscript,
