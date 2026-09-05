@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { createEmptySynthesisWorkspace, deriveSynthesisNodes, normalizeSynthesisWorkspace, type SynthesisWorkspaceV2 } from "../lib/synthesis-workspace.ts"
+import { createEmptySynthesisWorkspace, deriveSynthesisNodes, normalizeSynthesisWorkspace, repairSynthesisLayout, type SynthesisWorkspaceV2 } from "../lib/synthesis-workspace.ts"
 import { hasSynthesisMaterialDevelopment, reconcileSynthesisMaterials, recordSynthesisRemovals, removeSynthesisMaterial, removeSynthesisNode, renameSynthesisMaterial } from "../lib/synthesis-material-links.ts"
 import { readMaterialSynthesis, writeMaterialSynthesis } from "../lib/client/synthesis-materials.ts"
 import { buildSynthesisLocalStorageKey } from "../lib/synthesis-context.ts"
@@ -15,6 +15,39 @@ const pdf = (id: number, container_id: number | null = 1, file_name = `Tema ${id
 const initial = () => reconcileSynthesisMaterials(createEmptySynthesisWorkspace(), containers, [pdf(1), pdf(2, 2)])
 const names = (workspace: SynthesisWorkspaceV2) => deriveSynthesisNodes(workspace.document).map((node) => node.name)
 const reload = (workspace: SynthesisWorkspaceV2) => normalizeSynthesisWorkspace(JSON.parse(JSON.stringify(workspace)))
+
+test("convertir un H2 en H1 busca espacio libre sin mover los elementos de la pantalla principal", () => {
+  const heading = (id: string, level: number) => ({ type: "heading", attrs: { synthesisId: id, level }, content: [{ type: "text", text: id }] })
+  const workspace = normalizeSynthesisWorkspace({
+    document: { type: "doc", content: [heading("padre", 1), heading("nuevo", 2), heading("existente", 1)] },
+    layout: { padre: { x: .125, y: .28, scale: 1 }, nuevo: { x: .5, y: .28, scale: 1.3 }, existente: { x: .5, y: .28, scale: 1 } },
+  })
+  const document = structuredClone(workspace.document)
+  document.content![1].attrs!.level = 1
+  const edited = recordSynthesisRemovals(workspace, document)
+  assert.deepEqual(edited.layout.existente, workspace.layout.existente)
+  assert.deepEqual(edited.layout.padre, workspace.layout.padre)
+  assert.notDeepEqual(edited.layout.nuevo, workspace.layout.nuevo)
+  assert.equal(edited.layout.nuevo.scale, 1.3)
+  assert.equal(deriveSynthesisNodes(edited.document).find((node) => node.id === "nuevo")?.parentId, null)
+  assert.deepEqual(repairSynthesisLayout(reload(edited)), edited)
+})
+
+test("corrige elementos ya superpuestos al cargar y respeta posiciones libres en pantallas distintas", () => {
+  const workspace = initial()
+  const ids = Object.values(workspace.sources!.containers).map((link) => link.nodeId)
+  for (const id of ids) workspace.layout[id] = { x: .5, y: .28, scale: 1 }
+  const imageChildId = workspace.sources!.materials[1].nodeId
+  workspace.layout[imageChildId] = { x: .5, y: .28, scale: 1 }
+  const repaired = repairSynthesisLayout(workspace)
+  assert.deepEqual(repaired.layout[ids[0]], workspace.layout[ids[0]])
+  assert.deepEqual(repaired.layout[imageChildId], workspace.layout[imageChildId])
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const a = repaired.layout[ids[i]], b = repaired.layout[ids[j]]
+    assert.ok(Math.abs(a.x - b.x) * 1366 >= 199 || Math.abs(a.y - b.y) * 768 >= 185)
+  }
+  assert.deepEqual(repaired.document, workspace.document)
+})
 
 test("tamaño general: documentos anteriores usan 16 px y la preferencia sobrevive a recarga y PDF nuevos", () => {
   assert.equal(normalizeSynthesisWorkspace(createEmptySynthesisWorkspace()).editorFontSize, 16)

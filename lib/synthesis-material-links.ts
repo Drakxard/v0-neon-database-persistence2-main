@@ -1,5 +1,5 @@
 import {
-  createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument, normalizeSynthesisWorkspace,
+  createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument, normalizeSynthesisWorkspace, repairSynthesisLayout,
   plainText, type SynthesisWorkspaceV2, type TiptapJSON, type SynthesisSourceLink,
 } from "./synthesis-workspace.ts"
 
@@ -10,7 +10,7 @@ export const synthesisPdfTitle = (name: string) => name.replace(/\.pdf$/i, "")
 
 /** Keep source identities outside the editor document, so changing a heading never unlinks a PDF. */
 export function recordSynthesisRemovals(previous: SynthesisWorkspaceV2, document: TiptapJSON): SynthesisWorkspaceV2 {
-  const next = normalizeSynthesisWorkspace({ ...previous, document })
+  const next = repairSynthesisLayout({ ...previous, document }, previous.document)
   if (!next.sources) return next
   const ids = new Set(deriveSynthesisNodes(next.document).map((node) => node.id))
   const previousIds = new Set(deriveSynthesisNodes(previous.document).map((node) => node.id))

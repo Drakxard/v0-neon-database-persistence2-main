@@ -15,7 +15,7 @@ import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
-  extractSynthesisBranchDocument, normalizeSynthesisWorkspace,
+  extractSynthesisBranchDocument, normalizeSynthesisWorkspace, repairSynthesisLayout,
   replaceSynthesisBranch, scaleSynthesisWorkspace,
   referencedLocalImageIds,
   type SynthesisWorkspaceV2, type TiptapJSON,
@@ -34,8 +34,7 @@ function readLocalWorkspace(key: string) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null")
     if (!parsed) return null
-    if (parsed.workspace) return normalizeSynthesisWorkspace(parsed.workspace)
-    return normalizeSynthesisWorkspace(parsed)
+    return repairSynthesisLayout(parsed.workspace ?? parsed)
   } catch { return null }
 }
 

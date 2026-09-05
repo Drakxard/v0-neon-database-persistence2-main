@@ -178,7 +178,8 @@ export function deriveSynthesisNodes(documentInput: TiptapJSON): DerivedSynthesi
 export function reconcileSynthesisLayout(
   nodes: DerivedSynthesisNode[],
   layout: Record<string, SynthesisNodeLayout>,
-  defaultScale = 1
+  defaultScale = 1,
+  repairOverlaps = false
 ) {
   const next: Record<string, SynthesisNodeLayout> = {}
   const viewportWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1366
@@ -188,28 +189,42 @@ export function reconcileSynthesisLayout(
   const columns = Math.max(1, Math.min(4, Math.floor(viewportWidth / (plaqueWidth * defaultScale + 45))))
   const rowHeight = (plaqueHeight * defaultScale + 45) / viewportHeight
   const occupied = new Map<string, SynthesisNodeLayout[]>()
+  const overlaps = (a: SynthesisNodeLayout, b: SynthesisNodeLayout) =>
+    Math.abs(a.x - b.x) < (plaqueWidth * (a.scale + b.scale) / 2 + 35) / viewportWidth
+    && Math.abs(a.y - b.y) < (plaqueHeight * (a.scale + b.scale) / 2 + 35) / viewportHeight
   for (const node of nodes) {
     if (!layout[node.id]) continue
     const key = node.parentId ?? "root"
-    occupied.set(key, [...(occupied.get(key) ?? []), layout[node.id]])
+    const positions = occupied.get(key) ?? []
+    if (repairOverlaps && positions.some((position) => overlaps(position, layout[node.id]))) continue
+    next[node.id] = layout[node.id]
+    occupied.set(key, [...positions, layout[node.id]])
   }
   for (const node of nodes) {
-    if (layout[node.id]) {
-      next[node.id] = layout[node.id]
-      continue
-    }
+    if (next[node.id]) continue
     const key = node.parentId ?? "root"
     const positions = occupied.get(key) ?? []
+    const scale = layout[node.id]?.scale ?? defaultScale
     let index = 0
     let position: SynthesisNodeLayout
     do {
-      position = { x: ((index % columns) + 0.5) / columns, y: Math.max(0.28, (100 + plaqueHeight * defaultScale / 2) / viewportHeight) + Math.floor(index / columns) * rowHeight, scale: defaultScale }
+      position = { x: ((index % columns) + 0.5) / columns, y: Math.max(0.28, (100 + plaqueHeight * scale / 2) / viewportHeight) + Math.floor(index / columns) * rowHeight, scale }
       index++
-    } while (positions.some((p) => Math.abs(p.x - position.x) < (plaqueWidth * (p.scale + defaultScale) / 2 + 35) / viewportWidth
-      && Math.abs(p.y - position.y) < (plaqueHeight * (p.scale + defaultScale) / 2 + 35) / viewportHeight))
+    } while (positions.some((p) => overlaps(p, position)))
     next[node.id] = position
     occupied.set(key, [...positions, position])
   }
+  return next
+}
+
+/** Reserve existing siblings first when editing moves a heading into their screen. */
+export function repairSynthesisLayout(workspace: SynthesisWorkspaceV2, previousDocument?: TiptapJSON) {
+  const next = normalizeSynthesisWorkspace(workspace)
+  const nodes = deriveSynthesisNodes(next.document)
+  const previousParents = new Map(deriveSynthesisNodes(previousDocument ?? next.document).map((node) => [node.id, node.parentId]))
+  const staysInPlace = (node: DerivedSynthesisNode) => previousParents.has(node.id) && previousParents.get(node.id) === node.parentId
+  const ordered = [...nodes.filter(staysInPlace), ...nodes.filter((node) => !staysInPlace(node))]
+  next.layout = reconcileSynthesisLayout(ordered, next.layout, next.defaultScale, true)
   return next
 }
 
