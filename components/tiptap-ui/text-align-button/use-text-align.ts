@@ -75,9 +75,11 @@ export function canSetTextAlign(
   if (!editor || editor.isDestroyed || !editor.isEditable) return false
   if (
     !isExtensionAvailable(editor, "textAlign") ||
-    isNodeTypeSelected(editor, ["image", "horizontalRule"])
+    isNodeTypeSelected(editor, ["horizontalRule"])
   )
     return false
+
+  if (align === "justify" && isNodeTypeSelected(editor, ["image"])) return false
 
   try {
     return editor.can().setTextAlign(align)

@@ -4,6 +4,12 @@ export const SYNTHESIS_WORKSPACE_PENDING_KEY = "inscreen:synthesis:pending-v2"
 export const SYNTHESIS_MAX_DOCUMENT_BYTES = 1_000_000
 export const SYNTHESIS_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 export const SYNTHESIS_LOCAL_IMAGE_PREFIX = "synthesis-local-image:"
+export const SYNTHESIS_EDITOR_FONT_SIZES = [12, 14, 16, 18, 20, 22, 24, 28, 32] as const
+export const SYNTHESIS_EDITOR_DEFAULT_FONT_SIZE = 16
+
+export function normalizeSynthesisEditorFontSize(value: unknown): number {
+  return SYNTHESIS_EDITOR_FONT_SIZES.some((size) => size === value) ? value as number : SYNTHESIS_EDITOR_DEFAULT_FONT_SIZE
+}
 
 export type TiptapJSON = {
   type?: string
@@ -41,6 +47,7 @@ export type SynthesisWorkspaceV2 = {
   document: TiptapJSON
   layout: Record<string, SynthesisNodeLayout>
   sources?: SynthesisSources
+  editorFontSize?: number
 }
 
 export type DerivedSynthesisNode = {
@@ -225,6 +232,7 @@ export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV
     revision: Math.max(0, Math.floor(Number(value.revision) || 0)),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
     defaultScale,
+    editorFontSize: normalizeSynthesisEditorFontSize(value.editorFontSize),
     document,
     layout: reconcileSynthesisLayout(nodes, layout, defaultScale),
     ...(value.sources ? { sources: normalizeSynthesisSources(value.sources) } : {}),

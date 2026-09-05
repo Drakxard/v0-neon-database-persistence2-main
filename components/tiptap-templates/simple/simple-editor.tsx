@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { EditorContent, EditorContext, useEditor } from "@tiptap/react"
 import type { Content } from "@tiptap/core"
 
@@ -71,13 +71,14 @@ import { useCursorVisibility } from "@/hooks/use-cursor-visibility"
 
 // --- Components ---
 import { ThemeToggle } from "@/components/tiptap-templates/simple/theme-toggle"
+import { FontSizeMenu } from "@/components/tiptap-templates/simple/font-size-menu"
 import { LocalImage } from "@/components/synthesis/local-image-extension"
 import { StructuralId } from "@/components/synthesis/structural-id-extension"
 
 // --- Lib ---
 import { MAX_FILE_SIZE } from "@/lib/tiptap-utils"
 import { saveSynthesisImage } from "@/lib/client/synthesis-images"
-import type { TiptapJSON } from "@/lib/synthesis-workspace"
+import { normalizeSynthesisEditorFontSize, type TiptapJSON } from "@/lib/synthesis-workspace"
 
 // --- Styles ---
 import "@/components/tiptap-templates/simple/simple-editor.scss"
@@ -93,6 +94,8 @@ const MainToolbarContent = ({
   isSearchAndReplaceOpen,
   searchAndReplaceButtonRef,
   isMobile,
+  fontSize,
+  onFontSizeChange,
 }: {
   onHighlighterClick: () => void
   onLinkClick: () => void
@@ -100,6 +103,8 @@ const MainToolbarContent = ({
   isSearchAndReplaceOpen: boolean
   searchAndReplaceButtonRef: React.RefObject<HTMLButtonElement | null>
   isMobile: boolean
+  fontSize: number
+  onFontSizeChange?: (size: number) => void
 }) => {
   return (
     <>
@@ -118,6 +123,7 @@ const MainToolbarContent = ({
           modal={false}
           types={["bulletList", "orderedList", "taskList"]}
         />
+        {onFontSizeChange ? <FontSizeMenu value={fontSize} onChange={onFontSizeChange} /> : null}
         <BlockquoteButton />
         <CodeBlockButton />
       </ToolbarGroup>
@@ -211,11 +217,15 @@ export function SimpleEditor({
   editable = true,
   onChange,
   onError,
+  fontSize,
+  onFontSizeChange,
 }: {
   content: TiptapJSON
   editable?: boolean
   onChange?: (document: TiptapJSON) => void
   onError?: (message: string) => void
+  fontSize?: number
+  onFontSizeChange?: (size: number) => void
 }) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
@@ -247,7 +257,7 @@ export function SimpleEditor({
         },
       }),
       HorizontalRule,
-      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      TextAlign.configure({ types: ["heading", "paragraph", "image"] }),
       TaskList,
       TaskItem.configure({ nested: true }),
       Highlight.configure({ multicolor: true }),
@@ -309,7 +319,8 @@ export function SimpleEditor({
   }, [closeSearchAndReplace, isSearchAndReplaceOpen, openSearchAndReplace])
 
   return (
-    <div className={editable ? "simple-editor-wrapper" : "simple-editor-wrapper simple-editor-readonly"}>
+    <div className={editable ? "simple-editor-wrapper" : "simple-editor-wrapper simple-editor-readonly"}
+      style={{ "--synthesis-editor-font-size": `${normalizeSynthesisEditorFontSize(fontSize)}px` } as CSSProperties}>
       <EditorContext.Provider value={{ editor }}>
         {editable && editor ? <Toolbar
           ref={toolbarRef}
@@ -329,6 +340,8 @@ export function SimpleEditor({
               isSearchAndReplaceOpen={isSearchAndReplaceOpen}
               searchAndReplaceButtonRef={searchAndReplaceButtonRef}
               isMobile={isMobile}
+              fontSize={normalizeSynthesisEditorFontSize(fontSize)}
+              onFontSizeChange={onFontSizeChange}
             />
           ) : (
             <MobileToolbarContent

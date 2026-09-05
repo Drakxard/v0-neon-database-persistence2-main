@@ -16,6 +16,19 @@ const initial = () => reconcileSynthesisMaterials(createEmptySynthesisWorkspace(
 const names = (workspace: SynthesisWorkspaceV2) => deriveSynthesisNodes(workspace.document).map((node) => node.name)
 const reload = (workspace: SynthesisWorkspaceV2) => normalizeSynthesisWorkspace(JSON.parse(JSON.stringify(workspace)))
 
+test("tamaño general: documentos anteriores usan 16 px y la preferencia sobrevive a recarga y PDF nuevos", () => {
+  assert.equal(normalizeSynthesisWorkspace(createEmptySynthesisWorkspace()).editorFontSize, 16)
+  const workspace = initial()
+  workspace.editorFontSize = 24
+  const saved = reload(workspace)
+  assert.equal(saved.editorFontSize, 24)
+  assert.deepEqual(saved.document, workspace.document)
+  const synced = reconcileSynthesisMaterials(saved, containers, [pdf(1), pdf(2, 2), pdf(3)])
+  assert.equal(synced.editorFontSize, 24)
+  assert.equal(removeSynthesisMaterial(synced, 1).editorFontSize, 24)
+  assert.equal(normalizeSynthesisWorkspace({ ...workspace, editorFontSize: -1 }).editorFontSize, 16)
+})
+
 test("genera contenedores vacíos y PDF por ID, quitando solo la extensión final", () => {
   const workspace = reconcileSynthesisMaterials(createEmptySynthesisWorkspace(), containers, [pdf(1, null, "Tema.pdf.PDF"), pdf(2, 1, "Tema.pdf.PDF"), pdf(3, 3), pdf(4, 3, "audio.mp3")])
   const nodes = deriveSynthesisNodes(workspace.document)

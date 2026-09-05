@@ -201,7 +201,11 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
 
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
-    <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage} />
+    <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
+      fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
+        try { acceptWorkspace({ ...workspaceRef.current, editorFontSize }) }
+        catch { setMessage("No se pudo guardar el tamaño del texto.") }
+      }} />
   </main>
 
   const currentNodes = childrenOf(nodes, currentParentId)
