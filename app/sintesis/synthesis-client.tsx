@@ -12,6 +12,7 @@ import { readMaterialSynthesis, SYNTHESIS_MATERIALS_CHANGED_EVENT } from "@/lib/
 import backgroundImage from "../../sintesis/sintesis-fondo.jpg"
 import { buildSynthesisLocalStorageKey, buildSynthesisReturnTokenStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
 import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
+import { createLocalAutosave } from "@/lib/client/local-autosave"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -46,6 +47,11 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
   const [message, setMessage] = useState("")
+  const [saveStatus, setSaveStatus] = useState<"pending" | "saved" | "error">("saved")
+  const autosave = useMemo(() => createLocalAutosave(() => {
+    localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
+    localStorage.removeItem(pendingKey)
+  }, setSaveStatus), [pendingKey, storageKey])
   const [currentParentId, setCurrentParentId] = useState<string | null>(null)
   const [editorSession, setEditorSession] = useState<EditorSession | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
@@ -57,20 +63,24 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
 
   const acceptWorkspace = useCallback((input: SynthesisWorkspaceV2) => {
     const normalized = normalizeSynthesisWorkspace(input)
-    localStorage.setItem(storageKey, JSON.stringify(normalized))
     workspaceRef.current = normalized
     setWorkspace(normalized)
+    autosave.markDirty()
+    if (!autosave.flush()) throw new Error("No se pudo guardar en este navegador. Tus cambios siguen en memoria; reintentá guardar antes de salir.")
     return normalized
-  }, [storageKey])
+  }, [autosave])
 
   useEffect(() => {
     const cached = readLocalWorkspace(storageKey)
     const pending = readLocalWorkspace(pendingKey)
     const local = pending ?? cached ?? createEmptySynthesisWorkspace()
-    workspaceRef.current = local; setWorkspace(local); localStorage.setItem(storageKey, JSON.stringify(local))
+    workspaceRef.current = local; setWorkspace(local)
     setCurrentParentId(null); setEditorSession(null); editorOpenRef.current = false
-    if (pending) localStorage.removeItem(pendingKey)
-  }, [pendingKey, storageKey])
+    if (pending) {
+      autosave.markDirty()
+      autosave.flush()
+    }
+  }, [autosave, pendingKey, storageKey])
 
   useEffect(() => {
     if (currentParentId && !nodes.some((node) => node.id === currentParentId)) setCurrentParentId(null)
@@ -80,7 +90,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     let disposed = false
     let loading = false
     const refresh = async () => {
-      if (loading || editorOpenRef.current) return
+      if (loading || editorOpenRef.current || autosave.dirty) return
       loading = true
       try {
         const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: String(context.weekNumber), scope: "week" })
@@ -92,7 +102,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         const [containers, materials] = results
         if (containers.status === "rejected") throw containers.reason
         if (materials.status === "rejected") throw materials.reason
-        if (disposed || editorOpenRef.current) return
+        if (disposed || editorOpenRef.current || autosave.dirty) return
         const latest = readMaterialSynthesis(context) ?? workspaceRef.current
         acceptWorkspace(reconcileSynthesisMaterials(latest, containers.value, materials.value))
       } catch (error) {
@@ -110,7 +120,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       window.removeEventListener("storage", onStorage)
       window.removeEventListener(SYNTHESIS_MATERIALS_CHANGED_EVENT, refresh)
     }
-  }, [acceptWorkspace, context.subjectId, context.weekNumber, storageKey])
+  }, [acceptWorkspace, autosave, context.subjectId, context.weekNumber, storageKey])
 
   useEffect(() => {
     if (legacyReturnToken) sessionStorage.setItem(returnTokenKey, legacyReturnToken)
@@ -124,29 +134,50 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [context.subjectId, context.weekNumber, legacyReturnToken, returnTokenKey, router])
 
   useEffect(() => {
-    const persistBeforeLeaving = () => {
-      localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
+    const persistBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (!autosave.dirty) return
+      autosave.flush()
+      if (autosave.dirty) {
+        event.preventDefault()
+        event.returnValue = ""
+      }
     }
-    window.addEventListener("pagehide", persistBeforeLeaving); window.addEventListener("beforeunload", persistBeforeLeaving)
-    return () => { window.removeEventListener("pagehide", persistBeforeLeaving); window.removeEventListener("beforeunload", persistBeforeLeaving) }
-  }, [storageKey])
+    const flush = () => { autosave.flush() }
+    const onVisibility = () => { if (document.visibilityState === "hidden") flush() }
+    window.addEventListener("pagehide", flush)
+    window.addEventListener("beforeunload", persistBeforeLeaving)
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      flush()
+      window.removeEventListener("pagehide", flush)
+      window.removeEventListener("beforeunload", persistBeforeLeaving)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [autosave])
 
   const closeEditor = useCallback(async () => {
     const session = editorSession
     if (!session) return
-    localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
+    if (!autosave.flush()) return
     const removedImageIds = [...removedImageIdsRef.current]
     removedImageIdsRef.current.clear()
-    await Promise.allSettled(removedImageIds.map(deleteSynthesisImage))
     setCurrentParentId(session.returnParentId); setEditorSession(null); editorHistoryRef.current = false; editorOpenRef.current = false
     window.dispatchEvent(new Event(SYNTHESIS_MATERIALS_CHANGED_EVENT))
-  }, [editorSession, storageKey])
+    await Promise.allSettled(removedImageIds.map(deleteSynthesisImage))
+  }, [autosave, editorSession])
 
   useEffect(() => {
-    const onPopState = () => { if (editorHistoryRef.current) void closeEditor() }
+    const onPopState = () => {
+      if (!editorHistoryRef.current) return
+      if (!autosave.flush()) {
+        window.history.pushState({ synthesisEditor: true }, "")
+        return
+      }
+      void closeEditor()
+    }
     window.addEventListener("popstate", onPopState)
     return () => window.removeEventListener("popstate", onPopState)
-  }, [closeEditor])
+  }, [autosave, closeEditor])
 
   const openEditor = (nodeId: string | null) => {
     editorOpenRef.current = true
@@ -169,18 +200,26 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const nextImageIds = new Set(referencedLocalImageIds(completeDocument))
     for (const id of previousImageIds) if (!nextImageIds.has(id)) removedImageIdsRef.current.add(id)
     for (const id of nextImageIds) removedImageIdsRef.current.delete(id)
-    acceptWorkspace(recordSynthesisRemovals(workspaceRef.current, completeDocument))
-  }, [acceptWorkspace, editorSession])
+    const next = recordSynthesisRemovals(workspaceRef.current, completeDocument)
+    workspaceRef.current = next
+    setWorkspace(next)
+    autosave.markDirty()
+  }, [autosave, editorSession])
 
   const goHome = useCallback(() => {
-    localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
+    if (!autosave.flush()) return
     const returnToken = sessionStorage.getItem(returnTokenKey) || legacyReturnToken
     sessionStorage.removeItem(returnTokenKey)
     router.push(returnToken ? `/?returnToken=${encodeURIComponent(returnToken)}` : "/")
-  }, [legacyReturnToken, returnTokenKey, router, storageKey])
+  }, [autosave, legacyReturnToken, returnTokenKey, router])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault()
+        autosave.flush()
+        return
+      }
       if (event.key === "Escape") {
         event.preventDefault()
         if (editorSession) { window.history.back(); return }
@@ -196,9 +235,14 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     }
     window.addEventListener("keydown", keydown, { passive: false })
     return () => window.removeEventListener("keydown", keydown)
-  }, [acceptWorkspace, currentParentId, editorSession, goHome, nodes])
+  }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes])
 
   if (editorSession) return <main className={styles.editorOnly}>
+    <div className={styles.saveBar}>
+      <button onClick={() => { if (autosave.flush()) window.history.back() }}>Volver</button>
+      <span role="status">{saveStatus === "saved" ? "Guardado en este navegador" : saveStatus === "pending" ? "Cambios sin guardar…" : "No se pudo guardar. Reintentá antes de salir."}</span>
+      <button onClick={() => autosave.flush()} disabled={saveStatus === "saved"}>Guardar</button>
+    </div>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
@@ -241,7 +285,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
             const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY
             if (!drag.moved && Math.hypot(dx, dy) < 7) return
             const next = normalizeSynthesisWorkspace({ ...workspaceRef.current, layout: { ...workspaceRef.current.layout, [node.id]: { ...position, x: drag.originX + dx / window.innerWidth, y: drag.originY + dy / window.innerHeight } } })
-            workspaceRef.current = next; setWorkspace(next); setDrag({ ...drag, moved: true }); suppressClickRef.current = true
+            workspaceRef.current = next; setWorkspace(next); autosave.markDirty(); setDrag({ ...drag, moved: true }); suppressClickRef.current = true
           }} onPointerUp={() => { if (drag?.id === node.id && drag.moved) acceptWorkspace(workspaceRef.current); setDrag(null) }} onClick={() => {
             if (suppressClickRef.current) { suppressClickRef.current = false; return }
             setCurrentParentId(node.id)
