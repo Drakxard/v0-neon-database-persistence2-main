@@ -114,7 +114,7 @@ test("aísla las claves de Síntesis por materia y semana", () => {
   assert.throws(() => parseSynthesisContext("algebra", -1), /semana/)
 })
 
-test("Síntesis queda solo local y su endpoint R2 está desactivado", () => {
+test("Síntesis conserva el guardado local y habilita su endpoint R2 protegido", () => {
   const route = readFileSync(new URL("../app/api/inscreen/synthesis-tree/route.ts", import.meta.url), "utf8")
   const client = readFileSync(new URL("../app/sintesis/synthesis-client.tsx", import.meta.url), "utf8")
   const page = readFileSync(new URL("../app/sintesis/page.tsx", import.meta.url), "utf8")
@@ -128,8 +128,7 @@ test("Síntesis queda solo local y su endpoint R2 está desactivado", () => {
   assert.match(client, /buildSynthesisLocalStorageKey/)
   assert.match(client, /replaceSynthesisBranch/)
   assert.match(client, /NumpadAdd/)
-  assert.doesNotMatch(client, /fetch\("\/api\/inscreen\/synthesis-tree/)
-  assert.doesNotMatch(client, /etagRef|syncNowRef|Guardado en R2/)
+  assert.match(client, /syncSynthesis\(context\)/)
   assert.doesNotMatch(client, /sheetNodeId|editable=\{false\}/)
   assert.match(client, /setCurrentParentId\(node\.id\)/)
   assert.match(client, /openEditor\(currentParentId\)/)
@@ -141,8 +140,11 @@ test("Síntesis queda solo local y su endpoint R2 está desactivado", () => {
   assert.ok(popoverLayer > editorLayer, "la paleta de remarcar debe quedar sobre la hoja del editor")
   assert.match(editor, /mobileView !== "main"[^}]*toolbarRef\.current\?\.scrollTo/)
   assert.doesNotMatch(page, /subjectName/)
-  assert.match(route, /status: 503/)
-  assert.doesNotMatch(route, /readSynthesisWorkspace|writeSynthesisWorkspace|uploadR2Object/)
+  assert.match(route, /requireAuthSession/)
+  assert.match(route, /withInscreenUserConfig/)
+  assert.match(route, /readSynthesisWorkspace/)
+  assert.match(route, /writeSynthesisWorkspace/)
+  assert.match(route, /status: 409/)
   assert.match(home, /openCurrentSubjectSynthesis/)
   assert.match(openSynthesis, /sessionStorage\.setItem\(buildSynthesisReturnTokenStorageKey/)
   assert.doesNotMatch(openSynthesis, /subjectName:|params\.set\("returnToken"/)

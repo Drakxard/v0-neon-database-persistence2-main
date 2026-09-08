@@ -13,6 +13,7 @@ import backgroundImage from "../../sintesis/sintesis-fondo.jpg"
 import { buildSynthesisLocalStorageKey, buildSynthesisReturnTokenStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
 import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
 import { createLocalAutosave } from "@/lib/client/local-autosave"
+import { syncSynthesis, SYNTHESIS_SYNC_EVENT } from "@/lib/client/synthesis-sync"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -51,6 +52,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const autosave = useMemo(() => createLocalAutosave(() => {
     localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
     localStorage.removeItem(pendingKey)
+    void syncSynthesis(context)
   }, (status) => {
     if (status === "error") setMessage(SAVE_ERROR_MESSAGE)
     else if (status === "saved") setMessage((current) => current === SAVE_ERROR_MESSAGE ? "" : current)
@@ -86,6 +88,25 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [autosave, pendingKey, storageKey])
 
   useEffect(() => {
+    const sync = () => { if (!editorOpenRef.current && !autosave.dirty) void syncSynthesis(context) }
+    const status = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; error?: string }>).detail
+      if (detail.key !== storageKey) return
+      setMessage((current) => detail.error ? "Guardado local. R2 pendiente: " + detail.error : current.startsWith("Guardado local. R2 pendiente:") ? "" : current)
+    }
+    window.addEventListener(SYNTHESIS_SYNC_EVENT, status)
+    window.addEventListener("online", sync)
+    window.addEventListener("focus", sync)
+    const timer = window.setInterval(sync, 30_000)
+    return () => {
+      window.removeEventListener(SYNTHESIS_SYNC_EVENT, status)
+      window.removeEventListener("online", sync)
+      window.removeEventListener("focus", sync)
+      window.clearInterval(timer)
+    }
+  }, [autosave, context.subjectId, context.weekNumber, storageKey])
+
+  useEffect(() => {
     if (currentParentId && !nodes.some((node) => node.id === currentParentId)) setCurrentParentId(null)
   }, [currentParentId, nodes])
 
@@ -96,6 +117,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       if (loading || editorOpenRef.current || autosave.dirty) return
       loading = true
       try {
+        await syncSynthesis(context)
         const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: String(context.weekNumber), scope: "week" })
         const results = await Promise.allSettled([
           fetchSubjectMaterialContainers(context.subjectId),
@@ -112,7 +134,12 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         if (!disposed) setMessage(error instanceof Error ? error.message : "No se pudo actualizar Síntesis.")
       } finally { loading = false }
     }
-    const onStorage = (event: StorageEvent) => { if (event.key === storageKey) void refresh() }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== storageKey || editorOpenRef.current || autosave.dirty) return
+      const local = readLocalWorkspace(storageKey)
+      if (local) { workspaceRef.current = local; setWorkspace(local) }
+      void refresh()
+    }
     void refresh()
     window.addEventListener("focus", refresh)
     window.addEventListener("storage", onStorage)

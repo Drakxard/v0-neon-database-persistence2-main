@@ -1,4 +1,5 @@
 import { buildSynthesisLocalStorageKey, type SynthesisContext } from "../synthesis-context.ts"
+import { syncSynthesis } from "./synthesis-sync.ts"
 import { SYNTHESIS_WORKSPACE_STORAGE_KEY, SYNTHESIS_WORKSPACE_PENDING_KEY, normalizeSynthesisWorkspace, type SynthesisWorkspaceV2 } from "../synthesis-workspace.ts"
 
 export const SYNTHESIS_MATERIALS_CHANGED_EVENT = "synthesis-materials-changed"
@@ -16,4 +17,5 @@ export function writeMaterialSynthesis(context: SynthesisContext, workspace: Syn
   localStorage.setItem(buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_STORAGE_KEY, context), JSON.stringify(workspace))
   localStorage.removeItem(buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_PENDING_KEY, context))
   window.dispatchEvent(new Event(SYNTHESIS_MATERIALS_CHANGED_EVENT))
+  void syncSynthesis(context)
 }

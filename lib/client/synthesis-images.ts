@@ -1,4 +1,4 @@
-import { SYNTHESIS_LOCAL_IMAGE_PREFIX, SYNTHESIS_MAX_IMAGE_BYTES } from "@/lib/synthesis-workspace"
+import { SYNTHESIS_LOCAL_IMAGE_PREFIX, SYNTHESIS_MAX_IMAGE_BYTES } from "../synthesis-workspace.ts"
 
 const DB_NAME = "cursado-synthesis-images-v1"
 const STORE_NAME = "images"
@@ -42,7 +42,21 @@ export async function loadSynthesisImage(id: string): Promise<Blob | null> {
     request.onerror = () => reject(request.error)
   })
   db.close()
-  return value
+  if (value) return value
+  const response = await fetch("/api/inscreen/synthesis-images?id=" + encodeURIComponent(id), { cache: "no-store" })
+  if (!response.ok) throw new Error("No se pudo recuperar la imagen desde R2.")
+  const remote = await response.blob()
+  const cache = await openDatabase()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = cache.transaction(STORE_NAME, "readwrite")
+      transaction.objectStore(STORE_NAME).put(remote, id)
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+  } finally { cache.close() }
+  return remote
 }
 
 export async function deleteSynthesisImage(id: string): Promise<void> {
