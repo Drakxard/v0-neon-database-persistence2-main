@@ -92,7 +92,9 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const status = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; error?: string }>).detail
       if (detail.key !== storageKey) return
-      setMessage((current) => detail.error ? "Guardado local. R2 pendiente: " + detail.error : current.startsWith("Guardado local. R2 pendiente:") ? "" : current)
+      // R2 is an opportunistic backup. Its conflicts keep both copies, but are
+      // not actionable from this screen, so do not surface them as a notice.
+      if (detail.error) return
     }
     window.addEventListener(SYNTHESIS_SYNC_EVENT, status)
     window.addEventListener("online", sync)
