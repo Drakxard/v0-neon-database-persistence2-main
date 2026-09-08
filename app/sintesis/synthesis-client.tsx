@@ -16,7 +16,6 @@ import { createAsyncLocalAutosave } from "@/lib/client/async-local-autosave"
 import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
 import { synthesisContent, type FolderSynthesis } from "@/lib/client/synthesis-folder-store"
 import { syncSynthesis, SYNTHESIS_SYNC_EVENT } from "@/lib/client/synthesis-sync"
-import { findSynthesisLocalCopies, parseStoredSynthesisWorkspace, type SynthesisLocalCopy } from "@/lib/client/synthesis-local-copies"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -55,7 +54,6 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
-  const [localCopies, setLocalCopies] = useState<SynthesisLocalCopy[] | null>(null)
   const stageEmergencyDraft = () => {
     try { localStorage.setItem(pendingKey, JSON.stringify({ workspace: workspaceRef.current, folderBase: folderBaseRef.current })) }
     catch { /* The folder remains the primary save target if browser storage is full. */ }
@@ -369,36 +367,9 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
           {[...new Set([context.weekNumber, ...savedWeeks])].sort((a, b) => b - a).map((week) => <option key={week} value={week}>{week}</option>)}
         </select>
       </label>
-      <button className={styles.recoveryButton} onClick={async () => {
-        try { setLocalCopies([...(await (await getSynthesisFolderStore()).listCopies()), ...findSynthesisLocalCopies(localStorage)]) }
-        catch { setMessage("No se pudo acceder a las copias guardadas en la carpeta.") }
-      }}>Guardados locales</button>
       <div className={styles.zoom}><button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
     </header>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
-    {localCopies !== null ? <section className={styles.recoveryPanel} role="dialog" aria-label="Guardados locales de Síntesis">
-      <h2>Guardados locales de Síntesis</h2>
-      <p>Incluye las copias de la carpeta y las migradas desde el navegador, con sus textos originales.</p>
-      <button onClick={() => setLocalCopies(null)}>Cerrar</button>
-      {localCopies.length === 0 ? <p>No se encontraron copias locales.</p> : localCopies.map((copy) => <article key={copy.key}>
-        <p>{copy.subjectId ?? "Guardado antiguo sin materia"}{copy.weekNumber !== null ? ` · Semana ${copy.weekNumber}` : ""} · Versión {copy.version ?? "desconocida"}</p>
-        <p>{copy.preview || "Sin texto (puede contener imágenes)."}</p>
-        <button onClick={() => {
-          const url = URL.createObjectURL(new Blob([copy.raw], { type: "application/json" }))
-          const link = document.createElement("a")
-          link.href = url; link.download = `sintesis-${copy.subjectId ?? "antigua"}-${copy.weekNumber ?? "global"}.json`; link.click()
-          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-        }}>Descargar copia</button>
-        {copy.version === 2 && nodes.length === 0 ? <button onClick={async () => {
-          try {
-            const restored = parseStoredSynthesisWorkspace(copy.raw).workspace
-            await acceptWorkspace(restored)
-            setLoadState("ready"); setLocalCopies(null)
-            setMessage("Copia recuperada localmente. Se intentará sincronizar con R2; si hay un conflicto, se conservarán ambas versiones.")
-          } catch (error) { setMessage(error instanceof Error ? error.message : "No se pudo recuperar la copia.") }
-        }}>Recuperar en esta semana</button> : null}
-      </article>)}
-    </section> : null}
     {loadState !== "ready" ? <div className={styles.emptyState} role="status">
       {loadState === "loading" ? "Cargando la Síntesis guardada…" : "No se pudo cargar la Síntesis guardada."}
       {loadState === "error" ? <button onClick={() => { setLoadState("loading"); setRetry((value) => value + 1) }}>Reintentar</button> : null}
