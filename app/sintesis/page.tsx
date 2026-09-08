@@ -16,7 +16,7 @@ export default async function SynthesisPage({
   try {
     const context = parseSynthesisContext(params.subjectId, params.weekNumber)
     const returnToken = /^[A-Za-z0-9_-]{1,100}$/.test(params.returnToken ?? "") ? params.returnToken! : ""
-    return <SynthesisClient context={context} legacyReturnToken={returnToken} />
+    return <SynthesisClient key={`${context.subjectId}:${context.weekNumber}`} context={context} legacyReturnToken={returnToken} />
   } catch (error) {
     return (
       <main style={{ minHeight: "100dvh", display: "grid", placeContent: "center", gap: 16, padding: 24, textAlign: "center" }}>

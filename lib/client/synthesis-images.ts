@@ -1,4 +1,6 @@
 import { SYNTHESIS_LOCAL_IMAGE_PREFIX, SYNTHESIS_MAX_IMAGE_BYTES } from "../synthesis-workspace.ts"
+import { getSynthesisFolderStore } from "./synthesis-persistence.ts"
+import type { SynthesisFolderStore } from "./synthesis-folder-store.ts"
 
 const DB_NAME = "cursado-synthesis-images-v1"
 const STORE_NAME = "images"
@@ -20,53 +22,46 @@ export async function saveSynthesisImage(file: File, onProgress?: (event: { prog
   if (file.size > SYNTHESIS_MAX_IMAGE_BYTES) throw new Error("La imagen supera el límite de 5 MB.")
   if (signal?.aborted) throw new Error("Carga cancelada.")
   const id = crypto.randomUUID()
-  const db = await openDatabase()
-  await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, "readwrite")
-    transaction.objectStore(STORE_NAME).put(file, id)
-    transaction.oncomplete = () => resolve()
-    transaction.onerror = () => reject(transaction.error ?? new Error("No se pudo guardar la imagen."))
-    transaction.onabort = () => reject(transaction.error ?? new Error("Se canceló el guardado de la imagen."))
-    signal?.addEventListener("abort", () => transaction.abort(), { once: true })
-  })
-  db.close()
+  const folder = await getSynthesisFolderStore()
+  if (signal?.aborted) throw new Error("Carga cancelada.")
+  await folder.saveImage(id, file)
   onProgress?.({ progress: 100 })
   return `${SYNTHESIS_LOCAL_IMAGE_PREFIX}${id}`
 }
 
-export async function loadSynthesisImage(id: string): Promise<Blob | null> {
+export async function migrateSynthesisImagesToFolder(folder: SynthesisFolderStore) {
   const db = await openDatabase()
-  const value = await new Promise<Blob | null>((resolve, reject) => {
-    const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(id)
-    request.onsuccess = () => resolve(request.result instanceof Blob ? request.result : null)
-    request.onerror = () => reject(request.error)
-  })
-  db.close()
+  try {
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAllKeys()
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    for (const key of keys) {
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        const request = db.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(key)
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      if (blob instanceof Blob && !(await folder.readImage(String(key)))) await folder.saveImage(String(key), blob)
+    }
+  } finally { db.close() }
+}
+
+export async function loadSynthesisImage(id: string): Promise<Blob | null> {
+  const folder = await getSynthesisFolderStore()
+  const value = await folder.readImage(id)
   if (value) return value
   const response = await fetch("/api/inscreen/synthesis-images?id=" + encodeURIComponent(id), { cache: "no-store" })
   if (!response.ok) throw new Error("No se pudo recuperar la imagen desde R2.")
   const remote = await response.blob()
-  const cache = await openDatabase()
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = cache.transaction(STORE_NAME, "readwrite")
-      transaction.objectStore(STORE_NAME).put(remote, id)
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error)
-      transaction.onabort = () => reject(transaction.error)
-    })
-  } finally { cache.close() }
+  await folder.saveImage(id, remote)
   return remote
 }
 
 export async function deleteSynthesisImage(id: string): Promise<void> {
-  const db = await openDatabase()
-  await new Promise<void>((resolve, reject) => {
-    const request = db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(id)
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
-  })
-  db.close()
+  // Archived documents may still reference this file; retain its local original.
+  void id
 }
 
 export function localImageId(src: unknown) {

@@ -5599,7 +5599,7 @@ export function SubjectWheel({
       if (!/\.pdf$/i.test(file.name) || !signature.includes("%PDF-")) throw new Error("Seleccioná un archivo PDF válido.")
       const context = materialSynthesisContext(target)
       // Verify the development can be read before changing the PDF.
-      readMaterialSynthesis(context)
+      await readMaterialSynthesis(context)
       const formData = new FormData()
       formData.set("file", file)
       formData.set("fileName", file.name)
@@ -5608,8 +5608,8 @@ export function SubjectWheel({
       setMaterials((previous) => previous.map((material) => material.id === target.id ? updated : material))
       setPendingMaterials((previous) => previous.map((material) => material.id === target.id ? { ...material, ...updated } : material))
       setContinuePayload((previous) => previous?.material?.id === target.id ? { ...previous, material: updated } : previous)
-      const latest = readMaterialSynthesis(context)
-      if (latest) writeMaterialSynthesis(context, renameSynthesisMaterial(latest, target.id, updated.file_name))
+      const latest = await readMaterialSynthesis(context)
+      if (latest) await writeMaterialSynthesis(context, renameSynthesisMaterial(latest, target.id, updated.file_name))
       setSynthesisDeleteTarget(null)
     } catch (error) {
       setSynthesisDeleteError(error instanceof Error ? error.message : "No se pudo reemplazar el PDF.")
@@ -5620,7 +5620,7 @@ export function SubjectWheel({
     if (isDeletingMaterialId !== null) return
     const context = materialSynthesisContext(materialToDelete)
     try {
-      const synthesis = readMaterialSynthesis(context)
+      const synthesis = await readMaterialSynthesis(context)
       if (!deleteDevelopment && synthesis && hasSynthesisMaterialDevelopment(synthesis, materialToDelete.id)) {
         setSynthesisDeleteError("")
         setSynthesisDeleteTarget(materialToDelete)
@@ -5682,8 +5682,8 @@ export function SubjectWheel({
         setSelectedPracticeMaterialId(null)
       }
       if (currentSubject) void loadMaterialContainers(currentSubject.id)
-      const latestSynthesis = readMaterialSynthesis(context)
-      if (latestSynthesis) writeMaterialSynthesis(context, removeSynthesisMaterial(latestSynthesis, materialToDelete.id))
+      const latestSynthesis = await readMaterialSynthesis(context)
+      if (latestSynthesis) await writeMaterialSynthesis(context, removeSynthesisMaterial(latestSynthesis, materialToDelete.id))
       setSynthesisDeleteTarget(null)
     } catch (error) {
       console.error("Failed to delete material:", error)

@@ -235,6 +235,10 @@ export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV
 }
 
 export function assertValidSynthesisWorkspace(input: unknown) {
+  const candidate = input as Partial<SynthesisWorkspaceV2> | null
+  if (candidate?.version !== SYNTHESIS_WORKSPACE_VERSION || candidate.document?.type !== "doc" || !Array.isArray(candidate.document.content)) {
+    throw new Error("El documento de Síntesis tiene un formato inválido.")
+  }
   const serialized = JSON.stringify(input)
   if (new TextEncoder().encode(serialized).byteLength > SYNTHESIS_MAX_DOCUMENT_BYTES) throw new Error("La Síntesis es demasiado grande.")
   if (/\b(?:data:image\/|blob:)/i.test(serialized)) throw new Error("Las imágenes deben guardarse como referencias locales.")

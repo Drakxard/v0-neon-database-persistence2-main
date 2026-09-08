@@ -12,8 +12,11 @@ import { readMaterialSynthesis, SYNTHESIS_MATERIALS_CHANGED_EVENT } from "@/lib/
 import backgroundImage from "../../sintesis/sintesis-fondo.jpg"
 import { buildSynthesisLocalStorageKey, buildSynthesisReturnTokenStorageKey, type SynthesisContext } from "@/lib/synthesis-context"
 import { deleteSynthesisImage } from "@/lib/client/synthesis-images"
-import { createLocalAutosave } from "@/lib/client/local-autosave"
+import { createAsyncLocalAutosave } from "@/lib/client/async-local-autosave"
+import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
+import { synthesisContent, type FolderSynthesis } from "@/lib/client/synthesis-folder-store"
 import { syncSynthesis, SYNTHESIS_SYNC_EVENT } from "@/lib/client/synthesis-sync"
+import { findSynthesisLocalCopies, parseStoredSynthesisWorkspace, type SynthesisLocalCopy } from "@/lib/client/synthesis-local-copies"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -30,14 +33,13 @@ const SimpleEditor = dynamic(
 )
 
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
-const SAVE_ERROR_MESSAGE = "No se pudo guardar. Tus cambios siguen en memoria; reintentá con Ctrl+S antes de salir."
+const SAVE_ERROR_MESSAGE = "No se pudo guardar en la carpeta del dispositivo. Reintentá con Ctrl+S antes de salir."
 type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
 
 function readLocalWorkspace(key: string) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null")
-    if (!parsed) return null
-    return repairSynthesisLayout(parsed.workspace ?? parsed)
+    return parsed ? repairSynthesisLayout(parsed.workspace ?? parsed) : null
   } catch { return null }
 }
 
@@ -48,12 +50,31 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const returnTokenKey = buildSynthesisReturnTokenStorageKey(context)
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
+  const folderBaseRef = useRef<string | null>(null)
   const [message, setMessage] = useState("")
-  const autosave = useMemo(() => createLocalAutosave(() => {
-    localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current))
-    localStorage.removeItem(pendingKey)
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
+  const [savedWeeks, setSavedWeeks] = useState<number[]>([])
+  const [retry, setRetry] = useState(0)
+  const [localCopies, setLocalCopies] = useState<SynthesisLocalCopy[] | null>(null)
+  const stageEmergencyDraft = () => {
+    try { localStorage.setItem(pendingKey, JSON.stringify({ workspace: workspaceRef.current, folderBase: folderBaseRef.current })) }
+    catch { /* The folder remains the primary save target if browser storage is full. */ }
+  }
+  const autosave = useMemo(() => createAsyncLocalAutosave(async () => {
+    const snapshot = structuredClone(workspaceRef.current)
+    // Keep a synchronous browser copy too: leaving the page must never turn a
+    // temporary folder-permission problem into lost text.
+    try { localStorage.setItem(storageKey, JSON.stringify(snapshot)) }
+    catch { /* The folder remains the primary save target if browser storage is full. */ }
+    const folder = await getSynthesisFolderStore()
+    await folder.save(context, snapshot)
+    folderBaseRef.current = synthesisContent(snapshot)
+    if (synthesisContent(workspaceRef.current) === folderBaseRef.current) {
+      try { localStorage.removeItem(pendingKey) } catch { /* A stale emergency draft is not authoritative. */ }
+    } else stageEmergencyDraft()
     void syncSynthesis(context)
   }, (status) => {
+    if (status === "pending") stageEmergencyDraft()
     if (status === "error") setMessage(SAVE_ERROR_MESSAGE)
     else if (status === "saved") setMessage((current) => current === SAVE_ERROR_MESSAGE ? "" : current)
   }), [pendingKey, storageKey])
@@ -66,47 +87,65 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const editorOpenRef = useRef(false)
   const nodes = useMemo(() => deriveSynthesisNodes(workspace.document), [workspace.document])
 
-  const acceptWorkspace = useCallback((input: SynthesisWorkspaceV2) => {
+  const acceptWorkspace = useCallback(async (input: SynthesisWorkspaceV2) => {
     const normalized = normalizeSynthesisWorkspace(input)
     workspaceRef.current = normalized
     setWorkspace(normalized)
     autosave.markDirty()
-    if (!autosave.flush()) throw new Error("No se pudo guardar en este navegador. Tus cambios siguen en memoria; reintentá guardar antes de salir.")
+    if (!await autosave.flush()) throw new Error(SAVE_ERROR_MESSAGE)
     return normalized
   }, [autosave])
 
   useEffect(() => {
-    const cached = readLocalWorkspace(storageKey)
-    const pending = readLocalWorkspace(pendingKey)
-    const local = pending ?? cached ?? createEmptySynthesisWorkspace()
-    workspaceRef.current = local; setWorkspace(local)
-    setCurrentParentId(null); setEditorSession(null); editorOpenRef.current = false
-    if (pending) {
-      autosave.markDirty()
-      autosave.flush()
-    }
-  }, [autosave, pendingKey, storageKey])
-
-  useEffect(() => {
     const sync = () => { if (!editorOpenRef.current && !autosave.dirty) void syncSynthesis(context) }
-    const status = (event: Event) => {
+    let disposed = false
+    const status = async (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; error?: string }>).detail
       if (detail.key !== storageKey) return
       // R2 is an opportunistic backup. Its conflicts keep both copies, but are
       // not actionable from this screen, so do not surface them as a notice.
       if (detail.error) return
+      if (!editorOpenRef.current && !autosave.dirty) {
+        try {
+          const record = await (await getSynthesisFolderStore()).read(context)
+          if (disposed || editorOpenRef.current || autosave.dirty) return
+          if (record) {
+            folderBaseRef.current = synthesisContent(record.workspace)
+            const next = repairSynthesisLayout(record.workspace)
+            workspaceRef.current = next; setWorkspace(next)
+          }
+        } catch (error) { if (!disposed) setMessage(error instanceof Error ? error.message : SAVE_ERROR_MESSAGE) }
+      }
     }
     window.addEventListener(SYNTHESIS_SYNC_EVENT, status)
     window.addEventListener("online", sync)
     window.addEventListener("focus", sync)
     const timer = window.setInterval(sync, 30_000)
     return () => {
+      disposed = true
       window.removeEventListener(SYNTHESIS_SYNC_EVENT, status)
       window.removeEventListener("online", sync)
       window.removeEventListener("focus", sync)
       window.clearInterval(timer)
     }
   }, [autosave, context.subjectId, context.weekNumber, storageKey])
+
+  useEffect(() => {
+    let disposed = false
+    const localWeeks = new Set<number>([context.weekNumber])
+    void getSynthesisFolderStore().then((folder) => folder.listWeeks(context.subjectId)).then((weeks) => {
+      weeks.forEach((week) => localWeeks.add(week))
+      if (!disposed) setSavedWeeks((previous) => [...new Set([...previous, ...localWeeks])].sort((a, b) => b - a))
+    }).catch((error) => { if (!disposed) setMessage(error instanceof Error ? error.message : SAVE_ERROR_MESSAGE) })
+    setSavedWeeks([...localWeeks].sort((a, b) => b - a))
+    const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: String(context.weekNumber), listWeeks: "true" })
+    void fetch(`/api/inscreen/synthesis-tree?${params}`, { cache: "no-store" })
+      .then((response) => requireOkJson<{ weeks: Array<{ weekNumber: number }> }>(response, "No se pudieron consultar las semanas guardadas."))
+      .then(({ weeks }) => {
+        if (!disposed) setSavedWeeks([...new Set([...localWeeks, ...weeks.map((week) => week.weekNumber)])].sort((a, b) => b - a))
+      }).catch(() => { /* The sync status reports unavailable R2; local weeks remain accessible. */ })
+    return () => { disposed = true }
+  }, [context.subjectId, context.weekNumber, retry])
 
   useEffect(() => {
     if (currentParentId && !nodes.some((node) => node.id === currentParentId)) setCurrentParentId(null)
@@ -119,7 +158,28 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       if (loading || editorOpenRef.current || autosave.dirty) return
       loading = true
       try {
-        await syncSynthesis(context)
+        let record: FolderSynthesis | null = null
+        try {
+          record = await (await getSynthesisFolderStore()).read(context)
+        } catch (error) {
+          const fallback = readLocalWorkspace(pendingKey) ?? readLocalWorkspace(storageKey)
+          if (!fallback) throw error
+          workspaceRef.current = fallback; setWorkspace(fallback); setLoadState("ready")
+          return
+        }
+        if (disposed || editorOpenRef.current || autosave.dirty) return
+        folderBaseRef.current = synthesisContent(record?.workspace ?? null)
+        // A pending browser draft is newer than the last verified folder copy.
+        // It is removed only after that folder write succeeds.
+        const local = readLocalWorkspace(pendingKey) ?? (record ? repairSynthesisLayout(record.workspace) : readLocalWorkspace(storageKey) ?? createEmptySynthesisWorkspace())
+        workspaceRef.current = local; setWorkspace(local); setLoadState("ready")
+        const synchronized = await syncSynthesis(context)
+        if (disposed || editorOpenRef.current || autosave.dirty) return
+        const loaded = await readMaterialSynthesis(context)
+        if (disposed || editorOpenRef.current || autosave.dirty) return
+        if (loaded) { workspaceRef.current = loaded; setWorkspace(loaded); setLoadState("ready") }
+        if (!synchronized) return
+        setLoadState("ready")
         const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: String(context.weekNumber), scope: "week" })
         const results = await Promise.allSettled([
           fetchSubjectMaterialContainers(context.subjectId),
@@ -130,16 +190,16 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         if (containers.status === "rejected") throw containers.reason
         if (materials.status === "rejected") throw materials.reason
         if (disposed || editorOpenRef.current || autosave.dirty) return
-        const latest = readMaterialSynthesis(context) ?? workspaceRef.current
-        acceptWorkspace(reconcileSynthesisMaterials(latest, containers.value, materials.value))
+        const latest = await readMaterialSynthesis(context) ?? workspaceRef.current
+        if (disposed || editorOpenRef.current || autosave.dirty) return
+        const reconciled = reconcileSynthesisMaterials(latest, containers.value, materials.value)
+        if (JSON.stringify(reconciled) !== JSON.stringify(latest)) await acceptWorkspace(reconciled)
       } catch (error) {
-        if (!disposed) setMessage(error instanceof Error ? error.message : "No se pudo actualizar Síntesis.")
+        if (!disposed) { setMessage(error instanceof Error ? error.message : "No se pudo actualizar Síntesis."); setLoadState((state) => state === "loading" ? "error" : state) }
       } finally { loading = false }
     }
     const onStorage = (event: StorageEvent) => {
       if (event.key !== storageKey || editorOpenRef.current || autosave.dirty) return
-      const local = readLocalWorkspace(storageKey)
-      if (local) { workspaceRef.current = local; setWorkspace(local) }
       void refresh()
     }
     void refresh()
@@ -152,7 +212,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       window.removeEventListener("storage", onStorage)
       window.removeEventListener(SYNTHESIS_MATERIALS_CHANGED_EVENT, refresh)
     }
-  }, [acceptWorkspace, autosave, context.subjectId, context.weekNumber, storageKey])
+  }, [acceptWorkspace, autosave, context.subjectId, context.weekNumber, storageKey, retry])
 
   useEffect(() => {
     if (legacyReturnToken) sessionStorage.setItem(returnTokenKey, legacyReturnToken)
@@ -190,7 +250,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const closeEditor = useCallback(async () => {
     const session = editorSession
     if (!session) return
-    if (!autosave.flush()) return
+    if (!await autosave.flush()) return
     const removedImageIds = [...removedImageIdsRef.current]
     removedImageIdsRef.current.clear()
     setCurrentParentId(session.returnParentId); setEditorSession(null); editorHistoryRef.current = false; editorOpenRef.current = false
@@ -199,9 +259,9 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [autosave, editorSession])
 
   useEffect(() => {
-    const onPopState = () => {
+    const onPopState = async () => {
       if (!editorHistoryRef.current) return
-      if (!autosave.flush()) {
+      if (!await autosave.flush()) {
         window.history.pushState({ synthesisEditor: true }, "")
         return
       }
@@ -212,6 +272,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   }, [autosave, closeEditor])
 
   const openEditor = (nodeId: string | null) => {
+    if (loadState !== "ready") return
     editorOpenRef.current = true
     const document = nodeId ? extractSynthesisBranchDocument(workspaceRef.current.document, nodeId) : workspaceRef.current.document
     removedImageIdsRef.current.clear()
@@ -238,8 +299,8 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     autosave.markDirty()
   }, [autosave, editorSession])
 
-  const goHome = useCallback(() => {
-    if (!autosave.flush()) return
+  const goHome = useCallback(async () => {
+    if (!await autosave.flush()) return
     const returnToken = sessionStorage.getItem(returnTokenKey) || legacyReturnToken
     sessionStorage.removeItem(returnTokenKey)
     router.push(returnToken ? `/?returnToken=${encodeURIComponent(returnToken)}` : "/")
@@ -258,35 +319,34 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         if (currentParentId) { setCurrentParentId(nodes.find((node) => node.id === currentParentId)?.parentId ?? null); return }
         void goHome(); return
       }
-      if ((!event.ctrlKey && !event.metaKey) || editorSession) return
+      if ((!event.ctrlKey && !event.metaKey) || editorSession || loadState !== "ready") return
       const increase = event.key === "+" || event.key === "=" || event.code === "NumpadAdd"
       const decrease = event.key === "-" || event.code === "NumpadSubtract"
       if (!increase && !decrease) return
       event.preventDefault()
-      acceptWorkspace(scaleSynthesisWorkspace(workspaceRef.current, workspaceRef.current.defaultScale + (increase ? 0.1 : -0.1)))
+      void acceptWorkspace(scaleSynthesisWorkspace(workspaceRef.current, workspaceRef.current.defaultScale + (increase ? 0.1 : -0.1))).catch(() => setMessage(SAVE_ERROR_MESSAGE))
     }
     window.addEventListener("keydown", keydown, { passive: false })
     return () => window.removeEventListener("keydown", keydown)
-  }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes])
+  }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes, loadState])
 
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
-        try { acceptWorkspace({ ...workspaceRef.current, editorFontSize }) }
-        catch { setMessage("No se pudo guardar el tamaño del texto.") }
+        void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))
       }} />
   </main>
 
   const currentNodes = childrenOf(nodes, currentParentId)
   const currentNode = currentParentId ? nodes.find((node) => node.id === currentParentId) ?? null : null
 
-  const deleteNode = (nodeId: string) => {
+  const deleteNode = async (nodeId: string) => {
     const next = removeSynthesisNode(workspaceRef.current, nodeId)
     const retainedImages = new Set(referencedLocalImageIds(next.document))
     const removed = referencedLocalImageIds(workspaceRef.current.document).filter((id) => !retainedImages.has(id))
     try {
-      acceptWorkspace(next)
+      await acceptWorkspace(next)
       void Promise.allSettled(removed.map(deleteSynthesisImage))
     } catch { setMessage("No se pudo guardar la eliminación del nodo.") }
   }
@@ -297,9 +357,52 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         if (currentParentId) setCurrentParentId(currentNode?.parentId ?? null)
         else void goHome()
       }} aria-label={currentNode ? `Volver desde ${currentNode.name}` : "Volver"}><ArrowLeft aria-hidden="true" /></button>
-      <div className={styles.zoom}><button onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
+      <label className={styles.weekPicker}>Semana
+        <select aria-label="Semana de Síntesis" value={context.weekNumber} onChange={async (event) => {
+          const week = event.target.value
+          if (!await autosave.flush()) return
+          const params = new URLSearchParams({ subjectId: context.subjectId, weekNumber: week })
+          const token = sessionStorage.getItem(returnTokenKey)
+          if (token) sessionStorage.setItem(buildSynthesisReturnTokenStorageKey({ ...context, weekNumber: Number(week) }), token)
+          router.push(`/sintesis?${params}`)
+        }}>
+          {[...new Set([context.weekNumber, ...savedWeeks])].sort((a, b) => b - a).map((week) => <option key={week} value={week}>{week}</option>)}
+        </select>
+      </label>
+      <button className={styles.recoveryButton} onClick={async () => {
+        try { setLocalCopies([...(await (await getSynthesisFolderStore()).listCopies()), ...findSynthesisLocalCopies(localStorage)]) }
+        catch { setMessage("No se pudo acceder a las copias guardadas en la carpeta.") }
+      }}>Guardados locales</button>
+      <div className={styles.zoom}><button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
     </header>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
+    {localCopies !== null ? <section className={styles.recoveryPanel} role="dialog" aria-label="Guardados locales de Síntesis">
+      <h2>Guardados locales de Síntesis</h2>
+      <p>Incluye las copias de la carpeta y las migradas desde el navegador, con sus textos originales.</p>
+      <button onClick={() => setLocalCopies(null)}>Cerrar</button>
+      {localCopies.length === 0 ? <p>No se encontraron copias locales.</p> : localCopies.map((copy) => <article key={copy.key}>
+        <p>{copy.subjectId ?? "Guardado antiguo sin materia"}{copy.weekNumber !== null ? ` · Semana ${copy.weekNumber}` : ""} · Versión {copy.version ?? "desconocida"}</p>
+        <p>{copy.preview || "Sin texto (puede contener imágenes)."}</p>
+        <button onClick={() => {
+          const url = URL.createObjectURL(new Blob([copy.raw], { type: "application/json" }))
+          const link = document.createElement("a")
+          link.href = url; link.download = `sintesis-${copy.subjectId ?? "antigua"}-${copy.weekNumber ?? "global"}.json`; link.click()
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+        }}>Descargar copia</button>
+        {copy.version === 2 && nodes.length === 0 ? <button onClick={async () => {
+          try {
+            const restored = parseStoredSynthesisWorkspace(copy.raw).workspace
+            await acceptWorkspace(restored)
+            setLoadState("ready"); setLocalCopies(null)
+            setMessage("Copia recuperada localmente. Se intentará sincronizar con R2; si hay un conflicto, se conservarán ambas versiones.")
+          } catch (error) { setMessage(error instanceof Error ? error.message : "No se pudo recuperar la copia.") }
+        }}>Recuperar en esta semana</button> : null}
+      </article>)}
+    </section> : null}
+    {loadState !== "ready" ? <div className={styles.emptyState} role="status">
+      {loadState === "loading" ? "Cargando la Síntesis guardada…" : "No se pudo cargar la Síntesis guardada."}
+      {loadState === "error" ? <button onClick={() => { setLoadState("loading"); setRetry((value) => value + 1) }}>Reintentar</button> : null}
+    </div> : nodes.length === 0 ? <div className={styles.emptyState}>No hay contenido cargado para la semana {context.weekNumber}. Podés consultar otra semana desde el selector.</div> : null}
     <section className={styles.board} style={{ "--board-height": `${Math.max(1.5, ...currentNodes.map((node) => (workspace.layout[node.id]?.y ?? 0) + 0.3)) * 100}dvh` } as React.CSSProperties} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
         const position = workspace.layout[node.id] ?? { x: 0.5, y: 0.4, scale: 1 }
         return <div key={node.id} className={styles.nodeWrap} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}dvh`, "--node-scale": position.scale } as React.CSSProperties}>
@@ -313,7 +416,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
             if (!drag.moved && Math.hypot(dx, dy) < 7) return
             const next = normalizeSynthesisWorkspace({ ...workspaceRef.current, layout: { ...workspaceRef.current.layout, [node.id]: { ...position, x: drag.originX + dx / window.innerWidth, y: drag.originY + dy / window.innerHeight } } })
             workspaceRef.current = next; setWorkspace(next); autosave.markDirty(); setDrag({ ...drag, moved: true }); suppressClickRef.current = true
-          }} onPointerUp={() => { if (drag?.id === node.id && drag.moved) acceptWorkspace(workspaceRef.current); setDrag(null) }} onClick={() => {
+          }} onPointerUp={() => { if (drag?.id === node.id && drag.moved) void acceptWorkspace(workspaceRef.current).catch(() => setMessage(SAVE_ERROR_MESSAGE)); setDrag(null) }} onClick={() => {
             if (suppressClickRef.current) { suppressClickRef.current = false; return }
             setCurrentParentId(node.id)
           }} aria-label={`Abrir ${node.name}`}>{node.name}</button>

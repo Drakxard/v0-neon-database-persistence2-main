@@ -3,6 +3,15 @@
 .editorLoading { min-height:100dvh; display:grid; place-items:center; color:#625f5a; background:#fff; font:14px system-ui,sans-serif; }
 .topbar { position:fixed; z-index:30; top:0; left:0; right:0; min-height:84px; padding:10px 14px; display:flex; align-items:flex-start; gap:12px; background:linear-gradient(rgba(48,18,8,.68),rgba(48,18,8,0)); pointer-events:none; }
 .topbar button { pointer-events:auto; }
+.weekPicker { pointer-events:auto; display:flex; align-items:center; gap:8px; padding:10px; border-radius:12px; background:rgba(53,19,8,.75); font:14px system-ui,sans-serif; }
+.weekPicker select { color:#2d1b12; background:#fff4dc; border-radius:6px; padding:4px; }
+.emptyState { position:absolute; z-index:2; top:40%; left:50%; transform:translateX(-50%); max-width:90vw; width:440px; padding:20px; border-radius:14px; background:rgba(53,19,8,.85); text-align:center; font:16px/1.5 system-ui,sans-serif; }
+.emptyState button { display:block; margin:12px auto 0; padding:8px 14px; border:1px solid; border-radius:8px; cursor:pointer; }
+.recoveryButton { pointer-events:auto; padding:10px; border-radius:12px; background:rgba(53,19,8,.85); color:inherit; font:13px system-ui,sans-serif; }
+.recoveryPanel { position:fixed; z-index:44; inset:15% 5% 5%; overflow:auto; padding:20px; border-radius:14px; color:#2d1b12; background:#fff5d9; box-shadow:0 8px 30px rgba(0,0,0,.3); font:14px/1.5 system-ui,sans-serif; }
+.recoveryPanel h2 { font-size:20px; font-weight:700; }
+.recoveryPanel article { padding:15px 0; border-top:1px solid #bea786; overflow-wrap:anywhere; }
+.recoveryPanel button { margin:8px 12px 8px 0; padding:8px 12px; border:1px solid #bea786; border-radius:8px; cursor:pointer; }
 .backPlaque { width:62px; height:64px; padding:17px; border:0; flex:0 0 auto; display:grid; place-items:center; color:#fff4dc; background:transparent url("/sintesis/wood-plaque.png") center/100% 100% no-repeat; filter:drop-shadow(0 7px 10px rgba(31,10,3,.4)); cursor:pointer; }
 .backPlaque svg { width:25px; }
 .sync { display:flex; align-items:center; gap:5px; font:12px/1.2 system-ui,sans-serif; }
