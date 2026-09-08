@@ -96,7 +96,8 @@ function structuralId(node: TiptapJSON) {
 
 export function ensureSynthesisDocument(
   input: unknown,
-  idFactory: () => string = createSynthesisId
+  idFactory: () => string = createSynthesisId,
+  requireRootHeading = true
 ): TiptapJSON {
   const candidate = clone(input && typeof input === "object" ? input : { type: "doc", content: [] }) as TiptapJSON
   candidate.type = "doc"
@@ -110,7 +111,7 @@ export function ensureSynthesisDocument(
     && candidate.content[0]?.type === "paragraph"
     && (candidate.content[0].content?.length ?? 0) === 0
   const firstHeading = candidate.content.findIndex((node) => node?.type === "heading" && (Number(node.attrs?.level) || 1) === 1)
-  if (!isEmptyDocument && firstHeading !== 0) {
+  if (requireRootHeading && !isEmptyDocument && firstHeading !== 0) {
     const orphanEnd = firstHeading < 0 ? candidate.content.length : firstHeading
     const orphan = candidate.content.splice(0, orphanEnd)
     candidate.content.unshift(
@@ -289,7 +290,9 @@ export function extractSynthesisBranchDocument(documentInput: TiptapJSON, id: st
 
 export function replaceSynthesisBranch(documentInput: TiptapJSON, id: string, branchInput: TiptapJSON): TiptapJSON {
   const document = ensureSynthesisDocument(documentInput)
-  const branch = ensureSynthesisDocument(branchInput)
+  // A branch can legitimately start at H2 or H3. Treating it as a complete
+  // document would prepend an artificial H1 and promote the edited branch.
+  const branch = ensureSynthesisDocument(branchInput, createSynthesisId, false)
   const blocks = document.content ?? []
   const headingIndex = blocks.findIndex((node) => node.type === "heading" && structuralId(node) === id)
   if (headingIndex >= 0) {

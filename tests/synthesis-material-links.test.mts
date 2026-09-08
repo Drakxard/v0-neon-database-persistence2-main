@@ -2,9 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createEmptySynthesisWorkspace, deriveSynthesisNodes, normalizeSynthesisWorkspace, repairSynthesisLayout, type SynthesisWorkspaceV2 } from "../lib/synthesis-workspace.ts"
 import { hasSynthesisMaterialDevelopment, reconcileSynthesisMaterials, recordSynthesisRemovals, removeSynthesisMaterial, removeSynthesisNode, renameSynthesisMaterial } from "../lib/synthesis-material-links.ts"
-import { readMaterialSynthesis, writeMaterialSynthesis } from "../lib/client/synthesis-materials.ts"
-import { buildSynthesisLocalStorageKey } from "../lib/synthesis-context.ts"
-import { SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY } from "../lib/synthesis-workspace.ts"
+import { folderFixture } from "./helpers/synthesis-folder-fixture.mts"
+import { synthesisFolderPath } from "../lib/client/synthesis-folder-store.ts"
 
 const containers = [
   { id: 1, name: "Teoría", kind: "theory", orderIndex: 0 },
@@ -168,29 +167,14 @@ test("los nodos manuales no se vinculan por nombre y la organización editada se
   assert.notEqual(synced.sources!.containers[1].nodeId, "manual")
 })
 
-test("almacenamiento aislado por materia y semana, compatible con pendientes y rechaza JSON corrupto", () => {
-  const values = new Map<string, string>()
-  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) }
-  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
-  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage })
-  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() })
-  try {
-    const context = { subjectId: "algebra", weekNumber: 1 }
-    writeMaterialSynthesis(context, initial())
-    assert.ok(readMaterialSynthesis(context))
-    assert.equal(readMaterialSynthesis({ ...context, weekNumber: 2 }), null)
-    assert.equal(readMaterialSynthesis({ ...context, subjectId: "fisica" }), null)
-    storage.setItem(buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_PENDING_KEY, context), JSON.stringify({ workspace: createEmptySynthesisWorkspace() }))
-    assert.equal(names(readMaterialSynthesis(context)!).length, 0)
-    writeMaterialSynthesis(context, initial())
-    assert.equal(storage.getItem(buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_PENDING_KEY, context)), null)
-    storage.setItem(buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_STORAGE_KEY, context), "{broken")
-    assert.throws(() => readMaterialSynthesis(context))
-  } finally {
-    if (previousStorage) Object.defineProperty(globalThis, "localStorage", previousStorage)
-    else Reflect.deleteProperty(globalThis, "localStorage")
-    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow)
-    else Reflect.deleteProperty(globalThis, "window")
-  }
+test("la carpeta aísla materia y semana, conserva el desarrollo y rechaza JSON corrupto", async () => {
+  const { store, files, reopen } = folderFixture()
+  const context = { subjectId: "algebra", weekNumber: 1 }
+  const workspace = initial()
+  await store.save(context, workspace)
+  assert.deepEqual((await reopen().read(context))?.workspace, workspace)
+  assert.equal(await store.read({ ...context, weekNumber: 2 }), null)
+  assert.equal(await store.read({ ...context, subjectId: "fisica" }), null)
+  files.set(synthesisFolderPath(context).join("/"), new Blob(["{broken"]))
+  await assert.rejects(store.read(context))
 })

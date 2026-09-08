@@ -224,6 +224,25 @@ test("v2 extrae y reintegra una rama sin inferir identidad por texto", () => {
   assert.equal(derived[1].id, "b")
 })
 
+test("v2 reintegra una rama H2 sin crear un H1 Sin título ni promoverla", () => {
+  const document = ensureSynthesisDocument({ type: "doc", content: [
+    { type: "heading", attrs: { level: 1, synthesisId: "parent" }, content: [{ type: "text", text: "Padre" }] },
+    { type: "heading", attrs: { level: 2, synthesisId: "edited" }, content: [{ type: "text", text: "Editado" }] },
+    { type: "paragraph", content: [{ type: "text", text: "Contenido" }] },
+    { type: "heading", attrs: { level: 2, synthesisId: "sibling" }, content: [{ type: "text", text: "Hermano" }] },
+  ] })
+  const branch = extractSynthesisBranchDocument(document, "edited")
+  const editorUpdate = ensureSynthesisDocument(branch, () => "generated", false)
+  const replaced = replaceSynthesisBranch(document, "edited", editorUpdate)
+
+  assert.equal(JSON.stringify(replaced).includes("Sin título"), false)
+  assert.deepEqual(deriveSynthesisNodes(replaced).map(({ id, parentId, level }) => [id, parentId, level]), [
+    ["parent", null, 1],
+    ["edited", "parent", 2],
+    ["sibling", "parent", 2],
+  ])
+})
+
 test("v2 guarda imágenes como IDs locales y usa una clave R2 nueva y aislada", () => {
   const document = { type: "doc", content: [{ type: "image", attrs: { src: `${SYNTHESIS_LOCAL_IMAGE_PREFIX}asset-1` } }] }
   assert.deepEqual(referencedLocalImageIds(document), ["asset-1"])

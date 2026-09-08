@@ -55,7 +55,7 @@ export function createSynthesisFolderStore(root: FileSystemDirectoryHandle) {
     const hash = await digest(new TextEncoder().encode(JSON.stringify([sourceKey, raw])))
     const path = [...ROOT, kind, `${hash}.json`]
     const existing = await readText(path)
-    if (existing !== null) {
+    if (existing !== null && existing !== "") {
       const value = JSON.parse(existing)
       if (value.sourceKey !== sourceKey || value.raw !== raw) throw new Error("Una copia de Síntesis no pasó la verificación.")
       return false
@@ -65,7 +65,7 @@ export function createSynthesisFolderStore(root: FileSystemDirectoryHandle) {
   }
   async function read(context: SynthesisContext): Promise<FolderSynthesis | null> {
     const raw = await readText(synthesisFolderPath(context))
-    if (raw === null) return null
+    if (raw === null || raw === "") return null
     const record = JSON.parse(raw) as FolderSynthesis
     if (record.version !== 1 || !record.r2 || !(record.r2.etag === null || typeof record.r2.etag === "string")) throw new Error("El archivo de Síntesis tiene un formato inválido.")
     assertValidSynthesisWorkspace(record.workspace)
@@ -130,16 +130,18 @@ export function createSynthesisFolderStore(root: FileSystemDirectoryHandle) {
           const pendingKey = buildSynthesisLocalStorageKey(SYNTHESIS_WORKSPACE_PENDING_KEY, context)
           const pending = copies.find((copy) => copy.key === pendingKey)
           const primary = copies.find((copy) => copy.key === primaryKey)
-          const selected = pending ?? primary
-          if (!selected) return
-          let parsed: ReturnType<typeof parseStoredSynthesisWorkspace>
-          try { parsed = parseStoredSynthesisWorkspace(selected.raw) } catch { return }
+          const valid = [pending, primary].flatMap((copy) => {
+            if (!copy) return []
+            try { return [{ copy, parsed: parseStoredSynthesisWorkspace(copy.raw) }] } catch { return [] }
+          })
+          if (!valid.length) return
+          const { copy: selected, parsed } = valid[0]
           const appliedPath = [...ROOT, "migracion-aplicada", `${await digest(new TextEncoder().encode(JSON.stringify([selected.key, selected.raw])))}.json`]
           const current = await read(context)
           const envelope = JSON.parse(selected.raw)
           if (current) {
             // Only a new crash-recovery draft based on this exact file may replace it.
-            if (!pending || await readText(appliedPath) !== null || envelope.folderBase !== synthesisContent(current.workspace)) return
+            if (selected.key !== pendingKey || await readText(appliedPath) !== null || envelope.folderBase !== synthesisContent(current.workspace)) return
             await commit(context, { ...current, workspace: parsed.workspace })
           } else {
             let baseline: SynthesisWorkspaceV2 | null = null

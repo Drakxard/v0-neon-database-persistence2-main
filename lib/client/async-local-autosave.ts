@@ -16,6 +16,7 @@ export function createAsyncLocalAutosave(write: () => Promise<void>, onStatus: (
           await write()
           savedVersion = target
         }
+        clearTimers()
         onStatus("saved")
         return true
       } catch { onStatus("error"); return false }

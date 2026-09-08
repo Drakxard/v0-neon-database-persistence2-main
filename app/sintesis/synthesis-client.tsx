@@ -16,7 +16,7 @@ import { createAsyncLocalAutosave } from "@/lib/client/async-local-autosave"
 import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
 import { synthesisContent, type FolderSynthesis } from "@/lib/client/synthesis-folder-store"
 import { syncSynthesis, SYNTHESIS_SYNC_EVENT } from "@/lib/client/synthesis-sync"
-import { parseStoredSynthesisWorkspace, type SynthesisLocalCopy } from "@/lib/client/synthesis-local-copies"
+import { parseStoredSynthesisWorkspace, preserveSynthesisCopy, type SynthesisLocalCopy } from "@/lib/client/synthesis-local-copies"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -39,7 +39,7 @@ type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument
 function readLocalWorkspace(key: string) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null")
-    return parsed ? repairSynthesisLayout(parsed.workspace ?? parsed) : null
+    return parsed ? repairSynthesisLayout(parseStoredSynthesisWorkspace(JSON.stringify(parsed)).workspace) : null
   } catch { return null }
 }
 
@@ -51,23 +51,31 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
   const folderBaseRef = useRef<string | null>(null)
+  const preservedEmergencyRef = useRef(false)
   const [message, setMessage] = useState("")
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
   const [trash, setTrash] = useState<SynthesisLocalCopy[] | null>(null)
   const stageEmergencyDraft = () => {
-    try { localStorage.setItem(pendingKey, JSON.stringify({ workspace: workspaceRef.current, folderBase: folderBaseRef.current })) }
+    try {
+      if (!preservedEmergencyRef.current) {
+        const previous = localStorage.getItem(pendingKey)
+        if (previous) preserveSynthesisCopy(localStorage, pendingKey, previous)
+        preservedEmergencyRef.current = true
+      }
+      localStorage.setItem(pendingKey, JSON.stringify({ workspace: workspaceRef.current, folderBase: folderBaseRef.current }))
+    }
     catch { /* The folder remains the primary save target if browser storage is full. */ }
   }
   const autosave = useMemo(() => createAsyncLocalAutosave(async () => {
     const snapshot = structuredClone(workspaceRef.current)
-    // Keep a synchronous browser copy too: leaving the page must never turn a
-    // temporary folder-permission problem into lost text.
-    try { localStorage.setItem(storageKey, JSON.stringify(snapshot)) }
-    catch { /* The folder remains the primary save target if browser storage is full. */ }
     const folder = await getSynthesisFolderStore()
     await folder.save(context, snapshot)
+    // Emergency drafts are staged synchronously; refresh the auxiliary cache
+    // only after the original data has been migrated and the folder verified.
+    try { localStorage.setItem(storageKey, JSON.stringify(snapshot)) }
+    catch { /* The folder remains the primary save target if browser storage is full. */ }
     folderBaseRef.current = synthesisContent(snapshot)
     if (synthesisContent(workspaceRef.current) === folderBaseRef.current) {
       try { localStorage.removeItem(pendingKey) } catch { /* A stale emergency draft is not authoritative. */ }
@@ -164,14 +172,16 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         } catch (error) {
           const fallback = readLocalWorkspace(pendingKey) ?? readLocalWorkspace(storageKey)
           if (!fallback) throw error
+          if (disposed || editorOpenRef.current || autosave.dirty) return
           workspaceRef.current = fallback; setWorkspace(fallback); setLoadState("ready")
+          setMessage(SAVE_ERROR_MESSAGE)
           return
         }
         if (disposed || editorOpenRef.current || autosave.dirty) return
         folderBaseRef.current = synthesisContent(record?.workspace ?? null)
-        // A pending browser draft is newer than the last verified folder copy.
-        // It is removed only after that folder write succeeds.
-        const local = readLocalWorkspace(pendingKey) ?? (record ? repairSynthesisLayout(record.workspace) : readLocalWorkspace(storageKey) ?? createEmptySynthesisWorkspace())
+        // Migration has already recovered compatible crash drafts. A leftover
+        // browser copy must not override a newer file from this folder.
+        const local = record ? repairSynthesisLayout(record.workspace) : createEmptySynthesisWorkspace()
         workspaceRef.current = local; setWorkspace(local); setLoadState("ready")
         const synchronized = await syncSynthesis(context)
         if (disposed || editorOpenRef.current || autosave.dirty) return
@@ -287,7 +297,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const document = ensureSynthesisDocument(documentInput, () => {
       if (firstGeneratedId) { firstGeneratedId = false; return session.normalizationId }
       return createSynthesisId()
-    })
+    }, !session.nodeId)
     const completeDocument = session.nodeId ? replaceSynthesisBranch(session.baseDocument, session.nodeId, document) : document
     const previousImageIds = new Set(referencedLocalImageIds(workspaceRef.current.document))
     const nextImageIds = new Set(referencedLocalImageIds(completeDocument))

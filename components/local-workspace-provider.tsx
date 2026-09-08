@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { usePathname } from "next/navigation"
 import QRCode from "qrcode"
+import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
 import {
@@ -422,6 +423,15 @@ export function LocalWorkspaceProvider({
   const [widgetTargetSummary, setWidgetTargetSummary] = useState<WidgetTargetSummary>({ pending: 0, failed: 0, errors: [], revision: 0, lastPublishedAt: "" })
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
+  const [synthesisMigrationError, setSynthesisMigrationError] = useState("")
+
+  useEffect(() => {
+    if (!enabled || !isReady || !rootHandle) return
+    let cancelled = false
+    void getSynthesisFolderStore().then(() => { if (!cancelled) setSynthesisMigrationError("") })
+      .catch((error) => { if (!cancelled) setSynthesisMigrationError(error instanceof Error ? error.message : "No se pudo migrar Síntesis a la carpeta.") })
+    return () => { cancelled = true }
+  }, [enabled, isReady, rootHandle])
 
   useEffect(() => {
     if (!enabled) {
@@ -868,6 +878,10 @@ export function LocalWorkspaceProvider({
     <LocalWorkspaceContext.Provider value={value}>
       {enabled ? <LocalFetchInterceptor /> : null}
       {!enabled || isReady || canRenderBeforeWorkspaceReady ? children : null}
+      {isReady && synthesisMigrationError ? <div role="alert" className="fixed bottom-4 left-4 right-4 z-[100] rounded-lg bg-amber-100 p-4 text-sm text-amber-950">
+        Síntesis: {synthesisMigrationError} Los originales del navegador se conservaron.
+        <button className="ml-3 underline" onClick={() => { void getSynthesisFolderStore().then(() => setSynthesisMigrationError("")).catch((error) => setSynthesisMigrationError(String(error.message || error))) }}>Reintentar migración</button>
+      </div> : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
         <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} servicesFileMessage={servicesFileMessage} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (

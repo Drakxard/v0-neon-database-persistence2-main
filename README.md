@@ -32,12 +32,25 @@ La aplicación usa un workspace local elegido por el usuario para materias, PDFs
 
 Las salidas de InSreen usan Cloudflare R2 para que otro programa pueda consumir los TXT. Su estado técnico se guarda por separado bajo `manifests/inscreen/`.
 
-La página `/sintesis` conserva un árbol único en el R2 personal bajo
-`manifests/inscreen/sintesis/tree-v1.json`. El documento incluye `version`,
-`revision`, `updatedAt`, `defaultScale` y el mapa estable `nodes`; cada nodo guarda
-`id`, `parentId`, `name`, `x`, `y`, `scale` y `content`. Las escrituras de la web
-usan ETag para detectar ediciones concurrentes. Este objeto es el contrato que
-podrá consumir posteriormente el cliente Android.
+La página `/sintesis` guarda el documento completo en la carpeta autorizada del
+dispositivo: `manifests/sintesis/{id-materia}/semana-{n}/workspace.json`.
+El archivo incluye `workspace` (texto, formato y organización del árbol) y `r2`
+(estado de sincronización). Las imágenes se guardan en `sintesis/images/`.
+Cada escritura se relee y verifica antes de darla por guardada; se conserva
+`workspace.backup.json` y las versiones anteriores en `manifests/sintesis/copias/`.
+
+Al abrir la carpeta, la aplicación migra automáticamente los guardados de Síntesis
+del navegador, incluidos pendientes y envolturas antiguas. Conserva todos los
+originales en `manifests/sintesis/migracion-navegador/`, sin borrar los datos del
+navegador ni reemplazar documentos diferentes que ya existan en la carpeta.
+Los árboles v1 sin contexto y las copias dañadas se archivan para recuperación;
+no se les asigna una materia o semana por suposición. El navegador solo conserva
+copias auxiliares y borradores de emergencia; la carpeta es la fuente principal.
+
+R2 sincroniza el contenido de la carpeta bajo
+`manifests/inscreen/sintesis/by-subject/{id-materia}/semana-{n}/synthesis-v2.json`,
+con ETag para conservar ambas versiones ante conflictos. El archivo global
+`manifests/inscreen/sintesis/tree-v1.json` pertenece al formato anterior.
 
 Required environment variables for R2:
 
