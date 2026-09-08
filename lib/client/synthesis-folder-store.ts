@@ -168,21 +168,29 @@ export function createSynthesisFolderStore(root: FileSystemDirectoryHandle) {
       return weeks.sort((a, b) => b - a)
     } catch (error) { if (missing(error)) return []; throw error }
   }
-  async function listCopies(): Promise<SynthesisLocalCopy[]> {
+  async function listArchived(kind: string): Promise<SynthesisLocalCopy[]> {
     const result: SynthesisLocalCopy[] = []
-    for (const kind of ["migracion-navegador", "copias"]) {
-      let handle: FileSystemDirectoryHandle
-      try { handle = await directory([...ROOT, kind]) } catch (error) { if (missing(error)) continue; throw error }
-      for await (const [name, entry] of handle.entries()) {
-        if (entry.kind !== "file" || !name.endsWith(".json")) continue
-        const archived = JSON.parse(await (await (entry as FileSystemFileHandle).getFile()).text())
-        const syntheticKey = `inscreen:synthesis:recovery:${kind}/${name}`
-        const value = JSON.stringify({ sourceKey: archived.sourceKey, raw: archived.raw })
-        result.push(...findSynthesisLocalCopies({ length: 1, key: () => syntheticKey, getItem: () => value }))
-      }
+    let handle: FileSystemDirectoryHandle
+    try { handle = await directory([...ROOT, kind]) } catch (error) { if (missing(error)) return result; throw error }
+    for await (const [name, entry] of handle.entries()) {
+      if (entry.kind !== "file" || !name.endsWith(".json")) continue
+      const archived = JSON.parse(await (await (entry as FileSystemFileHandle).getFile()).text())
+      const syntheticKey = `inscreen:synthesis:recovery:${kind}/${name}`
+      const value = JSON.stringify({ sourceKey: archived.sourceKey, raw: archived.raw })
+      result.push(...findSynthesisLocalCopies({ length: 1, key: () => syntheticKey, getItem: () => value }))
     }
     return result
   }
+  async function listCopies(): Promise<SynthesisLocalCopy[]> {
+    return (await Promise.all(["migracion-navegador", "copias"].map(listArchived))).flat()
+  }
+  async function trash(context: SynthesisContext, workspace: SynthesisWorkspaceV2) {
+    assertValidSynthesisWorkspace(workspace)
+    return lock(synthesisFolderPath(context).join("/"), () => archive(synthesisFolderPath(context).join("/"), JSON.stringify(workspace), "papelera"))
+  }
+  // Older deletes predate the explicit trash. Previous saved versions are kept
+  // here too so they remain recoverable from the same place.
+  const listTrash = async () => (await Promise.all([listArchived("papelera"), listArchived("copias")])).flat()
   const imageTypes = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" } as const
   function imageId(id: string) { if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error("Identificador de imagen inválido."); return id }
   async function saveImage(id: string, blob: Blob) {
@@ -199,6 +207,6 @@ export function createSynthesisFolderStore(root: FileSystemDirectoryHandle) {
     }
     return null
   }
-  return { read, save, acceptRemote, acknowledgeUpload, migrate, listWeeks, listCopies, saveImage, readImage, archive }
+  return { read, save, acceptRemote, acknowledgeUpload, migrate, listWeeks, listCopies, trash, listTrash, saveImage, readImage, archive }
 }
 export type SynthesisFolderStore = ReturnType<typeof createSynthesisFolderStore>

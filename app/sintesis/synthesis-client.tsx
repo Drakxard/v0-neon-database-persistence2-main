@@ -16,6 +16,7 @@ import { createAsyncLocalAutosave } from "@/lib/client/async-local-autosave"
 import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
 import { synthesisContent, type FolderSynthesis } from "@/lib/client/synthesis-folder-store"
 import { syncSynthesis, SYNTHESIS_SYNC_EVENT } from "@/lib/client/synthesis-sync"
+import { parseStoredSynthesisWorkspace, type SynthesisLocalCopy } from "@/lib/client/synthesis-local-copies"
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
@@ -54,6 +55,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
+  const [trash, setTrash] = useState<SynthesisLocalCopy[] | null>(null)
   const stageEmergencyDraft = () => {
     try { localStorage.setItem(pendingKey, JSON.stringify({ workspace: workspaceRef.current, folderBase: folderBaseRef.current })) }
     catch { /* The folder remains the primary save target if browser storage is full. */ }
@@ -340,10 +342,12 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const currentNode = currentParentId ? nodes.find((node) => node.id === currentParentId) ?? null : null
 
   const deleteNode = async (nodeId: string) => {
+    const beforeDeletion = structuredClone(workspaceRef.current)
     const next = removeSynthesisNode(workspaceRef.current, nodeId)
     const retainedImages = new Set(referencedLocalImageIds(next.document))
     const removed = referencedLocalImageIds(workspaceRef.current.document).filter((id) => !retainedImages.has(id))
     try {
+      await (await getSynthesisFolderStore()).trash(context, beforeDeletion)
       await acceptWorkspace(next)
       void Promise.allSettled(removed.map(deleteSynthesisImage))
     } catch { setMessage("No se pudo guardar la eliminación del nodo.") }
@@ -367,9 +371,27 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
           {[...new Set([context.weekNumber, ...savedWeeks])].sort((a, b) => b - a).map((week) => <option key={week} value={week}>{week}</option>)}
         </select>
       </label>
+      <button className={styles.trashButton} onClick={async () => {
+        try { setTrash(await (await getSynthesisFolderStore()).listTrash()) }
+        catch { setMessage("No se pudo abrir la papelera de Síntesis.") }
+      }} aria-label="Abrir papelera de Síntesis" title="Papelera"><Trash2 /></button>
       <div className={styles.zoom}><button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
     </header>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
+    {trash !== null ? <section className={styles.trashPanel} role="dialog" aria-label="Papelera de Síntesis">
+      <h2>Papelera</h2>
+      <p>Cada entrada restaura el estado completo previo a un borrado. También se incluyen respaldos anteriores para recuperar borrados recientes.</p>
+      <button onClick={() => setTrash(null)}>Cerrar</button>
+      {trash.length === 0 ? <p>La papelera está vacía.</p> : trash.map((copy) => <article key={copy.key}>
+        <p>{copy.preview || "Contenido sin texto."}</p>
+        <button onClick={async () => {
+          try {
+            await acceptWorkspace(parseStoredSynthesisWorkspace(copy.raw).workspace)
+            setTrash(null)
+          } catch (error) { setMessage(error instanceof Error ? error.message : "No se pudo restaurar el borrado.") }
+        }}>Restaurar este estado</button>
+      </article>)}
+    </section> : null}
     {loadState !== "ready" ? <div className={styles.emptyState} role="status">
       {loadState === "loading" ? "Cargando la Síntesis guardada…" : "No se pudo cargar la Síntesis guardada."}
       {loadState === "error" ? <button onClick={() => { setLoadState("loading"); setRetry((value) => value + 1) }}>Reintentar</button> : null}
