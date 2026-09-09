@@ -291,6 +291,43 @@ async function normalizeLocalWidgetTargetSyncItems(items: WidgetTargetSyncItem[]
   return normalized
 }
 
+async function repairLocalWidgetTargetSyncManifest(manifest: WidgetTargetSyncManifest) {
+  const catalog = await readCurrentLocalWidgetCatalog()
+  const catalogIds = new Set(catalog.map((subject) => subject.id))
+  const catalogSignature = JSON.stringify(catalog)
+  const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
+  const targets = normalizedItems.filter((item) =>
+    item.kind === "target" && item.target && catalogIds.has(item.target.subjectId)
+  )
+  const queuedCatalog = normalizedItems
+    .filter((item) => item.kind === "catalog")
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  const items = manifest.published?.catalogSignature === catalogSignature
+    ? targets
+    : [{
+        id: queuedCatalog?.id ?? crypto.randomUUID(),
+        kind: "catalog" as const,
+        subjects: catalog,
+        status: "pending" as const,
+        attempts: 0,
+        lastError: "",
+        updatedAt: nowIso(),
+      }, ...targets]
+  const targetSignatures = Object.fromEntries(
+    Object.entries(manifest.published?.targetSignatures ?? {}).filter(([key]) =>
+      catalogIds.has(key.slice(0, key.lastIndexOf(":")))
+    )
+  )
+  return {
+    catalog,
+    manifest: {
+      version: 1 as const,
+      items,
+      published: { ...manifest.published, targetSignatures },
+    } satisfies WidgetTargetSyncManifest,
+  }
+}
+
 export async function enqueueLocalWidgetCatalog(subjects: WidgetCatalogSubject[]) {
   await withWidgetTargetSyncLock(async () => {
     const manifest = await readWidgetTargetSyncManifest()
@@ -357,10 +394,9 @@ let widgetTargetSyncRequested = false
 async function runLocalWidgetTargetSyncQueue() {
   const configToken = getReadyInscreenConfigToken()
   if (!configToken) return getLocalWidgetTargetSyncSummaryUnlocked()
-  const manifest = await readWidgetTargetSyncManifest()
-  const normalizedItems = await normalizeLocalWidgetTargetSyncItems(manifest.items)
-  await writeWidgetTargetSyncManifest(normalizedItems, manifest.published)
-  const ordered = [...normalizedItems].sort((left, right) => {
+  const repaired = await repairLocalWidgetTargetSyncManifest(await readWidgetTargetSyncManifest())
+  await writeWidgetTargetSyncManifest(repaired.manifest.items, repaired.manifest.published)
+  const ordered = [...repaired.manifest.items].sort((left, right) => {
     if (left.kind !== right.kind) return left.kind === "catalog" ? -1 : 1
     return left.updatedAt.localeCompare(right.updatedAt)
   })
@@ -372,8 +408,9 @@ async function runLocalWidgetTargetSyncQueue() {
       if (current.kind === "catalog") {
         publishedCatalog = normalizeWidgetCatalogSubjects(current.subjects ?? [])
       } else if (current.target) {
-        const currentCatalog = await readCurrentLocalWidgetCatalog()
-        if (currentCatalog.some((subject) => subject.id === current.target!.subjectId)) publishedCatalog = currentCatalog
+        // The repair pass removed orphan targets, so every target is published
+        // atomically with the same authoritative catalog snapshot.
+        publishedCatalog = repaired.catalog
       }
       const response = await fetch("/api/inscreen/widget-targets", {
         method: "POST",
