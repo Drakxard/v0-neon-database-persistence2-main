@@ -47,9 +47,11 @@ Los árboles v1 sin contexto y las copias dañadas se archivan para recuperació
 no se les asigna una materia o semana por suposición. El navegador solo conserva
 copias auxiliares y borradores de emergencia; la carpeta es la fuente principal.
 
-R2 sincroniza el contenido de la carpeta bajo
+R2 recibe una replica unidireccional del contenido de la carpeta bajo
 `manifests/inscreen/sintesis/by-subject/{id-materia}/semana-{n}/synthesis-v2.json`,
-con ETag para conservar ambas versiones ante conflictos. El archivo global
+La carpeta local es la unica fuente editable: la web nunca descarga ni mezcla una
+version R2 en el workspace. Los dispositivos vinculados consumen R2 en modo lectura.
+El archivo global
 `manifests/inscreen/sintesis/tree-v1.json` pertenece al formato anterior.
 
 Required environment variables for R2:

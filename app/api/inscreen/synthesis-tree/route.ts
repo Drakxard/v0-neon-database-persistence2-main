@@ -21,8 +21,10 @@ async function handle(request: Request) {
       }
       if (request.method === "GET") return Response.json(await readSynthesisWorkspace(context), { headers: { "Cache-Control": "no-store" } })
       const body = await request.json()
-      if (!body.workspace || !(body.etag === null || typeof body.etag === "string")) return Response.json({ error: "Síntesis inválida." }, { status: 400 })
-      return Response.json(await writeSynthesisWorkspace(context, body.workspace, body.etag))
+      if (!body.workspace) return Response.json({ error: "Síntesis inválida." }, { status: 400 })
+      // The authorized local folder is the sole writer. R2 is a read-only
+      // projection for viewer devices, so stale remote ETags must not block it.
+      return Response.json(await writeSynthesisWorkspace(context, body.workspace, null, true))
     } catch (error) {
       if (error instanceof SynthesisWorkspaceConflictError) return Response.json({ error: error.message }, { status: 409 })
       return Response.json({ error: error instanceof Error ? error.message : "No se pudo sincronizar." }, { status: 500 })
