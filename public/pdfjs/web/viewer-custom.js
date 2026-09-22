@@ -33,6 +33,8 @@
     pagesZipButton: null,
     secondaryPagesZipButton: null,
     isExportingPagesZip: false,
+    svgButtons: null,
+    isExportingSvg: false,
     replaceButton: null,
     secondaryReplaceButton: null,
     replaceInput: null,
@@ -629,6 +631,13 @@
   }
 
   function ensureUi() {
+    if (!state.svgButtons) {
+      state.svgButtons = ["exportSvgButton", "secondaryExportSvgButton"]
+        .map((id) => document.getElementById(id)).filter(Boolean);
+      for (const button of state.svgButtons) {
+        button.addEventListener("click", exportCurrentPageAsSvg);
+      }
+    }
     if (!state.translateButton) {
       state.translateButton = document.getElementById("translateSelectionButton");
       if (state.translateButton) {
@@ -1023,6 +1032,10 @@
 
     setPagesZipButtonState(state.pagesZipButton);
     setPagesZipButtonState(state.secondaryPagesZipButton);
+    for (const button of state.svgButtons || []) {
+      button.disabled = !state.app.pdfDocument || state.isExportingSvg;
+      button.setAttribute("aria-busy", String(state.isExportingSvg));
+    }
     setReplaceButtonState(state.replaceButton);
     setReplaceButtonState(state.secondaryReplaceButton);
   }
@@ -1672,6 +1685,60 @@
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  async function exportCurrentPageAsSvg() {
+    const source = state.app?.pdfDocument;
+    if (!source || state.isExportingSvg) return;
+    const pageNumber = state.app.pdfViewer.currentPageNumber;
+    const rotation = state.app.pdfViewer.pagesRotation || 0;
+    const sourceName = normalizePdfFileName(
+      state.query?.fileName || state.app._docFilename || "documento.pdf"
+    ).replace(/\.pdf$/i, "");
+    state.isExportingSvg = true;
+    refreshSyncButtons();
+    showBusy("Preparando SVG...");
+    let loadingTask;
+    try {
+      // The current viewer no longer includes SVGGraphics. Keep this backend
+      // isolated and lazy-loaded, with fonts/images embedded for standalone SVGs.
+      const { default: svgPdfjs } = await import("/vendor/pdfjs-svg/pdf.mjs");
+      svgPdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs-svg/pdf.worker.min.js";
+      const bytes = await source.saveDocument();
+      loadingTask = svgPdfjs.getDocument({
+        data: new Uint8Array(bytes),
+        isEvalSupported: false,
+        fontExtraProperties: true,
+        cMapUrl: "/pdfjs/web/cmaps/",
+        cMapPacked: true,
+        standardFontDataUrl: "/pdfjs/web/standard_fonts/",
+      });
+      loadingTask.onPassword = (updatePassword, reason) => {
+        state.app.passwordPrompt.setUpdateCallback(updatePassword, reason);
+        state.app.passwordPrompt.open();
+      };
+      const document = await loadingTask.promise;
+      const page = await document.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1, rotation: (page.rotate + rotation) % 360 });
+      const operators = await page.getOperatorList({ intent: "display" });
+      const graphics = new svgPdfjs.SVGGraphics(page.commonObjs, page.objs, true);
+      graphics.embedFonts = true;
+      const svg = await graphics.getSVG(operators, viewport);
+      const markup = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+      downloadBlob(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `${sourceName}-pagina-${pageNumber}.svg`);
+      showToast("SVG descargado.", "success", 2800);
+    } catch (error) {
+      console.error("Custom PDF.js SVG export failed:", error);
+      showToast(error instanceof Error ? error.message : "No se pudo exportar el SVG.", "error", 4600);
+    } finally {
+      try {
+        await loadingTask?.destroy();
+      } finally {
+        state.isExportingSvg = false;
+        hideBusy();
+        refreshSyncButtons();
+      }
+    }
   }
 
   async function exportPagesAsJpegZip() {

@@ -553,6 +553,18 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
   cursor: pointer;
 }
 
+#exportSvgButton.pdfjs-custom-svg-button {
+  width: 36px;
+  min-width: 36px;
+  padding: 0 3px;
+  font: 600 11px/1 system-ui, sans-serif;
+}
+
+#exportSvgButton::before,
+#secondaryExportSvgButton::before {
+  display: none;
+}
+
 #pagesZipButton.pdfjs-custom-pages-zip-button {
   width: 32px;
   min-width: 32px;
