@@ -1,4 +1,5 @@
 import { exportImage, svgNumber, type SvgImage } from "../svg-image"
+import { normalizeSvgText } from "./svg-text"
 
 const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget"
 
@@ -187,17 +188,7 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
     // coordinates, so importers need not implement CSS baseline alignment.
     const measurable = document.importNode(svg, true) as unknown as SVGSVGElement
     mount.append(measurable)
-    const measuredTexts = measurable.querySelectorAll<SVGTextElement>("text")
-    svg.querySelectorAll("text").forEach((text, index) => {
-      const measured = measuredTexts[index]
-      const before = measured.getBBox().y
-      measured.removeAttribute("dominant-baseline")
-      const offset = before - measured.getBBox().y
-      text.removeAttribute("dominant-baseline")
-      for (const positioned of [text, ...Array.from(text.querySelectorAll("tspan"))]) {
-        if (positioned.hasAttribute("y")) positioned.setAttribute("y", String(Number(positioned.getAttribute("y")) + offset))
-      }
-    })
+    normalizeSvgText(svg, measurable)
   } finally {
     mount.remove()
     if (savedSelection) selection?.setBaseAndExtent(savedSelection.anchor, savedSelection.anchorOffset, savedSelection.focus, savedSelection.focusOffset)

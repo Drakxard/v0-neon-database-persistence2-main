@@ -7,6 +7,9 @@ por las máscaras, grupos o serialización de imágenes del conversor DOM.
 
 `dom-to-svg` se usa para el texto y las formas. No usa `foreignObject`: mostrar
 HTML dentro de un SVG en Chrome no valida su importación en Figma.
+Cada línea se convierte en un elemento `text` independiente con posición y
+formato explícitos. Se eliminan `textLength` y `lengthAdjust="spacingAndGlyphs"`
+para que no se estiren ni compriman los glifos según las métricas del importador.
 
 Las imágenes se incrustan con sus bytes originales, sin reducir su resolución.
 El tamaño del archivo no permite determinar por sí solo si la exportación está

@@ -23,6 +23,7 @@ test("exports native SVG with text, tables, list markers and original embedded i
     </style><div class="simple-editor-wrapper"><div class="tiptap" contenteditable="true">
       <h2>Título &amp; formato</h2><p>Texto <strong>negrita</strong> con <em>cursiva</em>, <mark>resaltado</mark>, H<sub>2</sub>O y x<sup>2</sup>.
       Una línea suficientemente larga para comprobar que mantiene los saltos del navegador.</p>
+      <p class="multiline">Primera línea<br/>Segunda línea<br/>Tercera línea con áéíóú ñ</p>
       <ol start="3"><li>Primero</li><li>Segundo</li></ol>
       <ul data-type="taskList"><li data-checked="true"><label><input type="checkbox" checked/><span></span></label><div>Tarea terminada</div></li></ul>
       <div class="tableWrapper"><table><tr><th>Columna A</th><th>Columna B</th></tr><tr><td>Celda 1</td><td>Celda 2</td></tr></table></div>
@@ -58,6 +59,19 @@ test("exports native SVG with text, tables, list markers and original embedded i
         return [rect.x - sourceRect.x, rect.y - sourceRect.y, rect.width, rect.height].map((n) => Math.round(n * 100) / 100)
       })
       const textContent = Array.from(parsed.querySelectorAll("text"), (node) => node.textContent).join(" ")
+      const measuredSvg = document.importNode(parsed.documentElement, true)
+      measuredSvg.style.cssText = "position:absolute;left:1000px;top:0;pointer-events:none"
+      document.body.append(measuredSvg)
+      const nativeBold = Array.from(measuredSvg.querySelectorAll("text")).find((node) => node.textContent === "negrita")
+      const sourceBold = source.querySelector("strong")
+      const boldWidthDifference = Math.abs(nativeBold.getComputedTextLength() - sourceBold.getBoundingClientRect().width)
+      const nativeItalic = Array.from(measuredSvg.querySelectorAll("text")).find((node) => node.textContent === "cursiva")
+      const linePositions = ["Primera línea", "Segunda línea", "Tercera línea con áéíóú ñ"].map((value) => {
+        const node = Array.from(measuredSvg.querySelectorAll("text")).find((node) => node.textContent === value)
+        return node ? [Number(node.getAttribute("x")), Number(node.getAttribute("y"))] : null
+      })
+      const fontStyles = [nativeBold.getAttribute("font-weight"), nativeItalic.getAttribute("font-style")]
+      measuredSvg.remove()
       // Disable all CSS in the exported document: content must remain native
       // SVG, without an HTML renderer or page stylesheets to make it visible.
       parsed.querySelectorAll("style, foreignObject").forEach((node) => node.remove())
@@ -85,6 +99,8 @@ test("exports native SVG with text, tables, list markers and original embedded i
         shapes: parsed.querySelectorAll("rect,path,line").length,
         baselineCss: parsed.querySelectorAll("[dominant-baseline]").length,
         checkmark: !!parsed.querySelector('path[d="M3 12L9 18L21 6"]'),
+        stretchedText: parsed.querySelectorAll("[textLength], [lengthAdjust], tspan").length,
+        boldWidthDifference, fontStyles, linePositions,
       }
     })
     assert.equal(result.error, undefined)
@@ -108,6 +124,13 @@ test("exports native SVG with text, tables, list markers and original embedded i
     assert.ok(result.shapes > 5)
     assert.equal(result.baselineCss, 0)
     assert.equal(result.checkmark, true)
+    assert.equal(result.stretchedText, 0, "text must not depend on glyph stretching or multiline tspan import")
+    assert.ok(result.boldWidthDifference < 0.1, "bold glyphs keep their natural browser width")
+    assert.deepEqual(result.fontStyles, ["700", "italic"])
+    assert.ok(result.linePositions.every(Boolean))
+    assert.equal(result.linePositions[0][0], result.linePositions[1][0])
+    assert.ok(result.linePositions[0][1] < result.linePositions[1][1])
+    assert.ok(result.linePositions[1][1] < result.linePositions[2][1])
 
     const failure = await page.evaluate(async () => {
       const originalFetch = window.fetch
