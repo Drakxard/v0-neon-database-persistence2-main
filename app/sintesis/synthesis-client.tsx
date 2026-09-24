@@ -40,6 +40,9 @@ function exportSynthesisEditorSvg() {
   const source = document.querySelector<HTMLElement>(".simple-editor-wrapper .tiptap")
   if (!source) return
   const clone = source.cloneNode(true) as HTMLElement
+  // SVG foreignObject content must be explicitly in the XHTML namespace when
+  // serialized as XML; otherwise browsers and image viewers may render it blank.
+  clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml")
   const originals = [source, ...source.querySelectorAll<HTMLElement>("*")]
   const clones = [clone, ...clone.querySelectorAll<HTMLElement>("*")]
   originals.forEach((element, index) => {
@@ -61,7 +64,7 @@ function exportSynthesisEditorSvg() {
   link.href = url
   link.download = "sintesis.svg"
   link.click()
-  URL.revokeObjectURL(url)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function readLocalWorkspace(key: string) {
