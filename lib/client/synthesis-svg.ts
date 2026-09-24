@@ -1,4 +1,3 @@
-const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml"
 const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget"
 
 function copyStyle(source: CSSStyleDeclaration, target: CSSStyleDeclaration) {
@@ -23,10 +22,52 @@ async function imageDataUrl(src: string): Promise<string> {
   })
 }
 
-// Like Secuencial's exportTextHtml/exportShape, serialize XHTML inside a
-// foreignObject. Let the browser lay out rich text instead of estimating SVG
-// text baselines and losing tables, lists, highlights and inline formatting.
+function listNumber(value: number, type: string): string {
+  if (/alpha|latin/.test(type) && value > 0) {
+    let letters = ""
+    for (let n = value; n > 0; n = Math.floor((n - 1) / 26)) letters = String.fromCharCode(97 + (n - 1) % 26) + letters
+    return type.startsWith("upper") ? letters.toUpperCase() : letters
+  }
+  if (/roman/.test(type) && value > 0 && value < 4000) {
+    let result = "", n = value
+    for (const [amount, symbol] of [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]] as const) {
+      while (n >= amount) { result += symbol; n -= amount }
+    }
+    return type.startsWith("upper") ? result : result.toLowerCase()
+  }
+  return type === "decimal-leading-zero" ? String(value).padStart(2, "0") : String(value)
+}
+
+// dom-to-svg renders backgrounds/borders and browser-measured text runs as SVG
+// primitives. Its missing ::marker support is supplied on the detached copy.
+function materializeListMarkers(root: HTMLElement) {
+  for (const list of root.querySelectorAll("ol, ul")) {
+    const items = Array.from(list.children).filter((child): child is HTMLLIElement => child instanceof HTMLLIElement)
+    const reversed = list.hasAttribute("reversed")
+    let number = Number(list.getAttribute("start") ?? (reversed ? items.length : 1))
+    for (const item of items) {
+      if (item.hasAttribute("value")) number = Number(item.getAttribute("value"))
+      const style = getComputedStyle(item)
+      const type = style.listStyleType
+      if (style.display === "list-item" && type !== "none") {
+        const marker = document.createElement("span")
+        marker.textContent = ({ disc: "•", circle: "◦", square: "▪" } as Record<string, string>)[type] ?? `${listNumber(number, type)}.`
+        marker.setAttribute("data-export-marker", "")
+        marker.style.cssText = "position:absolute;right:100%;top:0;white-space:pre;padding-right:.4em;"
+        marker.style.font = style.font
+        item.style.position = "relative"
+        item.style.listStyleType = "none"
+        item.prepend(marker)
+      }
+      number += reversed ? -1 : 1
+    }
+  }
+}
+
+// HTML/foreignObject works in browsers but is not a portable Figma import.
+// Keep layout measurement isolated from the live ProseMirror document.
 export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<string> {
+  const { elementToSVG } = await import("dom-to-svg")
   await document.fonts.ready
   await Promise.all(Array.from(source.querySelectorAll("img"), (image) => image.decode()))
 
@@ -34,8 +75,6 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
   const originals = [source, ...Array.from(source.querySelectorAll<HTMLElement>("*"))]
   const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))]
   const pseudoRules: string[] = []
-  const images = new Map<string, Promise<string>>()
-  const pendingImages: Promise<void>[] = []
 
   originals.forEach((original, index) => {
     const copy = copies[index]
@@ -62,38 +101,102 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
       copyStyle(style, declaration)
       pseudoRules.push(`[data-svg-node="${index}"]${pseudo}{${declaration.cssText}}`)
     }
+    if (original.matches('li[data-checked="true"] > label > span')) {
+      // Tiptap draws its check with a CSS mask, which SVG importers cannot use.
+      const namespace = "http://www.w3.org/2000/svg"
+      const check = document.createElementNS(namespace, "svg")
+      check.setAttribute("viewBox", "0 0 24 24")
+      check.style.cssText = "position:absolute;left:.125em;top:.125em;width:.75em;height:.75em;"
+      const path = document.createElementNS(namespace, "path")
+      path.setAttribute("d", "M3 12L9 18L21 6")
+      path.setAttribute("fill", "none")
+      path.setAttribute("stroke", getComputedStyle(original, "::before").backgroundColor)
+      path.setAttribute("stroke-width", "3")
+      path.setAttribute("stroke-linecap", "round")
+      path.setAttribute("stroke-linejoin", "round")
+      check.append(path)
+      copy.append(check)
+      pseudoRules.push(`[data-svg-node="${index}"]::before{content:none!important}`)
+    }
     if (original instanceof HTMLInputElement && original.checked) copy.setAttribute("checked", "checked")
     if (original instanceof HTMLImageElement) {
-      const src = original.currentSrc || original.src
-      if (!images.has(src)) images.set(src, imageDataUrl(src))
-      pendingImages.push(images.get(src)!.then((dataUrl) => {
-        copy.setAttribute("src", dataUrl)
-        copy.removeAttribute("srcset")
-        copy.removeAttribute("sizes")
-        copy.removeAttribute("loading")
-      }))
+      copy.setAttribute("src", original.currentSrc || original.src)
+      copy.removeAttribute("srcset")
+      copy.removeAttribute("sizes")
+      copy.removeAttribute("loading")
     }
     if (original.classList.contains("tableWrapper")) {
       copy.style.overflow = "visible"
     }
   })
-  await Promise.all(pendingImages)
-
   const width = Math.max(1, Math.ceil(source.scrollWidth), source.offsetWidth)
   const height = Math.max(1, Math.ceil(source.scrollHeight), source.offsetHeight)
-  clone.setAttribute("xmlns", XHTML_NAMESPACE)
   Object.assign(clone.style, {
     boxSizing: "border-box", width: `${source.offsetWidth}px`, maxWidth: "none",
     height: `${height}px`, maxHeight: "none", margin: "0", position: "relative",
-    top: "auto", left: "auto", transform: "none", overflow: "visible",
+    top: "auto", left: "auto", transform: "none", overflow: "visible", backgroundColor: "#fffdf8",
   })
   if (pseudoRules.length) {
-    const style = document.createElementNS(XHTML_NAMESPACE, "style")
+    const style = document.createElement("style")
     style.textContent = pseudoRules.join("\n")
     clone.prepend(style)
   }
-  const html = new XMLSerializer().serializeToString(clone)
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffdf8"/><foreignObject x="0" y="0" width="${width}" height="${height}">${html}</foreignObject></svg>`
+  const mount = document.createElement("div")
+  mount.style.cssText = "position:fixed;left:0;top:0;opacity:0;pointer-events:none;z-index:-2147483647;"
+  mount.setAttribute("aria-hidden", "true")
+  mount.append(clone)
+  document.body.append(mount)
+  const selection = window.getSelection()
+  const savedSelection = selection?.anchorNode && selection.focusNode ? {
+    anchor: selection.anchorNode, anchorOffset: selection.anchorOffset,
+    focus: selection.focusNode, focusOffset: selection.focusOffset,
+  } : null
+  let svgDocument: XMLDocument
+  try {
+    await Promise.all(Array.from(clone.querySelectorAll("img"), (image) => image.decode()))
+    materializeListMarkers(clone)
+    const bounds = clone.getBoundingClientRect()
+    svgDocument = elementToSVG(clone, { captureArea: new DOMRect(bounds.x, bounds.y, width, height), keepLinks: false })
+    const svg = svgDocument.documentElement
+    // Figma does not use embedded web fonts. Native text retains the font name;
+    // avoid copying every unrelated font stylesheet into this export.
+    svg.querySelectorAll("style").forEach((style) => style.remove())
+    // Resolve dominant-baseline in the browser, then bake it into plain y
+    // coordinates, so importers need not implement CSS baseline alignment.
+    const measurable = document.importNode(svg, true) as unknown as SVGSVGElement
+    mount.append(measurable)
+    const measuredTexts = measurable.querySelectorAll<SVGTextElement>("text")
+    svg.querySelectorAll("text").forEach((text, index) => {
+      const measured = measuredTexts[index]
+      const before = measured.getBBox().y
+      measured.removeAttribute("dominant-baseline")
+      const offset = before - measured.getBBox().y
+      text.removeAttribute("dominant-baseline")
+      for (const positioned of [text, ...Array.from(text.querySelectorAll("tspan"))]) {
+        if (positioned.hasAttribute("y")) positioned.setAttribute("y", String(Number(positioned.getAttribute("y")) + offset))
+      }
+    })
+  } finally {
+    mount.remove()
+    if (savedSelection) selection?.setBaseAndExtent(savedSelection.anchor, savedSelection.anchorOffset, savedSelection.focus, savedSelection.focusOffset)
+    else selection?.removeAllRanges()
+  }
+
+  const images = new Map<string, Promise<string>>()
+  await Promise.all(Array.from(svgDocument.querySelectorAll("image"), async (image) => {
+    const src = image.getAttribute("xlink:href") || image.getAttribute("href") || ""
+    if (!images.has(src)) images.set(src, imageDataUrl(src))
+    const dataUrl = await images.get(src)!
+    image.removeAttribute("href")
+    image.setAttribute("xlink:href", dataUrl)
+  }))
+  for (const element of svgDocument.querySelectorAll("*")) {
+    for (const attribute of Array.from(element.attributes)) {
+      if (/^(data-|aria-)/.test(attribute.name) || attribute.name === "class") element.removeAttribute(attribute.name)
+    }
+  }
+  if (svgDocument.querySelector("foreignObject")) throw new Error("La exportación contiene contenido no compatible con Figma.")
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svgDocument)}`
 }
 
 export async function exportSynthesisEditorSvg() {

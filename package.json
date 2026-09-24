@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.test.mts",
+    "test:svg": "node --test tests/synthesis-svg.browser.mjs",
     "quality": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
@@ -65,6 +66,7 @@
     "clsx": "^2.1.1",
     "cmdk": "1.1.1",
     "date-fns": "4.1.0",
+    "dom-to-svg": "0.12.2",
     "embla-carousel-react": "8.6.0",
     "groq-sdk": "^0.13.0",
     "input-otp": "1.4.2",
@@ -89,12 +91,14 @@
   },
   "devDependencies": {
     "@base-ui/react": "^1.7.0",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/lodash.throttle": "^4.1.9",
     "@types/node": "^22",
     "@types/qrcode": "1.5.5",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
+    "esbuild": "0.25.12",
     "postcss": "^8.5",
     "sass": "^1.103.1",
     "tailwindcss": "^4.2.0",
