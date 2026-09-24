@@ -1,3 +1,5 @@
+import { exportImage, svgNumber, type SvgImage } from "../svg-image"
+
 const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget"
 
 function copyStyle(source: CSSStyleDeclaration, target: CSSStyleDeclaration) {
@@ -71,6 +73,24 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
   await document.fonts.ready
   await Promise.all(Array.from(source.querySelectorAll("img"), (image) => image.decode()))
 
+  // Images follow Secuencial's exportImage path directly. Do not feed them
+  // through the DOM converter's stacking groups, masks or xlink serialization.
+  const sourceBounds = source.getBoundingClientRect()
+  const imageSources = new Map<string, Promise<string>>()
+  const exportedImages: SvgImage[] = []
+  for (const image of source.querySelectorAll("img")) {
+    if (image.closest(EDITOR_CONTROLS)) continue
+    const bounds = image.getBoundingClientRect()
+    if (bounds.width <= 0 || bounds.height <= 0) continue
+    const src = image.currentSrc || image.src
+    if (!imageSources.has(src)) imageSources.set(src, imageDataUrl(src))
+    exportedImages.push({
+      x: bounds.left - sourceBounds.left, y: bounds.top - sourceBounds.top,
+      width: bounds.width, height: bounds.height, src,
+    })
+  }
+  await Promise.all(exportedImages.map(async (image) => { image.src = await imageSources.get(image.src)! }))
+
   const clone = source.cloneNode(true) as HTMLElement
   const originals = [source, ...Array.from(source.querySelectorAll<HTMLElement>("*"))]
   const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))]
@@ -129,8 +149,8 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
       copy.style.overflow = "visible"
     }
   })
-  const width = Math.max(1, Math.ceil(source.scrollWidth), source.offsetWidth)
-  const height = Math.max(1, Math.ceil(source.scrollHeight), source.offsetHeight)
+  const width = Math.max(1, Math.ceil(source.scrollWidth), source.offsetWidth, ...exportedImages.map((image) => Math.ceil(image.x + image.width)))
+  const height = Math.max(1, Math.ceil(source.scrollHeight), source.offsetHeight, ...exportedImages.map((image) => Math.ceil(image.y + image.height)))
   Object.assign(clone.style, {
     boxSizing: "border-box", width: `${source.offsetWidth}px`, maxWidth: "none",
     height: `${height}px`, maxHeight: "none", margin: "0", position: "relative",
@@ -158,6 +178,8 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
     const bounds = clone.getBoundingClientRect()
     svgDocument = elementToSVG(clone, { captureArea: new DOMRect(bounds.x, bounds.y, width, height), keepLinks: false })
     const svg = svgDocument.documentElement
+    // All document images are emitted separately by Secuencial's serializer.
+    svg.querySelectorAll("image").forEach((image) => image.remove())
     // Figma does not use embedded web fonts. Native text retains the font name;
     // avoid copying every unrelated font stylesheet into this export.
     svg.querySelectorAll("style").forEach((style) => style.remove())
@@ -182,21 +204,18 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
     else selection?.removeAllRanges()
   }
 
-  const images = new Map<string, Promise<string>>()
-  await Promise.all(Array.from(svgDocument.querySelectorAll("image"), async (image) => {
-    const src = image.getAttribute("xlink:href") || image.getAttribute("href") || ""
-    if (!images.has(src)) images.set(src, imageDataUrl(src))
-    const dataUrl = await images.get(src)!
-    image.removeAttribute("href")
-    image.setAttribute("xlink:href", dataUrl)
-  }))
   for (const element of svgDocument.querySelectorAll("*")) {
     for (const attribute of Array.from(element.attributes)) {
       if (/^(data-|aria-)/.test(attribute.name) || attribute.name === "class") element.removeAttribute(attribute.name)
     }
   }
   if (svgDocument.querySelector("foreignObject")) throw new Error("La exportación contiene contenido no compatible con Figma.")
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svgDocument)}`
+  const serializer = new XMLSerializer()
+  const vectorMarkup = Array.from(svgDocument.documentElement.children, (element) => serializer.serializeToString(element)).join("")
+  const imageMarkup = exportedImages.map(exportImage).join("")
+  // Same outer SVG and native image markup as Secuencial. Images are direct
+  // children, independent of every mask/opacity group generated for rich text.
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${svgNumber(width)}" height="${svgNumber(height)}" viewBox="0 0 ${svgNumber(width)} ${svgNumber(height)}" data-exporter="sintesis-secuencial-v1">${vectorMarkup}${imageMarkup}</svg>`
 }
 
 export async function exportSynthesisEditorSvg() {

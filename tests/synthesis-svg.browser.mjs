@@ -26,19 +26,22 @@ test("exports native SVG with text, tables, list markers and original embedded i
       <ol start="3"><li>Primero</li><li>Segundo</li></ol>
       <ul data-type="taskList"><li data-checked="true"><label><input type="checkbox" checked/><span></span></label><div>Tarea terminada</div></li></ul>
       <div class="tableWrapper"><table><tr><th>Columna A</th><th>Columna B</th></tr><tr><td>Celda 1</td><td>Celda 2</td></tr></table></div>
-      <div class="synthesis-local-image"><img width="80" height="40"/><div class="synthesis-image-size-controls"><button>CONTROL EXCLUIDO</button></div></div>
+      <div class="synthesis-local-image" style="overflow:hidden"><img width="80" height="40"/><div class="synthesis-image-size-controls"><button>CONTROL EXCLUIDO</button></div></div>
       <div style="height:900px"></div><p>Última línea fuera de pantalla 😀 &lt;fin&gt;</p>
+      <div style="overflow:clip"><img width="80" height="40"/></div>
     </div></div>`)
     await page.addScriptTag({ content: bundle.outputFiles[0].text })
     const result = await page.evaluate(async () => {
       const canvas = document.createElement("canvas")
-      canvas.width = 80; canvas.height = 40
+      canvas.width = 1600; canvas.height = 800
       const context = canvas.getContext("2d")
-      context.fillStyle = "#ff0000"; context.fillRect(0, 0, 80, 40)
+      context.fillStyle = "#ff0000"; context.fillRect(0, 0, canvas.width, canvas.height)
       const expectedImage = canvas.toDataURL()
-      const image = document.querySelector("img")
-      image.src = URL.createObjectURL(await new Promise((resolve) => canvas.toBlob(resolve)))
-      await image.decode()
+      const imageUrl = URL.createObjectURL(await new Promise((resolve) => canvas.toBlob(resolve)))
+      await Promise.all(Array.from(document.querySelectorAll("img"), async (image) => {
+        image.src = imageUrl
+        await image.decode()
+      }))
       const source = document.querySelector(".tiptap")
       const before = source.outerHTML
       const selection = getSelection()
@@ -48,7 +51,12 @@ test("exports native SVG with text, tables, list markers and original embedded i
       const svg = await synthesisSvg.buildSynthesisEditorSvg(source)
       const parsed = new DOMParser().parseFromString(svg, "image/svg+xml")
       const svgImage = parsed.querySelector("image")
-      const embedded = svgImage.getAttributeNS("http://www.w3.org/1999/xlink", "href")
+      const embedded = svgImage.getAttribute("href")
+      const sourceRect = source.getBoundingClientRect()
+      const expectedPositions = Array.from(source.querySelectorAll("img"), (image) => {
+        const rect = image.getBoundingClientRect()
+        return [rect.x - sourceRect.x, rect.y - sourceRect.y, rect.width, rect.height].map((n) => Math.round(n * 100) / 100)
+      })
       const textContent = Array.from(parsed.querySelectorAll("text"), (node) => node.textContent).join(" ")
       // Disable all CSS in the exported document: content must remain native
       // SVG, without an HTML renderer or page stylesheets to make it visible.
@@ -70,6 +78,9 @@ test("exports native SVG with text, tables, list markers and original embedded i
         originalUnchanged: before === source.outerHTML,
         selection: selection.toString(), scroll: window.scrollY,
         imageCount: parsed.querySelectorAll("image").length,
+        flatImages: Array.from(parsed.querySelectorAll("image"), (image) => image.parentElement === parsed.documentElement && !image.hasAttribute("xlink:href") && image.getAttribute("preserveAspectRatio") === "none"),
+        imagePositions: Array.from(parsed.querySelectorAll("image"), (image) => ["x", "y", "width", "height"].map((name) => Number(image.getAttribute(name)))),
+        expectedPositions,
         height: rendered.naturalHeight, redPixels, darkPixels,
         shapes: parsed.querySelectorAll("rect,path,line").length,
         baselineCss: parsed.querySelectorAll("[dominant-baseline]").length,
@@ -85,12 +96,14 @@ test("exports native SVG with text, tables, list markers and original embedded i
     assert.match(result.textContent, /Última línea fuera de pantalla/)
     assert.doesNotMatch(result.textContent, /CONTROL EXCLUIDO/)
     assert.equal(result.embedded, result.expectedImage, "image bytes are preserved, without resizing or recompression")
-    assert.equal(result.imageCount, 1)
+    assert.equal(result.imageCount, 2)
+    assert.deepEqual(result.flatImages, [true, true], "Secuencial images use direct href, without converter groups or masks")
+    assert.deepEqual(result.imagePositions, result.expectedPositions)
     assert.equal(result.originalUnchanged, true)
     assert.equal(result.selection, "egr")
     assert.equal(result.scroll, 150)
     assert.ok(result.height > 900)
-    assert.ok(result.redPixels >= 3000, "the 80 × 40 image remains visible, allowing antialiasing at fractional coordinates")
+    assert.ok(result.redPixels >= 6000, "both images render, including the off-screen image inside an overflow container")
     assert.ok(result.darkPixels > 1000, "native text and table borders must actually render")
     assert.ok(result.shapes > 5)
     assert.equal(result.baselineCss, 0)
