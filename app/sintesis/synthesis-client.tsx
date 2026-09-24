@@ -39,6 +39,24 @@ type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument
 async function exportSynthesisEditorSvg() {
   const source = document.querySelector<HTMLElement>(".simple-editor-wrapper .tiptap")
   if (!source) return
+  const clone = source.cloneNode(true) as HTMLElement
+  // SVG foreignObject content must be explicitly in the XHTML namespace when
+  // serialized as XML; otherwise browsers and image viewers may render it blank.
+  clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml")
+  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")]
+  const clones = [clone, ...clone.querySelectorAll<HTMLElement>("*")]
+  originals.forEach((element, index) => {
+    const computed = getComputedStyle(element)
+    const styles = Array.from(computed).map((property) => `${property}:${computed.getPropertyValue(property)}`).join(";")
+    clones[index]?.setAttribute("style", styles)
+  })
+  clone.querySelectorAll(".synthesis-image-size-controls").forEach((controls) => controls.remove())
+  clone.querySelectorAll(".is-selected").forEach((element) => element.classList.remove("is-selected"))
+  clone.querySelectorAll("[data-drag-handle], [contenteditable], [draggable]").forEach((element) => {
+    element.removeAttribute("data-drag-handle")
+    element.removeAttribute("contenteditable")
+    element.removeAttribute("draggable")
+  })
   const sourceRect = source.getBoundingClientRect()
   const imageNodes = await Promise.all(Array.from(source.querySelectorAll<HTMLImageElement>("img")).map(async (image) => {
     const rect = image.getBoundingClientRect()
@@ -54,56 +72,29 @@ async function exportSynthesisEditorSvg() {
     }
     return { x: rect.left - sourceRect.left, y: rect.top - sourceRect.top, width: rect.width, height: rect.height, href: `data:${blob.type || "image/png"};base64,${btoa(binary)}` }
   }))
+  const clonedImages = Array.from(clone.querySelectorAll<HTMLImageElement>("img"))
+  clonedImages.forEach((image, index) => {
+    const exported = imageNodes[index]
+    const placeholder = document.createElement("span")
+    placeholder.setAttribute("xmlns", "http://www.w3.org/1999/xhtml")
+    placeholder.style.display = "inline-block"
+    placeholder.style.width = `${exported?.width ?? 0}px`
+    placeholder.style.height = `${exported?.height ?? 0}px`
+    placeholder.style.verticalAlign = getComputedStyle(image).verticalAlign
+    image.replaceWith(placeholder)
+  })
   const width = Math.max(1, Math.ceil(source.getBoundingClientRect().width))
   const height = Math.max(1, Math.ceil(source.scrollHeight))
-  const escapeXml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!)
-  const textNodes: string[] = []
-  const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT)
-  let textNode = walker.nextNode()
-  while (textNode) {
-    const content = textNode.textContent ?? ""
-    const parent = textNode.parentElement
-    if (parent && content.trim() && !parent.closest(".synthesis-image-size-controls")) {
-      const style = getComputedStyle(parent)
-      if (style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.fontSize) > 0) {
-        const range = document.createRange()
-        const lines: Array<{ x: number; y: number; text: string; right: number }> = []
-        for (let offset = 0; offset < content.length;) {
-          const character = String.fromCodePoint(content.codePointAt(offset)!)
-          const end = offset + character.length
-          range.setStart(textNode, offset)
-          range.setEnd(textNode, end)
-          const rect = range.getBoundingClientRect()
-          offset = end
-          if (!rect.width && !rect.height) continue
-          const y = rect.top - sourceRect.top
-          let line = lines[lines.length - 1]
-          if (!line || Math.abs(line.y - y) > 2 || rect.left - sourceRect.left > line.right + 3) {
-            line = { x: rect.left - sourceRect.left, y, text: "", right: rect.right - sourceRect.left }
-            lines.push(line)
-          }
-          line.text += character
-          line.right = Math.max(line.right, rect.right - sourceRect.left)
-        }
-        const fontSize = Number.parseFloat(style.fontSize) || 16
-        for (const line of lines) {
-          const attributes = [
-            `x="${line.x}"`, `y="${line.y + fontSize * 0.9}"`, `fill="${escapeXml(style.color)}"`,
-            `font-family="${escapeXml(style.fontFamily)}"`, `font-size="${fontSize}"`,
-            `font-weight="${escapeXml(style.fontWeight)}"`, `font-style="${escapeXml(style.fontStyle)}"`,
-            `text-decoration="${escapeXml(style.textDecorationLine)}"`,
-          ].join(" ")
-          textNodes.push(`<text ${attributes}>${escapeXml(line.text)}</text>`)
-        }
-      }
-    }
-    textNode = walker.nextNode()
-  }
+  clone.style.width = `${width}px`
+  clone.style.minHeight = `${height}px`
+  clone.style.boxSizing = "border-box"
+  clone.style.background = "#fffdf8"
+  const html = new XMLSerializer().serializeToString(clone)
   const imageMarkup = imageNodes.filter((image): image is NonNullable<typeof image> => image !== null)
     .map((image) => `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" href="${image.href}" preserveAspectRatio="none"/>`).join("")
-  // Emit actual SVG text nodes rather than foreignObject HTML: Figma imports
-  // these consistently while retaining the browser's measured line layout.
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffdf8"/>${imageMarkup}${textNodes.join("")}</svg>`
+  // Keep text in XHTML (as in Secuencial's exporter) and images as native SVG
+  // image elements so Figma imports both reliably.
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffdf8"/><foreignObject x="0" y="0" width="${width}" height="${height}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;box-sizing:border-box;overflow:visible;background:#fffdf8">${html}</div></foreignObject>${imageMarkup}</svg>`
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url
