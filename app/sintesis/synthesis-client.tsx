@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Pencil, Trash2 } from "lucide-react"
+import { ArrowLeft, Download, Pencil, Trash2 } from "lucide-react"
 import { fetchSubjectMaterialContainers } from "@/lib/material-containers-client"
 import { requireOkJson } from "@/lib/client/api"
 import type { SubjectDayMaterial } from "@/lib/study-types"
@@ -35,6 +35,34 @@ const SimpleEditor = dynamic(
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
 const SAVE_ERROR_MESSAGE = "No se pudo guardar en la carpeta del dispositivo. Reintentá con Ctrl+S antes de salir."
 type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
+
+function exportSynthesisEditorSvg() {
+  const source = document.querySelector<HTMLElement>(".simple-editor-wrapper .tiptap")
+  if (!source) return
+  const clone = source.cloneNode(true) as HTMLElement
+  const originals = [source, ...source.querySelectorAll<HTMLElement>("*")]
+  const clones = [clone, ...clone.querySelectorAll<HTMLElement>("*")]
+  originals.forEach((element, index) => {
+    const computed = getComputedStyle(element)
+    const styles = Array.from(computed).map((property) => `${property}:${computed.getPropertyValue(property)}`).join(";")
+    clones[index]?.setAttribute("style", styles)
+  })
+  const width = Math.ceil(source.getBoundingClientRect().width)
+  const height = Math.ceil(source.scrollHeight)
+  clone.style.width = `${width}px`
+  clone.style.minHeight = `${height}px`
+  clone.style.padding = "32px"
+  clone.style.boxSizing = "border-box"
+  clone.style.background = "#fffdf8"
+  const html = new XMLSerializer().serializeToString(clone)
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xhtml="http://www.w3.org/1999/xhtml" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden;background:#fffdf8">${html}</div></foreignObject></svg>`
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
+  const link = document.createElement("a")
+  link.href = url
+  link.download = "sintesis.svg"
+  link.click()
+  URL.revokeObjectURL(url)
+}
 
 function readLocalWorkspace(key: string) {
   try {
@@ -343,6 +371,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
+      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={exportSynthesisEditorSvg} aria-label="Exportar página como SVG" title="Exportar página como SVG"><Download aria-hidden="true" /></button>}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
         void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))
       }} />

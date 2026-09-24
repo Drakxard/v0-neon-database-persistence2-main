@@ -99,6 +99,7 @@ const MainToolbarContent = ({
   isMobile,
   fontSize,
   onFontSizeChange,
+  toolbarAction,
 }: {
   onHighlighterClick: () => void
   onLinkClick: () => void
@@ -108,6 +109,7 @@ const MainToolbarContent = ({
   isMobile: boolean
   fontSize: number
   onFontSizeChange?: (size: number) => void
+  toolbarAction?: React.ReactNode
 }) => {
   return (
     <>
@@ -119,6 +121,8 @@ const MainToolbarContent = ({
       </ToolbarGroup>
 
       <ToolbarSeparator />
+
+      {toolbarAction ? <ToolbarGroup>{toolbarAction}</ToolbarGroup> : null}
 
       <ToolbarGroup>
         <HeadingDropdownMenu modal={false} levels={[1, 2, 3]} />
@@ -217,6 +221,7 @@ export function SimpleEditor({
   onError,
   fontSize,
   onFontSizeChange,
+  toolbarAction,
 }: {
   content: TiptapJSON
   editable?: boolean
@@ -224,6 +229,7 @@ export function SimpleEditor({
   onError?: (message: string) => void
   fontSize?: number
   onFontSizeChange?: (size: number) => void
+  toolbarAction?: React.ReactNode
 }) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
@@ -343,6 +349,7 @@ export function SimpleEditor({
               isMobile={isMobile}
               fontSize={normalizeSynthesisEditorFontSize(fontSize)}
               onFontSizeChange={onFontSizeChange}
+              toolbarAction={toolbarAction}
             />
           ) : (
             <MobileToolbarContent
