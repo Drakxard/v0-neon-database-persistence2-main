@@ -50,64 +50,58 @@ async function exportSynthesisEditorSvg() {
     const styles = Array.from(computed).map((property) => `${property}:${computed.getPropertyValue(property)}`).join(";")
     clones[index]?.setAttribute("style", styles)
   })
-  const originalImages = Array.from(source.querySelectorAll<HTMLImageElement>("img"))
-  const clonedImages = Array.from(clone.querySelectorAll<HTMLImageElement>("img"))
-  await Promise.all(originalImages.map(async (image, index) => {
-    const imageClone = clonedImages[index]
-    if (!imageClone || !image.currentSrc) return
-    try {
-      const blob = await fetch(image.currentSrc).then((response) => {
-        if (!response.ok) throw new Error("No se pudo leer la imagen.")
-        return response.blob()
-      })
-      const bytes = new Uint8Array(await blob.arrayBuffer())
-      let binary = ""
-      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-      }
-      imageClone.src = `data:${blob.type || "image/png"};base64,${btoa(binary)}`
-      imageClone.removeAttribute("srcset")
-    } catch {
-      // Keep exporting the text if a remote image cannot be embedded.
+  clone.querySelectorAll(".synthesis-image-size-controls").forEach((controls) => controls.remove())
+  clone.querySelectorAll(".is-selected").forEach((element) => element.classList.remove("is-selected"))
+  clone.querySelectorAll("[data-drag-handle], [contenteditable], [draggable]").forEach((element) => {
+    element.removeAttribute("data-drag-handle")
+    element.removeAttribute("contenteditable")
+    element.removeAttribute("draggable")
+  })
+  const sourceRect = source.getBoundingClientRect()
+  const imageNodes = await Promise.all(Array.from(source.querySelectorAll<HTMLImageElement>("img")).map(async (image) => {
+    const rect = image.getBoundingClientRect()
+    const src = image.currentSrc || image.src
+    if (!src || rect.width <= 0 || rect.height <= 0) return null
+    const response = await fetch(src)
+    if (!response.ok) throw new Error("No se pudo incrustar una imagen de SÃ­ntesis.")
+    const blob = await response.blob()
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    let binary = ""
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
     }
+    return { x: rect.left - sourceRect.left, y: rect.top - sourceRect.top, width: rect.width, height: rect.height, href: `data:${blob.type || "image/png"};base64,${btoa(binary)}` }
   }))
-  const width = Math.ceil(source.getBoundingClientRect().width)
-  const height = Math.ceil(source.scrollHeight)
+  const clonedImages = Array.from(clone.querySelectorAll<HTMLImageElement>("img"))
+  clonedImages.forEach((image, index) => {
+    const exported = imageNodes[index]
+    const placeholder = document.createElement("span")
+    placeholder.setAttribute("xmlns", "http://www.w3.org/1999/xhtml")
+    placeholder.style.display = "inline-block"
+    placeholder.style.width = `${exported?.width ?? 0}px`
+    placeholder.style.height = `${exported?.height ?? 0}px`
+    placeholder.style.verticalAlign = getComputedStyle(image).verticalAlign
+    image.replaceWith(placeholder)
+  })
+  const width = Math.max(1, Math.ceil(source.getBoundingClientRect().width))
+  const height = Math.max(1, Math.ceil(source.scrollHeight))
   clone.style.width = `${width}px`
   clone.style.minHeight = `${height}px`
   clone.style.boxSizing = "border-box"
   clone.style.background = "#fffdf8"
   const html = new XMLSerializer().serializeToString(clone)
-  const renderSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden;background:#fffdf8">${html}</div></foreignObject></svg>`
-  let svg = renderSvg
-  let renderUrl: string | null = null
-  try {
-    renderUrl = URL.createObjectURL(new Blob([renderSvg], { type: "image/svg+xml;charset=utf-8" }))
-    const rendered = new Image()
-    rendered.src = renderUrl
-    await rendered.decode()
-    const scale = 2
-    const canvas = document.createElement("canvas")
-    canvas.width = width * scale
-    canvas.height = height * scale
-    const context = canvas.getContext("2d")
-    if (!context) throw new Error("Canvas unavailable")
-    context.scale(scale, scale)
-    context.drawImage(rendered, 0, 0, width, height)
-    // Flatten the page to one embedded image so Figma does not need to resolve
-    // editor layers or temporary image URLs.
-    const png = canvas.toDataURL("image/png")
-    svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image width="${width}" height="${height}" href="${png}" /></svg>`
-  } catch {
-    // The self-contained XHTML fallback still includes the inlined images.
-  } finally {
-    if (renderUrl) URL.revokeObjectURL(renderUrl)
-  }
+  const imageMarkup = imageNodes.filter((image): image is NonNullable<typeof image> => image !== null)
+    .map((image) => `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" href="${image.href}" preserveAspectRatio="none"/>`).join("")
+  // Keep text in XHTML (as in Secuencial's exporter) and images as native SVG
+  // image elements so Figma imports both reliably.
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffdf8"/><foreignObject x="0" y="0" width="${width}" height="${height}"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;min-height:${height}px;box-sizing:border-box;overflow:visible;background:#fffdf8">${html}</div></foreignObject>${imageMarkup}</svg>`
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url
   link.download = "sintesis.svg"
+  document.body.append(link)
   link.click()
+  link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
@@ -418,7 +412,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
-      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void exportSynthesisEditorSvg() }} aria-label="Exportar página como SVG" title="Exportar página como SVG"><Download aria-hidden="true" /></button>}
+      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void exportSynthesisEditorSvg().catch((error) => console.error("No se pudo exportar el SVG de Síntesis.", error)) }} aria-label="Exportar página como SVG" title="Exportar página como SVG"><Download aria-hidden="true" /></button>}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
         void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))
       }} />
