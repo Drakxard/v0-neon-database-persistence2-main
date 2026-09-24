@@ -25,6 +25,7 @@ import {
   referencedLocalImageIds,
   type SynthesisWorkspaceV2, type TiptapJSON,
 } from "@/lib/synthesis-workspace"
+import { exportSynthesisEditorSvg } from "@/lib/client/synthesis-svg"
 import styles from "./sintesis.module.css"
 
 const SimpleEditor = dynamic(
@@ -35,84 +36,6 @@ const SimpleEditor = dynamic(
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
 const SAVE_ERROR_MESSAGE = "No se pudo guardar en la carpeta del dispositivo. Reintentá con Ctrl+S antes de salir."
 type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
-
-async function exportSynthesisEditorSvg() {
-  const source = document.querySelector<HTMLElement>(".simple-editor-wrapper .tiptap")
-  if (!source) return
-  const sourceRect = source.getBoundingClientRect()
-  const imageNodes = await Promise.all(Array.from(source.querySelectorAll<HTMLImageElement>("img")).map(async (image) => {
-    const rect = image.getBoundingClientRect()
-    const src = image.currentSrc || image.src
-    if (!src || rect.width <= 0 || rect.height <= 0) return null
-    const response = await fetch(src)
-    if (!response.ok) throw new Error("No se pudo incrustar una imagen de SÃ­ntesis.")
-    const blob = await response.blob()
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    let binary = ""
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-    }
-    return { x: rect.left - sourceRect.left, y: rect.top - sourceRect.top, width: rect.width, height: rect.height, href: `data:${blob.type || "image/png"};base64,${btoa(binary)}` }
-  }))
-  const width = Math.max(1, Math.ceil(source.getBoundingClientRect().width))
-  const height = Math.max(1, Math.ceil(source.scrollHeight))
-  const escapeXml = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!)
-  const textNodes: string[] = []
-  const walker = document.createTreeWalker(source, NodeFilter.SHOW_TEXT)
-  let textNode = walker.nextNode()
-  while (textNode) {
-    const content = textNode.textContent ?? ""
-    const parent = textNode.parentElement
-    if (parent && content.trim() && !parent.closest(".synthesis-image-size-controls")) {
-      const style = getComputedStyle(parent)
-      if (style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.fontSize) > 0) {
-        const range = document.createRange()
-        const lines: Array<{ x: number; y: number; text: string; right: number }> = []
-        for (let offset = 0; offset < content.length;) {
-          const character = String.fromCodePoint(content.codePointAt(offset)!)
-          const end = offset + character.length
-          range.setStart(textNode, offset)
-          range.setEnd(textNode, end)
-          const rect = range.getBoundingClientRect()
-          offset = end
-          if (!rect.width && !rect.height) continue
-          const y = rect.top - sourceRect.top
-          let line = lines[lines.length - 1]
-          if (!line || Math.abs(line.y - y) > 2 || rect.left - sourceRect.left > line.right + 3) {
-            line = { x: rect.left - sourceRect.left, y, text: "", right: rect.right - sourceRect.left }
-            lines.push(line)
-          }
-          line.text += character
-          line.right = Math.max(line.right, rect.right - sourceRect.left)
-        }
-        const fontSize = Number.parseFloat(style.fontSize) || 16
-        for (const line of lines) {
-          const attributes = [
-            `x="${line.x}"`, `y="${line.y + fontSize * 0.9}"`, `fill="${escapeXml(style.color)}"`,
-            `font-family="${escapeXml(style.fontFamily)}"`, `font-size="${fontSize}"`,
-            `font-weight="${escapeXml(style.fontWeight)}"`, `font-style="${escapeXml(style.fontStyle)}"`,
-            `text-decoration="${escapeXml(style.textDecorationLine)}"`,
-          ].join(" ")
-          textNodes.push(`<text ${attributes}>${escapeXml(line.text)}</text>`)
-        }
-      }
-    }
-    textNode = walker.nextNode()
-  }
-  const imageMarkup = imageNodes.filter((image): image is NonNullable<typeof image> => image !== null)
-    .map((image) => `<image x="${image.x}" y="${image.y}" width="${image.width}" height="${image.height}" href="${image.href}" preserveAspectRatio="none"/>`).join("")
-  // Emit actual SVG text nodes rather than foreignObject HTML: Figma imports
-  // these consistently while retaining the browser's measured line layout.
-  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#fffdf8"/>${imageMarkup}${textNodes.join("")}</svg>`
-  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
-  const link = document.createElement("a")
-  link.href = url
-  link.download = "sintesis.svg"
-  document.body.append(link)
-  link.click()
-  link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
 
 function readLocalWorkspace(key: string) {
   try {
