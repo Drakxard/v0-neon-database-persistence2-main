@@ -3825,8 +3825,12 @@
         }
         refreshDocumentViewerMetadata();
         notifySubjectDayMaterialsRefresh();
-        showStatus(fullySynced ? "Puedes salir, sincronizado." : "Guardando cambios nuevos...");
-        scheduleHideStatus();
+        if (!fullySynced) {
+          showStatus("Guardando cambios nuevos...");
+          scheduleHideStatus();
+        } else {
+          hideStatus();
+        }
         return fullySynced;
       }
 
@@ -3863,8 +3867,12 @@
       }
       refreshDocumentViewerMetadata();
       notifySubjectDayMaterialsRefresh();
-      showStatus(fullySynced ? "Puedes salir, sincronizado." : "Guardando cambios nuevos...");
-      scheduleHideStatus();
+      if (!fullySynced) {
+        showStatus("Guardando cambios nuevos...");
+        scheduleHideStatus();
+      } else {
+        hideStatus();
+      }
       return fullySynced;
     } catch (error) {
       console.error("Custom PDF.js sync failed:", error);
