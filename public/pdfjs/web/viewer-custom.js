@@ -1698,33 +1698,27 @@
     state.isExportingSvg = true;
     refreshSyncButtons();
     showBusy("Preparando SVG...");
-    let loadingTask;
+    let exportDocument;
+    let canvas;
     try {
-      // The current viewer no longer includes SVGGraphics. Keep this backend
-      // isolated and lazy-loaded, with fonts/images embedded for standalone SVGs.
-      const { default: svgPdfjs } = await import("/vendor/pdfjs-svg/pdf.mjs");
-      svgPdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs-svg/pdf.worker.min.js";
       const bytes = await source.saveDocument();
-      loadingTask = svgPdfjs.getDocument({
-        data: new Uint8Array(bytes),
-        isEvalSupported: false,
-        fontExtraProperties: true,
-        cMapUrl: "/pdfjs/web/cmaps/",
-        cMapPacked: true,
-        standardFontDataUrl: "/pdfjs/web/standard_fonts/",
-      });
-      loadingTask.onPassword = (updatePassword, reason) => {
-        state.app.passwordPrompt.setUpdateCallback(updatePassword, reason);
-        state.app.passwordPrompt.open();
-      };
-      const document = await loadingTask.promise;
-      const page = await document.getPage(pageNumber);
-      const viewport = page.getViewport({ scale: 1, rotation: (page.rotate + rotation) % 360 });
-      const operators = await page.getOperatorList({ intent: "display" });
-      const graphics = new svgPdfjs.SVGGraphics(page.commonObjs, page.objs, true);
-      graphics.embedFonts = true;
-      const svg = await graphics.getSVG(operators, viewport);
-      const markup = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+      const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(bytes) });
+      exportDocument = await loadingTask.promise;
+      const page = await exportDocument.getPage(pageNumber);
+      const rotationDegrees = (page.rotate + rotation) % 360;
+      const viewport = page.getViewport({ scale: 2, rotation: rotationDegrees });
+      const width = viewport.width / 2;
+      const height = viewport.height / 2;
+      canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("El navegador no pudo crear el lienzo de exportacion.");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport, background: "#ffffff" }).promise;
+      const image = canvas.toDataURL("image/png");
+      const markup = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image width="${width}" height="${height}" href="${image}"/></svg>`;
       downloadBlob(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `${sourceName}-pagina-${pageNumber}.svg`);
       showToast("SVG descargado.", "success", 2800);
     } catch (error) {
@@ -1732,7 +1726,11 @@
       showToast(error instanceof Error ? error.message : "No se pudo exportar el SVG.", "error", 4600);
     } finally {
       try {
-        await loadingTask?.destroy();
+        if (canvas) {
+          canvas.width = 1;
+          canvas.height = 1;
+        }
+        await exportDocument?.destroy?.();
       } finally {
         state.isExportingSvg = false;
         hideBusy();
