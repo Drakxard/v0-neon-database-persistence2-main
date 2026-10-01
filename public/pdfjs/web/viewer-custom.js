@@ -635,7 +635,7 @@
       state.svgButtons = ["exportSvgButton", "secondaryExportSvgButton"]
         .map((id) => document.getElementById(id)).filter(Boolean);
       for (const button of state.svgButtons) {
-        button.addEventListener("click", exportCurrentPageAsSvg);
+        button.addEventListener("click", exportAllPagesAsSvg);
       }
     }
     if (!state.translateButton) {
@@ -1687,10 +1687,9 @@
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 
-  async function exportCurrentPageAsSvg() {
+  async function exportAllPagesAsSvg() {
     const source = state.app?.pdfDocument;
     if (!source || state.isExportingSvg) return;
-    const pageNumber = state.app.pdfViewer.currentPageNumber;
     const rotation = state.app.pdfViewer.pagesRotation || 0;
     const sourceName = normalizePdfFileName(
       state.query?.fileName || state.app._docFilename || "documento.pdf"
@@ -1704,22 +1703,34 @@
       const bytes = await source.saveDocument();
       const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(bytes) });
       exportDocument = await loadingTask.promise;
-      const page = await exportDocument.getPage(pageNumber);
-      const rotationDegrees = (page.rotate + rotation) % 360;
-      const viewport = page.getViewport({ scale: 2, rotation: rotationDegrees });
-      const width = viewport.width / 2;
-      const height = viewport.height / 2;
       canvas = document.createElement("canvas");
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
       const context = canvas.getContext("2d", { alpha: false });
       if (!context) throw new Error("El navegador no pudo crear el lienzo de exportacion.");
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: context, viewport, background: "#ffffff" }).promise;
-      const image = canvas.toDataURL("image/png");
-      const markup = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image width="${width}" height="${height}" href="${image}"/></svg>`;
-      downloadBlob(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `${sourceName}-pagina-${pageNumber}.svg`);
+      const pages = [];
+      let totalHeight = 0;
+      let maxWidth = 0;
+      const gap = 16;
+      for (let pageNumber = 1; pageNumber <= exportDocument.numPages; pageNumber += 1) {
+        updateBusy(`Renderizando pagina ${pageNumber} de ${exportDocument.numPages}...`);
+        const page = await exportDocument.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 2, rotation: (page.rotate + rotation) % 360 });
+        const width = viewport.width / 2;
+        const height = viewport.height / 2;
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: context, viewport, background: "#ffffff" }).promise;
+        pages.push({ width, height, y: totalHeight, image: canvas.toDataURL("image/jpeg", 0.92) });
+        maxWidth = Math.max(maxWidth, width);
+        totalHeight += height + (pageNumber < exportDocument.numPages ? gap : 0);
+        page.cleanup?.();
+      }
+      const images = pages.map(({ width, height, y, image }) =>
+        `<image x="${(maxWidth - width) / 2}" y="${y}" width="${width}" height="${height}" href="${image}"/>`
+      ).join("");
+      const markup = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${maxWidth}" height="${totalHeight}" viewBox="0 0 ${maxWidth} ${totalHeight}"><rect width="100%" height="100%" fill="white"/>${images}</svg>`;
+      downloadBlob(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `${sourceName}-paginas.svg`);
       showToast("SVG descargado.", "success", 2800);
     } catch (error) {
       console.error("Custom PDF.js SVG export failed:", error);
