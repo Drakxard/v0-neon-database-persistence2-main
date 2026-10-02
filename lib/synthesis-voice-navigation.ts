@@ -59,27 +59,9 @@ function commandCriteria(lastEditedNodeId: string | null): Record<string, string
 }
 
 function candidatesFromAnswer(answer: ChoiceAnswer, candidates: VoiceTreeNode[], lastEditedNodeId: string | null): VoiceDestination {
-  const probabilities = answer.probabilities && typeof answer.probabilities === "object"
-    ? answer.probabilities as Record<string, unknown> : {}
-  const probability = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0
-  const ranked = candidates.map((node, index) => ({
-    id: node.id,
-    probability: probability(probabilities[`n${index}`]),
-  })).sort((a, b) => b.probability - a.probability)
   const choice = typeof answer.choice === "string" ? answer.choice : ""
   const selected = /^n\d+$/.test(choice) ? candidates[Number(choice.slice(1))] : null
-  const top = ranked.filter((item) => item.probability > 0).slice(0, 3).map((item) => item.id)
   if (choice === "none") return { action: "none" }
-  if (!selected && choice !== "topics" && choice !== "edit" && !(choice === "latest" && lastEditedNodeId)) {
-    return top.length ? { action: "suggest", nodeIds: top } : { action: "none" }
-  }
-  const selectedProbability = probability(probabilities[choice])
-  const runnerUp = Math.max(0, ...Object.entries(probabilities)
-    .filter(([key]) => key !== choice)
-    .map(([, value]) => probability(value)))
-  if (selectedProbability < 0.55 || selectedProbability - runnerUp < 0.12) {
-    return top.length ? { action: "suggest", nodeIds: top } : { action: "none" }
-  }
   if (choice === "topics") return { action: "topics" }
   if (choice === "edit") return { action: "edit" }
   if (choice === "latest" && lastEditedNodeId) return { action: "navigate", nodeId: lastEditedNodeId }
@@ -138,16 +120,5 @@ export async function decideSynthesisVoiceDestination(
   const groupIndex = typeof groupAnswer.choice === "string" && /^g\d+$/.test(groupAnswer.choice)
     ? Number(groupAnswer.choice.slice(1)) : -1
   if (!groups[groupIndex]) return { action: "none" }
-  const destination = candidatesFromAnswer(answers[`nodes${groupIndex}`] ?? {}, groups[groupIndex], null)
-  const probabilities = groupAnswer.probabilities && typeof groupAnswer.probabilities === "object"
-    ? groupAnswer.probabilities as Record<string, unknown> : {}
-  const probability = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0
-  const selectedProbability = probability(probabilities[`g${groupIndex}`])
-  const runnerUp = Math.max(0, ...Object.entries(probabilities)
-    .filter(([key]) => key !== `g${groupIndex}`)
-    .map(([, value]) => probability(value)))
-  if (selectedProbability < 0.55 || selectedProbability - runnerUp < 0.12) {
-    return destination.action === "navigate" ? { action: "suggest", nodeIds: [destination.nodeId] } : destination
-  }
-  return destination
+  return candidatesFromAnswer(answers[`nodes${groupIndex}`] ?? {}, groups[groupIndex], null)
 }

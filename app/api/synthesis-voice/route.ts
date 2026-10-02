@@ -4,8 +4,6 @@ import { decideSynthesisVoiceDestination, validateVoiceTree, type EvaluateChoice
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-let gatewayiaDeniedUntil = 0
-
 class GatewayEvaluationError extends Error {
   constructor(readonly upstreamStatus: number) {
     super(`AI Gateway respondió con HTTP ${upstreamStatus}.`)
@@ -31,15 +29,17 @@ export async function POST(request: Request) {
       ? body.currentNodeId : null
     const lastEditedNodeId = typeof body?.lastEditedNodeId === "string" && nodes.some((node) => node.id === body.lastEditedNodeId)
       ? body.lastEditedNodeId : null
-    const apiKey = process.env.gatewayia?.trim()
-    const oidcToken = request.headers.get("x-vercel-oidc-token")?.trim() || process.env.VERCEL_OIDC_TOKEN?.trim()
+    const apiKey = process.env.AI_GATEWAY_API_KEY?.trim()
+    const legacyKey = process.env.gatewayia?.trim()
+    const oidcToken = process.env.VERCEL_OIDC_TOKEN?.trim()
     const credentials = [
-      ...(apiKey && (!oidcToken || Date.now() >= gatewayiaDeniedUntil) ? [{ name: "gatewayia", token: apiKey }] : []),
-      ...(oidcToken && oidcToken !== apiKey ? [{ name: "Vercel OIDC", token: oidcToken }] : []),
+      ...(apiKey ? [{ name: "AI_GATEWAY_API_KEY", token: apiKey }] : []),
+      ...(legacyKey && legacyKey !== apiKey ? [{ name: "gatewayia", token: legacyKey }] : []),
+      ...(oidcToken && oidcToken !== apiKey && oidcToken !== legacyKey ? [{ name: "Vercel OIDC", token: oidcToken }] : []),
     ]
     if (!credentials.length) {
-      console.error("[Síntesis voz] Falta configurar gatewayia y no hay token OIDC de Vercel.")
-      return Response.json({ error: "Gateway no configurado." }, { status: 503 })
+      console.error("[Síntesis voz] Falta AI_GATEWAY_API_KEY, gatewayia o VERCEL_OIDC_TOKEN en el servidor.")
+      return Response.json({ error: "Falta configurar una clave de AI Gateway en el servidor." }, { status: 503 })
     }
 
     const evaluate: EvaluateChoices = async (state, questions) => {
@@ -63,7 +63,6 @@ export async function POST(request: Request) {
             status: response.status,
             response: details.slice(0, 2_000),
           })
-          if (credential.name === "gatewayia" && response.status === 403) gatewayiaDeniedUntil = Date.now() + 60_000
           if ((response.status === 401 || response.status === 403) && index < credentials.length - 1) continue
           throw new GatewayEvaluationError(response.status)
         }
@@ -84,8 +83,12 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "No se pudo interpretar el comando."
     if (message.includes("inválid") || message.includes("inválido")) return Response.json({ error: message }, { status: 400 })
     return Response.json({
-      error: "No se pudo consultar Jev.",
+      error: error instanceof GatewayEvaluationError && error.upstreamStatus === 403
+        ? "AI Gateway rechazó el acceso a Jev (403). Revisá el acceso de la cuenta a ese modelo."
+        : error instanceof GatewayEvaluationError && error.upstreamStatus === 401
+          ? "AI Gateway rechazó la credencial configurada (401)."
+          : "No se pudo consultar Jev.",
       ...(error instanceof GatewayEvaluationError ? { upstreamStatus: error.upstreamStatus } : {}),
-    }, { status: 502 })
+    }, { status: error instanceof GatewayEvaluationError && error.upstreamStatus === 403 ? 503 : 502 })
   }
 }

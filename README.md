@@ -62,9 +62,13 @@ en este navegador. La voz navega únicamente por la materia y semana abiertas: d
 `abre` usa el lápiz de la vista actual. Decir el nombre de un tema navega hasta él sin
 abrir el editor. La transcripción no se muestra ni se guarda en el workspace.
 
-La selección de temas usa Jev (`typesafe-ai/jev`) mediante Vercel AI Gateway. Configurá
-`gatewayia` como clave de Gateway en las variables del servidor; el navegador nunca
-recibe esa clave. El reconocimiento de voz depende de la disponibilidad de Web Speech
+Cada frase se envía a Jev (`typesafe-ai/jev`) mediante Vercel AI Gateway. Jev elige
+un tema, una acción o `none`; la aplicación aplica esa elección sin umbrales locales.
+Configurá `AI_GATEWAY_API_KEY` en el servidor (también se admite `gatewayia` por
+compatibilidad). En Vercel puede usarse `VERCEL_OIDC_TOKEN`. El navegador nunca recibe
+esas credenciales. Si AI Gateway responde 403, verificá el acceso del equipo a Jev en
+AI Gateway; la aplicación muestra el rechazo en pantalla.
+El reconocimiento de voz depende de la disponibilidad de Web Speech
 API en el navegador y puede requerir otro toque para reanudarlo tras volver a la página.
 
 Required environment variables for R2:

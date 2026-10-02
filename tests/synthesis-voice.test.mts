@@ -42,7 +42,7 @@ test("Jev decide los comandos y el nodo en la misma evaluación", async () => {
   assert.equal(voiceNodePath(nodes, "definidas"), "Cálculo > Integrales > Integrales definidas")
 })
 
-test("Jev elige un nodo profundo y una elección incierta ofrece alternativas", async () => {
+test("la elección de Jev determina directamente la navegación o la inacción", async () => {
   const chosen = await decideSynthesisVoiceDestination("integrales definidas", nodes, null, null, async (_state, questions) => {
     const criteria = questions.destination.criteria
     assert.match(criteria.n2, /Integrales definidas/)
@@ -50,15 +50,20 @@ test("Jev elige un nodo profundo y una elección incierta ofrece alternativas", 
   })
   assert.deepEqual(chosen, { action: "navigate", nodeId: "definidas" })
 
-  const uncertain = await decideSynthesisVoiceDestination("integral", nodes, null, null, async () => ({ destination: {
+  const selected = await decideSynthesisVoiceDestination("integral", nodes, null, null, async () => ({ destination: {
     choice: "n1", probabilities: { n1: 0.49, n2: 0.45, none: 0.06 } },
   }))
-  assert.deepEqual(uncertain, { action: "suggest", nodeIds: ["integrales", "definidas"] })
+  assert.deepEqual(selected, { action: "navigate", nodeId: "integrales" })
+
+  const none = await decideSynthesisVoiceDestination("seguí escuchando", nodes, null, null, async () => ({ destination: {
+    choice: "none", probabilities: { none: 0.51, n1: 0.49 } },
+  }))
+  assert.deepEqual(none, { action: "none" })
 
   const invalid = await decideSynthesisVoiceDestination("derivadas", nodes, null, null, async () => ({ destination: {
     choice: "n999", probabilities: { n3: 0.98 } },
   }))
-  assert.deepEqual(invalid, { action: "suggest", nodeIds: ["derivadas"] })
+  assert.deepEqual(invalid, { action: "none" })
 })
 
 test("árboles grandes conservan el acceso a nodos fuera del primer grupo", async () => {
@@ -112,6 +117,8 @@ test("la clave del Gateway queda en la ruta de servidor y el modo local la deja 
   const proxy = readFileSync(new URL("../proxy.ts", import.meta.url), "utf8")
   const interceptor = readFileSync(new URL("../components/local-fetch-interceptor.tsx", import.meta.url), "utf8")
   assert.match(route, /process\.env\.gatewayia/)
+  assert.match(route, /process\.env\.AI_GATEWAY_API_KEY/)
+  assert.doesNotMatch(route, /DeniedUntil|resolveSynthesisVoiceLocally/)
   assert.match(route, /requireAuthSession/)
   assert.doesNotMatch(client, /gatewayia/)
   assert.doesNotMatch(client, /classifySynthesisVoiceCommand|matchLocalVoiceDestination/)

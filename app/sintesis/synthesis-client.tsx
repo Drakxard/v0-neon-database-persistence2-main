@@ -38,6 +38,7 @@ const SimpleEditor = dynamic(
 
 type Drag = { id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean }
 const SAVE_ERROR_MESSAGE = "No se pudo guardar en la carpeta del dispositivo. Reintentá con Ctrl+S antes de salir."
+const VOICE_ERROR_PREFIX = "Navegación por voz: "
 type EditorSession = { nodeId: string | null; document: TiptapJSON; baseDocument: TiptapJSON; normalizationId: string; returnParentId: string | null; key: number }
 
 function readLocalWorkspace(key: string) {
@@ -362,6 +363,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         }`)
       }
       if (sequence !== voiceSequenceRef.current || editorOpenRef.current) return
+      setMessage((current) => current.startsWith(VOICE_ERROR_PREFIX) ? "" : current)
       if (result.action === "navigate" && nodes.some((node) => node.id === result.nodeId)) navigateToNode(result.nodeId)
       else if (result.action === "topics") { setSuggestedNodeIds([]); setTopicsOpen(true) }
       else if (result.action === "edit") { setTopicsOpen(false); openEditor(currentParentId) }
@@ -371,7 +373,8 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       }
     } catch (error) {
       if (controller.signal.aborted || sequence !== voiceSequenceRef.current) return
-      console.error("[Síntesis voz] No se pudo interpretar el comando", error)
+      setMessage((current) => current === SAVE_ERROR_MESSAGE ? current
+        : `${VOICE_ERROR_PREFIX}${error instanceof Error ? error.message : "No se pudo consultar Jev."}`)
     } finally { if (voiceRequestRef.current === controller) voiceRequestRef.current = null }
   }, [context.subjectId, context.weekNumber, currentParentId, loadState, navigateToNode, nodes, openEditor])
 
