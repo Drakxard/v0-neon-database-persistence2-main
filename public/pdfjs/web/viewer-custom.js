@@ -3794,11 +3794,11 @@
 
   async function syncAnnotatedPdf({ automatic = false } = {}) {
     if (!canSyncCurrentDocument()) {
-      showToast("La sincronizacion solo esta disponible para documentos guardados.", "info");
+      if (!automatic) showToast("La sincronizacion solo esta disponible para documentos guardados.", "info");
       return false;
     }
     if (!state.app?.pdfDocument) {
-      showToast("Primero carga un PDF.", "info");
+      if (!automatic) showToast("Primero carga un PDF.", "info");
       return false;
     }
     if (state.isSyncing) {
@@ -3814,7 +3814,7 @@
     state.isSyncing = true;
     state.pendingExitSync = false;
     refreshSyncButtons();
-    showStatus("Sincronizando...");
+    if (!automatic) showStatus("Sincronizando...");
 
     try {
       const syncingHash = getAnnotationContentHash();
@@ -3834,10 +3834,10 @@
         }
         refreshDocumentViewerMetadata();
         notifySubjectDayMaterialsRefresh();
-        if (!fullySynced) {
+        if (!automatic && !fullySynced) {
           showStatus("Guardando cambios nuevos...");
           scheduleHideStatus();
-        } else {
+        } else if (!automatic) {
           hideStatus();
         }
         return fullySynced;
@@ -3876,18 +3876,20 @@
       }
       refreshDocumentViewerMetadata();
       notifySubjectDayMaterialsRefresh();
-      if (!fullySynced) {
+      if (!automatic && !fullySynced) {
         showStatus("Guardando cambios nuevos...");
         scheduleHideStatus();
-      } else {
+      } else if (!automatic) {
         hideStatus();
       }
       return fullySynced;
     } catch (error) {
       console.error("Custom PDF.js sync failed:", error);
-      showStatus("La sincronizacion fallo.");
-      scheduleHideStatus(3200);
-      showToast(error instanceof Error ? error.message : "No se pudo sincronizar el PDF anotado.", "error", 4200);
+      if (!automatic) {
+        showStatus("La sincronizacion fallo.");
+        scheduleHideStatus(3200);
+        showToast(error instanceof Error ? error.message : "No se pudo sincronizar el PDF anotado.", "error", 4200);
+      }
       state.autosyncRetryCount += 1;
       scheduleAutosync(Math.min(
         AUTOSYNC_RETRY_MAX_MS,
