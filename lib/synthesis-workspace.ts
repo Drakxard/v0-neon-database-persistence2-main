@@ -48,6 +48,7 @@ export type SynthesisWorkspaceV2 = {
   layout: Record<string, SynthesisNodeLayout>
   sources?: SynthesisSources
   editorFontSize?: number
+  lastEditedNodeId?: string
 }
 
 export type DerivedSynthesisNode = {
@@ -156,6 +157,15 @@ export function deriveSynthesisNodes(documentInput: TiptapJSON): DerivedSynthesi
   return nodes
 }
 
+/** Return the last heading changed by an editor update, preferring the open branch when possible. */
+export function findEditedSynthesisNode(previous: TiptapJSON, next: TiptapJSON, preferredId: string | null = null): string | null {
+  if (JSON.stringify(previous) === JSON.stringify(next)) return null
+  const before = new Map(deriveSynthesisNodes(previous).map((node) => [node.id, JSON.stringify([node.source, node.body])]))
+  const changed = deriveSynthesisNodes(next).filter((node) => before.get(node.id) !== JSON.stringify([node.source, node.body]))
+  if (preferredId && changed.some((node) => node.id === preferredId)) return preferredId
+  return changed.at(-1)?.id ?? null
+}
+
 export function reconcileSynthesisLayout(
   nodes: DerivedSynthesisNode[],
   layout: Record<string, SynthesisNodeLayout>,
@@ -229,6 +239,8 @@ export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
     defaultScale,
     editorFontSize: normalizeSynthesisEditorFontSize(value.editorFontSize),
+    ...(typeof value.lastEditedNodeId === "string" && nodes.some((node) => node.id === value.lastEditedNodeId)
+      ? { lastEditedNodeId: value.lastEditedNodeId } : {}),
     document,
     layout: reconcileSynthesisLayout(nodes, layout, defaultScale),
     ...(value.sources ? { sources: normalizeSynthesisSources(value.sources) } : {}),

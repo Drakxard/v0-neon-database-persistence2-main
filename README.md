@@ -54,6 +54,19 @@ version R2 en el workspace. Los dispositivos vinculados consumen R2 en modo lect
 El archivo global
 `manifests/inscreen/sintesis/tree-v1.json` pertenece al formato anterior.
 
+### Navegación por voz en Síntesis
+
+El botón circular junto al lápiz activa o desactiva el micrófono y recuerda la elección
+en este navegador. La voz navega únicamente por la materia y semana abiertas: decir
+`temas` muestra la jerarquía, `última edición` vuelve al último nodo modificado y
+`abre` usa el lápiz de la vista actual. Decir el nombre de un tema navega hasta él sin
+abrir el editor. La transcripción no se muestra ni se guarda en el workspace.
+
+La selección de temas usa Jev (`typesafe-ai/jev`) mediante Vercel AI Gateway. Configurá
+`gatewayia` como clave de Gateway en las variables del servidor; el navegador nunca
+recibe esa clave. El reconocimiento de voz depende de la disponibilidad de Web Speech
+API en el navegador y puede requerir otro toque para reanudarlo tras volver a la página.
+
 Required environment variables for R2:
 
 ```bash

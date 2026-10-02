@@ -805,6 +805,9 @@ export function LocalFetchInterceptor() {
         if (token) headers.set("x-drive-config-token", token)
         return originalFetch(new Request(request, { headers }))
       }
+      if (url.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") {
+        return originalFetch(request)
+      }
       if (isProtectedInscreenRequest(url.pathname)) {
         const configToken = getReadyInscreenConfigToken()
         const headers = new Headers(request.headers)

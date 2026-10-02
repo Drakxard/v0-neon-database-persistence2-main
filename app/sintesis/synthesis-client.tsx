@@ -3,7 +3,8 @@
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Download, Pencil, Trash2 } from "lucide-react"
+import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2 } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { fetchSubjectMaterialContainers } from "@/lib/material-containers-client"
 import { requireOkJson } from "@/lib/client/api"
 import type { SubjectDayMaterial } from "@/lib/study-types"
@@ -20,12 +21,14 @@ import { parseStoredSynthesisWorkspace, preserveSynthesisCopy, type SynthesisLoc
 import {
   SYNTHESIS_WORKSPACE_PENDING_KEY, SYNTHESIS_WORKSPACE_STORAGE_KEY, childrenOf,
   createEmptySynthesisWorkspace, createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument,
-  extractSynthesisBranchDocument, normalizeSynthesisWorkspace, repairSynthesisLayout,
+  extractSynthesisBranchDocument, findEditedSynthesisNode, normalizeSynthesisWorkspace, repairSynthesisLayout,
   replaceSynthesisBranch, scaleSynthesisWorkspace,
   referencedLocalImageIds,
   type SynthesisWorkspaceV2, type TiptapJSON,
 } from "@/lib/synthesis-workspace"
 import { exportSynthesisEditorSvg } from "@/lib/client/synthesis-svg"
+import { useSynthesisSpeech } from "@/lib/client/synthesis-speech"
+import { classifySynthesisVoiceCommand, voiceNodePath, type VoiceDestination } from "@/lib/synthesis-voice-navigation"
 import styles from "./sintesis.module.css"
 
 const SimpleEditor = dynamic(
@@ -58,6 +61,10 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
   const [trash, setTrash] = useState<SynthesisLocalCopy[] | null>(null)
+  const [topicsOpen, setTopicsOpen] = useState(false)
+  const [suggestedNodeIds, setSuggestedNodeIds] = useState<string[]>([])
+  const voiceRequestRef = useRef<AbortController | null>(null)
+  const voiceSequenceRef = useRef(0)
   const stageEmergencyDraft = () => {
     try {
       if (!preservedEmergencyRef.current) {
@@ -282,14 +289,14 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     return () => window.removeEventListener("popstate", onPopState)
   }, [autosave, closeEditor])
 
-  const openEditor = (nodeId: string | null) => {
+  const openEditor = useCallback((nodeId: string | null) => {
     if (loadState !== "ready") return
     editorOpenRef.current = true
     const document = nodeId ? extractSynthesisBranchDocument(workspaceRef.current.document, nodeId) : workspaceRef.current.document
     removedImageIdsRef.current.clear()
     setEditorSession({ nodeId, document, baseDocument: workspaceRef.current.document, normalizationId: createSynthesisId(), returnParentId: currentParentId, key: Date.now() })
     window.history.pushState({ synthesisEditor: true }, ""); editorHistoryRef.current = true
-  }
+  }, [currentParentId, loadState])
 
   const updateEditorDocument = useCallback((documentInput: TiptapJSON) => {
     const session = editorSession
@@ -304,7 +311,9 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const nextImageIds = new Set(referencedLocalImageIds(completeDocument))
     for (const id of previousImageIds) if (!nextImageIds.has(id)) removedImageIdsRef.current.add(id)
     for (const id of nextImageIds) removedImageIdsRef.current.delete(id)
+    const editedNodeId = findEditedSynthesisNode(workspaceRef.current.document, completeDocument, session.nodeId)
     const next = recordSynthesisRemovals(workspaceRef.current, completeDocument)
+    if (editedNodeId) next.lastEditedNodeId = editedNodeId
     workspaceRef.current = next
     setWorkspace(next)
     autosave.markDirty()
@@ -317,6 +326,69 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     router.push(returnToken ? `/?returnToken=${encodeURIComponent(returnToken)}` : "/")
   }, [autosave, legacyReturnToken, returnTokenKey, router])
 
+  const navigateToNode = useCallback((nodeId: string) => {
+    if (!nodes.some((node) => node.id === nodeId)) return
+    setCurrentParentId(nodeId)
+    setTopicsOpen(false)
+    setSuggestedNodeIds([])
+  }, [nodes])
+
+  const handleVoicePhrase = useCallback(async (phrase: string) => {
+    if (loadState !== "ready" || editorOpenRef.current) return
+    voiceSequenceRef.current += 1
+    const sequence = voiceSequenceRef.current
+    voiceRequestRef.current?.abort()
+    voiceRequestRef.current = null
+    const command = classifySynthesisVoiceCommand(phrase)
+    if (command === "topics") { setSuggestedNodeIds([]); setTopicsOpen(true); return }
+    if (command === "latest_edit") {
+      const nodeId = workspaceRef.current.lastEditedNodeId
+      if (nodeId && nodes.some((node) => node.id === nodeId)) navigateToNode(nodeId)
+      else setMessage("Todavía no hay un nodo editado en esta Síntesis.")
+      return
+    }
+    if (command === "edit") { setTopicsOpen(false); openEditor(currentParentId); return }
+    if (!nodes.length) { setMessage("Esta Síntesis todavía no tiene temas."); return }
+    const controller = new AbortController()
+    voiceRequestRef.current = controller
+    try {
+      const response = await fetch("/api/synthesis-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subjectId: context.subjectId,
+          weekNumber: context.weekNumber,
+          transcript: phrase,
+          currentNodeId: currentParentId,
+          nodes: nodes.map((node) => ({ id: node.id, parentId: node.parentId, name: node.name.slice(0, 300) })),
+        }),
+        signal: controller.signal,
+      })
+      const result = await response.json() as VoiceDestination & { error?: string }
+      if (!response.ok) throw new Error(result.error || "No se pudo interpretar el comando.")
+      if (sequence !== voiceSequenceRef.current || editorOpenRef.current) return
+      if (result.action === "navigate" && nodes.some((node) => node.id === result.nodeId)) navigateToNode(result.nodeId)
+      else {
+        setSuggestedNodeIds(result.action === "suggest" && Array.isArray(result.nodeIds)
+          ? result.nodeIds.filter((id) => typeof id === "string" && nodes.some((node) => node.id === id)) : [])
+        setTopicsOpen(true)
+      }
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== voiceSequenceRef.current) return
+      setMessage(error instanceof Error ? error.message : "No se pudo interpretar el comando.")
+    } finally { if (voiceRequestRef.current === controller) voiceRequestRef.current = null }
+  }, [context.subjectId, context.weekNumber, currentParentId, loadState, navigateToNode, nodes, openEditor])
+
+  const speech = useSynthesisSpeech(loadState === "ready" && !editorSession, handleVoicePhrase)
+
+  useEffect(() => () => { voiceRequestRef.current?.abort() }, [])
+  useEffect(() => {
+    if (speech.enabled && !editorSession) return
+    voiceSequenceRef.current += 1
+    voiceRequestRef.current?.abort()
+    voiceRequestRef.current = null
+  }, [speech.enabled, editorSession])
+
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -327,6 +399,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       if (event.key === "Escape") {
         event.preventDefault()
         if (editorSession) { window.history.back(); return }
+        if (topicsOpen) { setTopicsOpen(false); return }
         if (currentParentId) { setCurrentParentId(nodes.find((node) => node.id === currentParentId)?.parentId ?? null); return }
         void goHome(); return
       }
@@ -339,7 +412,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     }
     window.addEventListener("keydown", keydown, { passive: false })
     return () => window.removeEventListener("keydown", keydown)
-  }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes, loadState])
+  }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes, loadState, topicsOpen])
 
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
@@ -383,12 +456,26 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
           {[...new Set([context.weekNumber, ...savedWeeks])].sort((a, b) => b - a).map((week) => <option key={week} value={week}>{week}</option>)}
         </select>
       </label>
+      {currentNode ? <div className={styles.location} title={currentNode.name}><strong>{currentNode.name}</strong></div> : null}
       <button className={styles.trashButton} onClick={async () => {
         try { setTrash(await (await getSynthesisFolderStore()).listTrash()) }
         catch { setMessage("No se pudo abrir la papelera de Síntesis.") }
       }} aria-label="Abrir papelera de Síntesis" title="Papelera"><Trash2 /></button>
-      <div className={styles.zoom}><button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button></div>
+      <div className={styles.zoom}>
+        <button type="button" disabled={loadState !== "ready"} className={speech.enabled ? styles.micActive : ""} onClick={speech.toggle}
+          aria-label={speech.enabled ? "Desactivar navegación por voz" : "Activar navegación por voz"}
+          aria-pressed={speech.enabled} title={speech.enabled ? "Desactivar micrófono" : "Activar micrófono"}>
+          {speech.enabled ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}
+        </button>
+        <button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button>
+      </div>
     </header>
+    {speech.enabled || speech.status === "unsupported" ? <div className={styles.micStatus} role="status">
+      {speech.status === "listening" ? "Escuchando" : speech.status === "starting" ? "Activando micrófono…"
+        : speech.status === "resume" ? <button type="button" onClick={speech.retry}>Tocá para reanudar</button>
+          : speech.status === "unsupported" ? "Reconocimiento de voz no disponible en este navegador"
+            : speech.status === "error" ? <button type="button" onClick={speech.retry}>No se pudo usar el micrófono. Reintentar</button> : "Micrófono pausado"}
+    </div> : null}
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     {trash !== null ? <section className={styles.trashPanel} role="dialog" aria-label="Papelera de Síntesis">
       <h2>Papelera</h2>
@@ -404,10 +491,32 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         }}>Restaurar este estado</button>
       </article>)}
     </section> : null}
+    <Dialog open={topicsOpen} onOpenChange={setTopicsOpen}>
+      <DialogContent className={styles.topicsDialog}>
+        <DialogHeader>
+          <DialogTitle>Temas de Síntesis</DialogTitle>
+          <DialogDescription>Elegí un tema para ir a su vista. Para editarlo, decí «abre» o tocá el lápiz.</DialogDescription>
+        </DialogHeader>
+        {suggestedNodeIds.length ? <div className={styles.topicSuggestions}>
+          <strong>Destinos probables</strong>
+          {suggestedNodeIds.map((id) => {
+            const node = nodes.find((candidate) => candidate.id === id)
+            return node ? <button key={id} type="button" onClick={() => navigateToNode(id)}>{voiceNodePath(nodes, id)}</button> : null
+          })}
+        </div> : null}
+        <div className={styles.topicList} role="tree" aria-label="Jerarquía de temas">
+          {nodes.length ? nodes.map((node) => <button key={node.id} type="button" role="treeitem" aria-level={node.level}
+            className={styles.topicItem} style={{ paddingLeft: `${12 + (node.level - 1) * 20}px` }}
+            onClick={() => navigateToNode(node.id)} title={voiceNodePath(nodes, node.id)}>{node.name}</button>)
+            : <p>Esta Síntesis todavía no tiene temas.</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
     {loadState !== "ready" ? <div className={styles.emptyState} role="status">
       {loadState === "loading" ? "Cargando la Síntesis guardada…" : "No se pudo cargar la Síntesis guardada."}
       {loadState === "error" ? <button onClick={() => { setLoadState("loading"); setRetry((value) => value + 1) }}>Reintentar</button> : null}
     </div> : nodes.length === 0 ? <div className={styles.emptyState}>No hay contenido cargado para la semana {context.weekNumber}. Podés consultar otra semana desde el selector.</div> : null}
+    {loadState === "ready" && currentNode && currentNodes.length === 0 ? <div className={styles.emptyState}>No hay subtemas en «{currentNode.name}». Podés abrir su editor con el lápiz.</div> : null}
     <section className={styles.board} style={{ "--board-height": `${Math.max(1.5, ...currentNodes.map((node) => (workspace.layout[node.id]?.y ?? 0) + 0.3)) * 100}dvh` } as React.CSSProperties} aria-label="Nodos de Síntesis">{currentNodes.map((node) => {
         const position = workspace.layout[node.id] ?? { x: 0.5, y: 0.4, scale: 1 }
         return <div key={node.id} className={styles.nodeWrap} style={{ left: `${position.x * 100}%`, top: `${position.y * 100}dvh`, "--node-scale": position.scale } as React.CSSProperties}>
