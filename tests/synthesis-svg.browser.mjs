@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { build } from "esbuild"
 import { chromium } from "@playwright/test"
+import { readFile } from "node:fs/promises"
 
 test("exports native SVG with text, tables, list markers and original embedded images", async () => {
   const bundle = await build({
@@ -145,6 +146,57 @@ test("exports native SVG with text, tables, list markers and original embedded i
       }
     })
     assert.match(failure, /No se pudo incrustar una imagen/, "do not silently download an incomplete SVG")
+  } finally {
+    await browser.close()
+  }
+})
+
+test("embeds imported web fonts and uses them to render offline", async () => {
+  const bundle = await build({
+    entryPoints: ["lib/client/synthesis-svg.ts"], bundle: true, write: false,
+    platform: "browser", format: "iife", globalName: "synthesisSvg",
+  })
+  const font = await readFile("public/pdfjs/web/standard_fonts/LiberationSans-Regular.ttf")
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage()
+    await page.route("https://svg-font.test/**", async (route) => {
+      if (route.request().url().endsWith("font.ttf")) {
+        await route.fulfill({ body: font, contentType: "font/ttf", headers: { "Access-Control-Allow-Origin": "*" } })
+      } else {
+        await route.fulfill({ body: '@font-face{font-family:"Export Test";src:url("./font.ttf")} @font-face{font-family:"Unused";src:url("./unused.ttf")}', contentType: "text/css", headers: { "Access-Control-Allow-Origin": "*" } })
+      }
+    })
+    await page.setContent(`<style>@import url("https://svg-font.test/fonts.css");
+      body{margin:0}.tiptap{width:520px;padding:24px;font:24px/1.5 "Export Test",monospace}
+      </style><div class="tiptap"><p>Texto nítido con acentos: áéíóú ñ</p></div>`)
+    await page.addScriptTag({ content: bundle.outputFiles[0].text })
+    const svg = await page.evaluate(async () => {
+      await document.fonts.load('24px "Export Test"')
+      return synthesisSvg.buildSynthesisEditorSvg(document.querySelector(".tiptap"))
+    })
+    assert.match(svg, /data:font\/ttf;base64,/)
+    assert.doesNotMatch(svg, /Unused|https:\/\/svg-font\.test/)
+    // A fresh page has neither the editor's font nor its stylesheet. Compare
+    // actual pixels, including opening the SVG as an image (isolated fonts).
+    const offline = await browser.newPage()
+    await offline.route("**/*", (route) => route.abort())
+    const rendered = await offline.evaluate(async (svg) => {
+      async function pixels(markup) {
+        const image = new Image()
+        image.src = `data:image/svg+xml,${encodeURIComponent(markup)}`
+        await image.decode()
+        const canvas = document.createElement("canvas")
+        canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+        const ctx = canvas.getContext("2d")
+        ctx.drawImage(image, 0, 0)
+        return Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data)
+      }
+      const withFont = await pixels(svg)
+      const withoutFont = await pixels(svg.replace(/<style[\s\S]*?<\/style>/g, ""))
+      return withFont.reduce((count, value, i) => count + (value !== withoutFont[i] ? 1 : 0), 0)
+    }, svg)
+    assert.ok(rendered > 1000, "embedded font must affect the rendered glyphs in a standalone SVG")
   } finally {
     await browser.close()
   }

@@ -1,5 +1,6 @@
 import { exportImage, svgNumber, type SvgImage } from "../svg-image"
 import { normalizeSvgText } from "./svg-text"
+import { embedSvgFonts } from "./svg-fonts"
 
 const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget"
 
@@ -181,9 +182,10 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
     const svg = svgDocument.documentElement
     // All document images are emitted separately by Secuencial's serializer.
     svg.querySelectorAll("image").forEach((image) => image.remove())
-    // Figma does not use embedded web fonts. Native text retains the font name;
-    // avoid copying every unrelated font stylesheet into this export.
+    // Replace the converter's unrelated/external font rules with self-contained
+    // rules for the families actually present in this document.
     svg.querySelectorAll("style").forEach((style) => style.remove())
+    await embedSvgFonts(svg)
     // Resolve dominant-baseline in the browser, then bake it into plain y
     // coordinates, so importers need not implement CSS baseline alignment.
     const measurable = document.importNode(svg, true) as unknown as SVGSVGElement
