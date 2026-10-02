@@ -5,6 +5,12 @@ import { decideSynthesisVoiceDestination, validateVoiceTree, type EvaluateChoice
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
+class GatewayEvaluationError extends Error {
+  constructor(readonly upstreamStatus: number) {
+    super(`AI Gateway respondió con HTTP ${upstreamStatus}.`)
+  }
+}
+
 export async function POST(request: Request) {
   const auth = await requireAuthSession()
   if (auth.response) return auth.response
@@ -23,7 +29,10 @@ export async function POST(request: Request) {
     const currentNodeId = typeof body?.currentNodeId === "string" && nodes.some((node) => node.id === body.currentNodeId)
       ? body.currentNodeId : null
     const apiKey = process.env.gatewayia?.trim()
-    if (!apiKey) return Response.json({ error: "Falta configurar gatewayia." }, { status: 503 })
+    if (!apiKey) {
+      console.error("[Síntesis voz] Falta configurar gatewayia en el servidor.")
+      return Response.json({ error: "Gateway no configurado." }, { status: 503 })
+    }
 
     const evaluate: EvaluateChoice = async (state, criteria) => {
       const response = await fetch("https://ai-gateway.vercel.sh/v1/evaluate", {
@@ -40,19 +49,33 @@ export async function POST(request: Request) {
             },
           },
         }),
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(8_000)]),
+        signal: AbortSignal.timeout(25_000),
         cache: "no-store",
       })
-      if (!response.ok) throw new Error(`Jev no respondió (${response.status}).`)
+      if (!response.ok) {
+        const details = await response.text()
+        console.error("[Síntesis voz] AI Gateway rechazó la evaluación de Jev", {
+          status: response.status,
+          response: details.slice(0, 2_000),
+        })
+        throw new GatewayEvaluationError(response.status)
+      }
       const result = await response.json() as { answers?: { destination?: { choice?: unknown; probabilities?: unknown } } }
-      if (!result.answers?.destination || typeof result.answers.destination !== "object") throw new Error("Respuesta de Jev inválida.")
+      if (!result.answers?.destination || typeof result.answers.destination !== "object") {
+        console.error("[Síntesis voz] Respuesta inesperada de Jev", result)
+        throw new Error("Respuesta inesperada de Jev.")
+      }
       return result.answers.destination
     }
     const destination = await decideSynthesisVoiceDestination(transcript, nodes, currentNodeId, evaluate)
     return Response.json(destination, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
+    console.error("[Síntesis voz] No se pudo resolver el comando de voz", error)
     const message = error instanceof Error ? error.message : "No se pudo interpretar el comando."
     if (message.includes("inválid") || message.includes("inválido")) return Response.json({ error: message }, { status: 400 })
-    return Response.json({ error: "No se pudo consultar Jev. Intentá de nuevo." }, { status: 502 })
+    return Response.json({
+      error: "No se pudo consultar Jev.",
+      ...(error instanceof GatewayEvaluationError ? { upstreamStatus: error.upstreamStatus } : {}),
+    }, { status: 502 })
   }
 }

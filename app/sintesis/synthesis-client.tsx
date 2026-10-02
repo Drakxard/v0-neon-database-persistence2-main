@@ -344,11 +344,11 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     if (command === "latest_edit") {
       const nodeId = workspaceRef.current.lastEditedNodeId
       if (nodeId && nodes.some((node) => node.id === nodeId)) navigateToNode(nodeId)
-      else setMessage("Todavía no hay un nodo editado en esta Síntesis.")
+      else console.info("[Síntesis voz] Todavía no hay un nodo editado en esta Síntesis.")
       return
     }
     if (command === "edit") { setTopicsOpen(false); openEditor(currentParentId); return }
-    if (!nodes.length) { setMessage("Esta Síntesis todavía no tiene temas."); return }
+    if (!nodes.length) { console.info("[Síntesis voz] Esta Síntesis todavía no tiene temas."); return }
     const controller = new AbortController()
     voiceRequestRef.current = controller
     try {
@@ -364,8 +364,10 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         }),
         signal: controller.signal,
       })
-      const result = await response.json() as VoiceDestination & { error?: string }
-      if (!response.ok) throw new Error(result.error || "No se pudo interpretar el comando.")
+      const result = await response.json() as VoiceDestination & { error?: string; upstreamStatus?: number }
+      if (!response.ok) throw new Error(`${result.error || "No se pudo interpretar el comando."} HTTP ${response.status}${
+        result.upstreamStatus ? `, AI Gateway HTTP ${result.upstreamStatus}` : ""
+      }`)
       if (sequence !== voiceSequenceRef.current || editorOpenRef.current) return
       if (result.action === "navigate" && nodes.some((node) => node.id === result.nodeId)) navigateToNode(result.nodeId)
       else {
@@ -375,7 +377,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
       }
     } catch (error) {
       if (controller.signal.aborted || sequence !== voiceSequenceRef.current) return
-      setMessage(error instanceof Error ? error.message : "No se pudo interpretar el comando.")
+      console.error("[Síntesis voz] No se pudo interpretar el comando", error)
     } finally { if (voiceRequestRef.current === controller) voiceRequestRef.current = null }
   }, [context.subjectId, context.weekNumber, currentParentId, loadState, navigateToNode, nodes, openEditor])
 
@@ -462,20 +464,19 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
         catch { setMessage("No se pudo abrir la papelera de Síntesis.") }
       }} aria-label="Abrir papelera de Síntesis" title="Papelera"><Trash2 /></button>
       <div className={styles.zoom}>
-        <button type="button" disabled={loadState !== "ready"} className={speech.enabled ? styles.micActive : ""} onClick={speech.toggle}
-          aria-label={speech.enabled ? "Desactivar navegación por voz" : "Activar navegación por voz"}
-          aria-pressed={speech.enabled} title={speech.enabled ? "Desactivar micrófono" : "Activar micrófono"}>
-          {speech.enabled ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}
+        <button type="button" disabled={loadState !== "ready"}
+          className={speech.status === "listening" || speech.status === "starting" ? styles.micActive : ""}
+          onClick={speech.status === "resume" || speech.status === "error" ? speech.retry : speech.toggle}
+          aria-label={speech.status === "resume" || speech.status === "error" ? "Reanudar navegación por voz"
+            : speech.enabled ? "Desactivar navegación por voz" : "Activar navegación por voz"}
+          aria-pressed={speech.status === "listening" || speech.status === "starting"}
+          title={speech.status === "resume" || speech.status === "error" ? "Reanudar micrófono"
+            : speech.enabled ? "Desactivar micrófono" : "Activar micrófono"}>
+          {speech.status === "listening" || speech.status === "starting" ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}
         </button>
         <button disabled={loadState !== "ready"} onClick={() => openEditor(currentParentId)} aria-label={currentNode ? `Editar ${currentNode.name}` : "Editar la Síntesis completa"} title="Editar"><Pencil /></button>
       </div>
     </header>
-    {speech.enabled || speech.status === "unsupported" ? <div className={styles.micStatus} role="status">
-      {speech.status === "listening" ? "Escuchando" : speech.status === "starting" ? "Activando micrófono…"
-        : speech.status === "resume" ? <button type="button" onClick={speech.retry}>Tocá para reanudar</button>
-          : speech.status === "unsupported" ? "Reconocimiento de voz no disponible en este navegador"
-            : speech.status === "error" ? <button type="button" onClick={speech.retry}>No se pudo usar el micrófono. Reintentar</button> : "Micrófono pausado"}
-    </div> : null}
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     {trash !== null ? <section className={styles.trashPanel} role="dialog" aria-label="Papelera de Síntesis">
       <h2>Papelera</h2>

@@ -51,7 +51,11 @@ export function useSynthesisSpeech(active: boolean, onPhrase: (phrase: string) =
     if (!enabledRef.current || !activeRef.current || blockedRef.current || recognitionRef.current) return
     const speechWindow = window as SpeechWindow
     const Constructor = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition
-    if (!Constructor) { setStatus("unsupported"); return }
+    if (!Constructor) {
+      console.error("[Síntesis voz] Este navegador no admite SpeechRecognition.")
+      setStatus("unsupported")
+      return
+    }
     const recognition = new Constructor()
     const processed = new Set<number>()
     recognitionRef.current = recognition
@@ -71,6 +75,7 @@ export function useSynthesisSpeech(active: boolean, onPhrase: (phrase: string) =
     }
     recognition.onerror = (event) => {
       if (event.error === "no-speech" || event.error === "aborted") return
+      console.error("[Síntesis voz] Falló el reconocimiento de voz:", event.error)
       blockedRef.current = true
       setStatus(event.error === "not-allowed" || event.error === "service-not-allowed" ? "resume" : "error")
     }
@@ -81,7 +86,8 @@ export function useSynthesisSpeech(active: boolean, onPhrase: (phrase: string) =
       restartTimerRef.current = window.setTimeout(() => startRecognition(), 350)
     }
     try { setStatus("starting"); recognition.start() }
-    catch {
+    catch (error) {
+      console.error("[Síntesis voz] No se pudo iniciar el reconocimiento de voz:", error)
       recognitionRef.current = null
       blockedRef.current = true
       setStatus("resume")
