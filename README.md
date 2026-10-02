@@ -64,10 +64,10 @@ abrir el editor. La transcripción no se muestra ni se guarda en el workspace.
 
 Cada frase se envía a Jev (`typesafe-ai/jev`) mediante Vercel AI Gateway. Jev elige
 un tema, una acción o `none`; la aplicación aplica esa elección sin umbrales locales.
-Configurá `AI_GATEWAY_API_KEY` en el servidor (también se admite `gatewayia` por
-compatibilidad). En Vercel puede usarse `VERCEL_OIDC_TOKEN`. El navegador nunca recibe
-esas credenciales. Si AI Gateway responde 403, verificá el acceso del equipo a Jev en
-AI Gateway; la aplicación muestra el rechazo en pantalla.
+Configurá `gatewayia` en el servidor como clave de AI Gateway. En Vercel también puede
+usarse `VERCEL_OIDC_TOKEN`. El navegador nunca recibe esas credenciales. Si AI Gateway
+responde 403, el detalle queda registrado en la consola; verificá el acceso del equipo
+a Jev en AI Gateway.
 El reconocimiento de voz depende de la disponibilidad de Web Speech
 API en el navegador y puede requerir otro toque para reanudarlo tras volver a la página.
 

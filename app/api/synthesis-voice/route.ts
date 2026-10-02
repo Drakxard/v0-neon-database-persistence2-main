@@ -29,16 +29,14 @@ export async function POST(request: Request) {
       ? body.currentNodeId : null
     const lastEditedNodeId = typeof body?.lastEditedNodeId === "string" && nodes.some((node) => node.id === body.lastEditedNodeId)
       ? body.lastEditedNodeId : null
-    const apiKey = process.env.AI_GATEWAY_API_KEY?.trim()
-    const legacyKey = process.env.gatewayia?.trim()
+    const apiKey = process.env.gatewayia?.trim()
     const oidcToken = process.env.VERCEL_OIDC_TOKEN?.trim()
     const credentials = [
-      ...(apiKey ? [{ name: "AI_GATEWAY_API_KEY", token: apiKey }] : []),
-      ...(legacyKey && legacyKey !== apiKey ? [{ name: "gatewayia", token: legacyKey }] : []),
-      ...(oidcToken && oidcToken !== apiKey && oidcToken !== legacyKey ? [{ name: "Vercel OIDC", token: oidcToken }] : []),
+      ...(apiKey ? [{ name: "gatewayia", token: apiKey }] : []),
+      ...(oidcToken && oidcToken !== apiKey ? [{ name: "Vercel OIDC", token: oidcToken }] : []),
     ]
     if (!credentials.length) {
-      console.error("[Síntesis voz] Falta AI_GATEWAY_API_KEY, gatewayia o VERCEL_OIDC_TOKEN en el servidor.")
+      console.error("[Síntesis voz] Falta gatewayia y no hay token OIDC de Vercel.")
       return Response.json({ error: "Falta configurar una clave de AI Gateway en el servidor." }, { status: 503 })
     }
 
@@ -79,7 +77,7 @@ export async function POST(request: Request) {
     const destination = await decideSynthesisVoiceDestination(transcript, nodes, currentNodeId, lastEditedNodeId, evaluate)
     return Response.json(destination, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
-    console.error("[Síntesis voz] No se pudo resolver el comando de voz", error)
+    if (!(error instanceof GatewayEvaluationError)) console.error("[Síntesis voz] No se pudo resolver el comando de voz", error)
     const message = error instanceof Error ? error.message : "No se pudo interpretar el comando."
     if (message.includes("inválid") || message.includes("inválido")) return Response.json({ error: message }, { status: 400 })
     return Response.json({
