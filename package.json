@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit --pretty false",
     "test": "node --test --experimental-strip-types --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.test.mts",
     "test:svg": "node --test tests/synthesis-svg.browser.mjs",
+    "diagnose:jev": "node scripts/diagnose-jev.mjs",
     "quality": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

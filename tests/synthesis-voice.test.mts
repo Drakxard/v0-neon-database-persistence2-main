@@ -7,6 +7,7 @@ import {
 } from "../lib/synthesis-voice-navigation.ts"
 import { findEditedSynthesisNode, normalizeSynthesisWorkspace } from "../lib/synthesis-workspace.ts"
 import { removeSynthesisNode } from "../lib/synthesis-material-links.ts"
+import { summarizeGatewayFailure } from "../lib/jev-gateway-diagnostics.ts"
 import { readFileSync } from "node:fs"
 
 const nodes = validateVoiceTree([
@@ -125,4 +126,22 @@ test("la clave del Gateway queda en la ruta de servidor y el modo local la deja 
   assert.doesNotMatch(client, /classifySynthesisVoiceCommand|matchLocalVoiceDestination/)
   assert.match(proxy, /\/api\/synthesis-voice/)
   assert.match(interceptor, /\/api\/synthesis-voice/)
+})
+
+test("un rechazo de Gateway conserva el código y el ID sin registrar la clave", () => {
+  const response = new Response(null, { status: 403, headers: { "x-vercel-id": "iad1::test" } })
+  const failure = summarizeGatewayFailure(response,
+    '{"error":{"type":"access_denied","message":"Forbidden for secret-key"}}', ["secret-key"])
+  assert.deepEqual(failure, {
+    status: 403,
+    code: "access_denied",
+    requestId: "iad1::test",
+    response: '{"error":{"type":"access_denied","message":"Forbidden for [redacted]"}}',
+  })
+  assert.deepEqual(summarizeGatewayFailure(new Response(null, { status: 403 }), "", ["secret-key"]), {
+    status: 403,
+    code: null,
+    requestId: null,
+    response: "",
+  })
 })

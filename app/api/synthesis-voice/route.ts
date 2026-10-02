@@ -1,6 +1,7 @@
 import { requireAuthSession } from "@/lib/authz"
 import { parseSynthesisContext } from "@/lib/synthesis-context"
 import { decideSynthesisVoiceDestination, validateVoiceTree, type EvaluateChoices } from "@/lib/synthesis-voice-navigation"
+import { summarizeGatewayFailure } from "@/lib/jev-gateway-diagnostics"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -45,6 +46,8 @@ export async function POST(request: Request) {
         model: "typesafe-ai/jev",
         state,
         questions,
+        ...(process.env.JEV_PREFER_TYPESAFE_AI === "true"
+          ? { providerOptions: { gateway: { order: ["typesafe-ai"] } } } : {}),
       })
       for (const [index, credential] of credentials.entries()) {
         const response = await fetch("https://ai-gateway.vercel.sh/v1/evaluate", {
@@ -58,8 +61,7 @@ export async function POST(request: Request) {
           const details = await response.text()
           console.error("[Síntesis voz] AI Gateway rechazó la evaluación de Jev", {
             credential: credential.name,
-            status: response.status,
-            response: details.slice(0, 2_000),
+            ...summarizeGatewayFailure(response, details, credentials.map(({ token }) => token)),
           })
           if ((response.status === 401 || response.status === 403) && index < credentials.length - 1) continue
           throw new GatewayEvaluationError(response.status)

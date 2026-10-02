@@ -68,6 +68,15 @@ Configurá `gatewayia` en el servidor como clave de AI Gateway. En Vercel tambi�
 usarse `VERCEL_OIDC_TOKEN`. El navegador nunca recibe esas credenciales. Si AI Gateway
 responde 403, el detalle queda registrado en la consola; verificá el acceso del equipo
 a Jev en AI Gateway.
+Para aislar un 403, cargá la misma clave `gatewayia` en el entorno de una terminal y
+ejecutá `npm run diagnose:jev` (`npm.cmd run diagnose:jev` en PowerShell). La prueba envía una evaluación mínima por la ruta
+predeterminada y, si recibe 403, repite con TypeSafe AI como único proveedor. Imprime
+estado, error e identificador de Gateway sin imprimir la clave. Si ambas pruebas dan
+403, revisá en el mismo equipo de Vercel la disponibilidad de Jev, las listas de
+modelos y proveedores permitidos y las reglas de enrutamiento. Si todo está permitido,
+enviá a soporte de Vercel los identificadores de solicitud y el registro de AI Gateway.
+Si solo funciona TypeSafe AI, configurá `JEV_PREFER_TYPESAFE_AI=true` en Vercel y
+volvé a desplegar. La petición lo preferirá sin excluir los demás proveedores.
 El reconocimiento de voz depende de la disponibilidad de Web Speech
 API en el navegador y puede requerir otro toque para reanudarlo tras volver a la página.
 
