@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
-  classifySynthesisVoiceCommand,
   decideSynthesisVoiceDestination,
   validateVoiceTree,
   voiceNodePath,
@@ -17,29 +16,47 @@ const nodes = validateVoiceTree([
   { id: "derivadas", parentId: "calculo", name: "Derivadas" },
 ])
 
-test("reconoce comandos explícitos sin mostrar ni almacenar la transcripción", () => {
-  assert.equal(classifySynthesisVoiceCommand("Temas"), "topics")
-  assert.equal(classifySynthesisVoiceCommand("mostrame los temas"), "topics")
-  assert.equal(classifySynthesisVoiceCommand("ir a la última edición"), "latest_edit")
-  assert.equal(classifySynthesisVoiceCommand("Abre"), "edit")
-  assert.equal(classifySynthesisVoiceCommand("integrales definidas"), "search")
+test("Jev decide los comandos y el nodo en la misma evaluación", async () => {
+  const topics = await decideSynthesisVoiceDestination("mostrame los temas", nodes, null, null, async (_state, questions) => {
+    const criteria = questions.destination.criteria
+    assert.ok(criteria.topics)
+    assert.ok(criteria.edit)
+    assert.ok(criteria.n2)
+    return { destination: { choice: "topics", probabilities: { topics: 0.95, edit: 0.02, none: 0.03 } } }
+  })
+  assert.deepEqual(topics, { action: "topics" })
+  const edit = await decideSynthesisVoiceDestination("quiero modificar esto", nodes, null, null, async () => ({ destination: {
+    choice: "edit", probabilities: { edit: 0.93, topics: 0.02, none: 0.05 } },
+  }))
+  assert.deepEqual(edit, { action: "edit" })
+  const latest = await decideSynthesisVoiceDestination("volvé a lo que cambié recién", nodes, null, "derivadas", async (_state, questions) => {
+    const criteria = questions.destination.criteria
+    assert.ok(criteria.latest)
+    return { destination: { choice: "latest", probabilities: { latest: 0.9, none: 0.1 } } }
+  })
+  assert.deepEqual(latest, { action: "navigate", nodeId: "derivadas" })
+  const empty = await decideSynthesisVoiceDestination("temas", [], null, null, async () => ({ destination: {
+    choice: "topics", probabilities: { topics: 1 } },
+  }))
+  assert.deepEqual(empty, { action: "topics" })
   assert.equal(voiceNodePath(nodes, "definidas"), "Cálculo > Integrales > Integrales definidas")
 })
 
 test("Jev elige un nodo profundo y una elección incierta ofrece alternativas", async () => {
-  const chosen = await decideSynthesisVoiceDestination("integrales definidas", nodes, null, async (_state, criteria) => {
+  const chosen = await decideSynthesisVoiceDestination("integrales definidas", nodes, null, null, async (_state, questions) => {
+    const criteria = questions.destination.criteria
     assert.match(criteria.n2, /Integrales definidas/)
-    return { choice: "n2", probabilities: { n2: 0.9, n1: 0.06, none: 0.04 } }
+    return { destination: { choice: "n2", probabilities: { n2: 0.9, n1: 0.06, none: 0.04 } } }
   })
   assert.deepEqual(chosen, { action: "navigate", nodeId: "definidas" })
 
-  const uncertain = await decideSynthesisVoiceDestination("integral", nodes, null, async () => ({
-    choice: "n1", probabilities: { n1: 0.49, n2: 0.45, none: 0.06 },
+  const uncertain = await decideSynthesisVoiceDestination("integral", nodes, null, null, async () => ({ destination: {
+    choice: "n1", probabilities: { n1: 0.49, n2: 0.45, none: 0.06 } },
   }))
   assert.deepEqual(uncertain, { action: "suggest", nodeIds: ["integrales", "definidas"] })
 
-  const invalid = await decideSynthesisVoiceDestination("derivadas", nodes, null, async () => ({
-    choice: "n999", probabilities: { n3: 0.98 },
+  const invalid = await decideSynthesisVoiceDestination("derivadas", nodes, null, null, async () => ({ destination: {
+    choice: "n999", probabilities: { n3: 0.98 } },
   }))
   assert.deepEqual(invalid, { action: "suggest", nodeIds: ["derivadas"] })
 })
@@ -51,10 +68,19 @@ test("árboles grandes conservan el acceso a nodos fuera del primer grupo", asyn
       id: `child_${index}`, parentId: "root", name: index === 203 ? "Tema remoto" : `Tema ${index}`,
     })),
   ])
-  const result = await decideSynthesisVoiceDestination("tema remoto", large, null, async (_state, criteria) => {
-    const selected = Object.entries(criteria).find(([, description]) => description.includes("Tema remoto"))?.[0]
-    return { choice: selected ?? "n0", probabilities: { [selected ?? "n0"]: 0.96, none: 0.04 } }
+  let calls = 0
+  const result = await decideSynthesisVoiceDestination("tema remoto", large, null, null, async (_state, questions) => {
+    calls += 1
+    const group = Object.entries(questions.group.criteria).find(([, description]) => description.includes("Tema remoto"))?.[0]
+    assert.equal(group, "g1")
+    const selected = Object.entries(questions.nodes1.criteria).find(([, description]) => description.includes("Tema remoto"))?.[0]
+    return {
+      group: { choice: group, probabilities: { [group]: 0.96, none: 0.04 } },
+      nodes0: { choice: "none", probabilities: { none: 1 } },
+      nodes1: { choice: selected, probabilities: { [selected]: 0.96, none: 0.04 } },
+    }
   })
+  assert.equal(calls, 1)
   assert.deepEqual(result, { action: "navigate", nodeId: "child_203" })
 })
 
@@ -88,6 +114,7 @@ test("la clave del Gateway queda en la ruta de servidor y el modo local la deja 
   assert.match(route, /process\.env\.gatewayia/)
   assert.match(route, /requireAuthSession/)
   assert.doesNotMatch(client, /gatewayia/)
+  assert.doesNotMatch(client, /classifySynthesisVoiceCommand|matchLocalVoiceDestination/)
   assert.match(proxy, /\/api\/synthesis-voice/)
   assert.match(interceptor, /\/api\/synthesis-voice/)
 })

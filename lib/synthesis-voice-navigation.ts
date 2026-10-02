@@ -1,27 +1,16 @@
 export type VoiceTreeNode = { id: string; parentId: string | null; name: string }
-export type VoiceCommand = "topics" | "latest_edit" | "edit" | "search"
 export type VoiceDestination =
   | { action: "navigate"; nodeId: string }
   | { action: "suggest"; nodeIds: string[] }
+  | { action: "topics" }
+  | { action: "edit" }
   | { action: "none" }
 
 type ChoiceAnswer = { choice?: unknown; probabilities?: unknown }
-export type EvaluateChoice = (state: object, criteria: Record<string, string>) => Promise<ChoiceAnswer>
+type ChoiceQuestion = { type: "choice"; instructions: string; criteria: Record<string, string> }
+export type EvaluateChoices = (state: object, questions: Record<string, ChoiceQuestion>) => Promise<Record<string, ChoiceAnswer>>
 
 const MAX_OPTIONS = 200
-
-function simplified(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim()
-}
-
-export function classifySynthesisVoiceCommand(transcript: string): VoiceCommand {
-  const phrase = simplified(transcript)
-  if (/^(?:(?:mostra|muestra|mostrar|ver|dime|decime|enseña|ensena)(?:me)? (?:los |la )?)?temas$/.test(phrase)
-    || /^(?:que|cuales) (?:temas|componentes) (?:hay|tiene)$/.test(phrase)) return "topics"
-  if (/\b(?:ultima edicion|ultimo editado|lo ultimo editado|ultima modificacion)\b/.test(phrase)) return "latest_edit"
-  if (/^(?:abre|abrir|abrilo|abrelo|editar|edita)(?: (?:este|esto|el nodo|la vista|aqui))?$/.test(phrase)) return "edit"
-  return "search"
-}
 
 export function validateVoiceTree(input: unknown): VoiceTreeNode[] {
   if (!Array.isArray(input) || input.length > 500) throw new Error("Árbol de Síntesis inválido.")
@@ -60,7 +49,16 @@ export function voiceNodePath(nodes: VoiceTreeNode[], nodeId: string): string {
   return names.join(" > ")
 }
 
-function candidatesFromAnswer(answer: ChoiceAnswer, candidates: VoiceTreeNode[]): VoiceDestination {
+function commandCriteria(lastEditedNodeId: string | null): Record<string, string> {
+  return {
+    topics: "Quiere ver la jerarquía o el índice navegable de temas, sin elegir todavía un nodo concreto.",
+    edit: "Quiere abrir el editor de la ubicación actual, igual que pulsar el lápiz de la esquina superior.",
+    ...(lastEditedNodeId ? { latest: "Quiere ir al nodo cuyo contenido fue editado más recientemente." } : {}),
+    none: "No pide navegar a un nodo, ver la jerarquía ni abrir el editor.",
+  }
+}
+
+function candidatesFromAnswer(answer: ChoiceAnswer, candidates: VoiceTreeNode[], lastEditedNodeId: string | null): VoiceDestination {
   const probabilities = answer.probabilities && typeof answer.probabilities === "object"
     ? answer.probabilities as Record<string, unknown> : {}
   const probability = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0
@@ -68,66 +66,88 @@ function candidatesFromAnswer(answer: ChoiceAnswer, candidates: VoiceTreeNode[])
     id: node.id,
     probability: probability(probabilities[`n${index}`]),
   })).sort((a, b) => b.probability - a.probability)
-  const selected = typeof answer.choice === "string" && /^n\d+$/.test(answer.choice)
-    ? candidates[Number(answer.choice.slice(1))] : null
+  const choice = typeof answer.choice === "string" ? answer.choice : ""
+  const selected = /^n\d+$/.test(choice) ? candidates[Number(choice.slice(1))] : null
   const top = ranked.filter((item) => item.probability > 0).slice(0, 3).map((item) => item.id)
-  if (!selected) return top.length ? { action: "suggest", nodeIds: top } : { action: "none" }
-  const selectedProbability = ranked.find((item) => item.id === selected.id)?.probability ?? 0
-  const runnerUp = Math.max(...ranked.filter((item) => item.id !== selected.id).map((item) => item.probability),
-    probability(probabilities.none))
+  if (choice === "none") return { action: "none" }
+  if (!selected && choice !== "topics" && choice !== "edit" && !(choice === "latest" && lastEditedNodeId)) {
+    return top.length ? { action: "suggest", nodeIds: top } : { action: "none" }
+  }
+  const selectedProbability = probability(probabilities[choice])
+  const runnerUp = Math.max(0, ...Object.entries(probabilities)
+    .filter(([key]) => key !== choice)
+    .map(([, value]) => probability(value)))
   if (selectedProbability < 0.55 || selectedProbability - runnerUp < 0.12) {
-    return { action: "suggest", nodeIds: top.length ? top : [selected.id] }
+    return top.length ? { action: "suggest", nodeIds: top } : { action: "none" }
   }
+  if (choice === "topics") return { action: "topics" }
+  if (choice === "edit") return { action: "edit" }
+  if (choice === "latest" && lastEditedNodeId) return { action: "navigate", nodeId: lastEditedNodeId }
+  if (!selected) return { action: "none" }
   return { action: "navigate", nodeId: selected.id }
-}
-
-async function chooseAmong(
-  transcript: string,
-  nodes: VoiceTreeNode[],
-  candidates: VoiceTreeNode[],
-  currentNodeId: string | null,
-  evaluate: EvaluateChoice,
-): Promise<VoiceDestination> {
-  if (candidates.length === 0) return { action: "none" }
-  if (candidates.length > MAX_OPTIONS) {
-    const groups: VoiceTreeNode[][] = []
-    for (let index = 0; index < candidates.length; index += MAX_OPTIONS) groups.push(candidates.slice(index, index + MAX_OPTIONS))
-    const criteria: Record<string, string> = { none: "Ningún grupo contiene el tema mencionado." }
-    groups.forEach((group, index) => { criteria[`g${index}`] = group.map((node) => voiceNodePath(nodes, node.id)).join("; ") })
-    const answer = await evaluate({ transcript, currentPath: currentNodeId ? voiceNodePath(nodes, currentNodeId) : "Inicio" }, criteria)
-    const groupIndex = typeof answer.choice === "string" && /^g\d+$/.test(answer.choice) ? Number(answer.choice.slice(1)) : -1
-    if (!groups[groupIndex]) return { action: "suggest", nodeIds: candidates.slice(0, 3).map((node) => node.id) }
-    return chooseAmong(transcript, nodes, groups[groupIndex], currentNodeId, evaluate)
-  }
-  const criteria: Record<string, string> = { none: "La frase no se refiere a ninguno de estos nodos." }
-  candidates.forEach((node, index) => {
-    const children = nodes.filter((child) => child.parentId === node.id).slice(0, 12).map((child) => child.name)
-    criteria[`n${index}`] = `${voiceNodePath(nodes, node.id)}${children.length ? `; contiene: ${children.join(", ")}` : ""}`
-  })
-  const answer = await evaluate({ transcript, currentPath: currentNodeId ? voiceNodePath(nodes, currentNodeId) : "Inicio" }, criteria)
-  return candidatesFromAnswer(answer, candidates)
 }
 
 export async function decideSynthesisVoiceDestination(
   transcript: string,
   nodes: VoiceTreeNode[],
   currentNodeId: string | null,
-  evaluate: EvaluateChoice,
+  lastEditedNodeId: string | null,
+  evaluate: EvaluateChoices,
 ): Promise<VoiceDestination> {
-  if (!nodes.length) return { action: "none" }
-  if (nodes.length <= MAX_OPTIONS) return chooseAmong(transcript, nodes, nodes, currentNodeId, evaluate)
-  let candidates = nodes.filter((node) => node.parentId === null)
-  let selected: VoiceDestination = { action: "none" }
-  let previousSelectedId: string | null = null
-  for (let depth = 0; depth < 12 && candidates.length; depth++) {
-    selected = await chooseAmong(transcript, nodes, candidates, currentNodeId, evaluate)
-    if (selected.action !== "navigate") return selected
-    const selectedNodeId = selected.nodeId
-    if (selectedNodeId === previousSelectedId) return selected
-    const children = nodes.filter((node) => node.parentId === selectedNodeId)
-    if (!children.length) return selected
-    candidates = [nodes.find((node) => node.id === selectedNodeId)!, ...children]
-    previousSelectedId = selectedNodeId
+  const state = {
+    transcript,
+    currentPath: currentNodeId ? voiceNodePath(nodes, currentNodeId) : "Inicio",
+    lastEditedPath: lastEditedNodeId ? voiceNodePath(nodes, lastEditedNodeId) : null,
   }
-  return selected
+  const nodeCriteria = (group: VoiceTreeNode[]) => Object.fromEntries(group.map((node, index) => [
+    `n${index}`, voiceNodePath(nodes, node.id).slice(-120),
+  ]))
+  if (nodes.length <= MAX_OPTIONS) {
+    const questions: Record<string, ChoiceQuestion> = {
+      destination: {
+        type: "choice",
+        instructions: "Decide en una sola elección qué acción pide la frase en español. Para navegar, elige el nodo más específico que coincida semánticamente; no exige repetir su nombre exacto.",
+        criteria: { ...commandCriteria(lastEditedNodeId), ...nodeCriteria(nodes) },
+      },
+    }
+    const answers = await evaluate(state, questions)
+    return candidatesFromAnswer(answers.destination ?? {}, nodes, lastEditedNodeId)
+  }
+  const groups: VoiceTreeNode[][] = []
+  for (let index = 0; index < nodes.length; index += MAX_OPTIONS) groups.push(nodes.slice(index, index + MAX_OPTIONS))
+  const groupCriteria = commandCriteria(lastEditedNodeId)
+  const questions: Record<string, ChoiceQuestion> = {}
+  groups.forEach((group, index) => {
+    groupCriteria[`g${index}`] = group.map((node) => voiceNodePath(nodes, node.id).slice(-60)).join("; ")
+    questions[`nodes${index}`] = {
+      type: "choice",
+      instructions: "Si la frase pide navegar a un nodo de este grupo, elige el más específico. Si no está aquí, elige none.",
+      criteria: { none: "El destino no está en este grupo.", ...nodeCriteria(group) },
+    }
+  })
+  questions.group = {
+    type: "choice",
+    instructions: "Decide si la frase pide ver temas, editar, ir a la última edición o navegar a uno de los grupos de nodos. Elige none si no pide ninguna acción.",
+    criteria: groupCriteria,
+  }
+  const answers = await evaluate(state, questions)
+  const groupAnswer = answers.group ?? {}
+  if (groupAnswer.choice === "topics" || groupAnswer.choice === "edit" || groupAnswer.choice === "latest" || groupAnswer.choice === "none") {
+    return candidatesFromAnswer(groupAnswer, [], lastEditedNodeId)
+  }
+  const groupIndex = typeof groupAnswer.choice === "string" && /^g\d+$/.test(groupAnswer.choice)
+    ? Number(groupAnswer.choice.slice(1)) : -1
+  if (!groups[groupIndex]) return { action: "none" }
+  const destination = candidatesFromAnswer(answers[`nodes${groupIndex}`] ?? {}, groups[groupIndex], null)
+  const probabilities = groupAnswer.probabilities && typeof groupAnswer.probabilities === "object"
+    ? groupAnswer.probabilities as Record<string, unknown> : {}
+  const probability = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 0
+  const selectedProbability = probability(probabilities[`g${groupIndex}`])
+  const runnerUp = Math.max(0, ...Object.entries(probabilities)
+    .filter(([key]) => key !== `g${groupIndex}`)
+    .map(([, value]) => probability(value)))
+  if (selectedProbability < 0.55 || selectedProbability - runnerUp < 0.12) {
+    return destination.action === "navigate" ? { action: "suggest", nodeIds: [destination.nodeId] } : destination
+  }
+  return destination
 }

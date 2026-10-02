@@ -65,13 +65,15 @@ export function useSynthesisSpeech(active: boolean, onPhrase: (phrase: string) =
     recognition.maxAlternatives = 1
     recognition.onstart = () => setStatus("listening")
     recognition.onresult = (event) => {
+      const finalParts: string[] = []
       for (let index = event.resultIndex; index < event.results.length; index++) {
         const result = event.results[index]
         if (!result?.isFinal || processed.has(index)) continue
         processed.add(index)
         const phrase = result[0]?.transcript?.trim()
-        if (phrase) onPhraseRef.current(phrase)
+        if (phrase) finalParts.push(phrase)
       }
+      if (finalParts.length) onPhraseRef.current(finalParts.join(" "))
     }
     recognition.onerror = (event) => {
       if (event.error === "no-speech" || event.error === "aborted") return

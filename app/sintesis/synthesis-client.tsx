@@ -28,7 +28,7 @@ import {
 } from "@/lib/synthesis-workspace"
 import { exportSynthesisEditorSvg } from "@/lib/client/synthesis-svg"
 import { useSynthesisSpeech } from "@/lib/client/synthesis-speech"
-import { classifySynthesisVoiceCommand, voiceNodePath, type VoiceDestination } from "@/lib/synthesis-voice-navigation"
+import { voiceNodePath, type VoiceDestination } from "@/lib/synthesis-voice-navigation"
 import styles from "./sintesis.module.css"
 
 const SimpleEditor = dynamic(
@@ -339,16 +339,6 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const sequence = voiceSequenceRef.current
     voiceRequestRef.current?.abort()
     voiceRequestRef.current = null
-    const command = classifySynthesisVoiceCommand(phrase)
-    if (command === "topics") { setSuggestedNodeIds([]); setTopicsOpen(true); return }
-    if (command === "latest_edit") {
-      const nodeId = workspaceRef.current.lastEditedNodeId
-      if (nodeId && nodes.some((node) => node.id === nodeId)) navigateToNode(nodeId)
-      else console.info("[Síntesis voz] Todavía no hay un nodo editado en esta Síntesis.")
-      return
-    }
-    if (command === "edit") { setTopicsOpen(false); openEditor(currentParentId); return }
-    if (!nodes.length) { console.info("[Síntesis voz] Esta Síntesis todavía no tiene temas."); return }
     const controller = new AbortController()
     voiceRequestRef.current = controller
     try {
@@ -360,19 +350,23 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
           weekNumber: context.weekNumber,
           transcript: phrase,
           currentNodeId: currentParentId,
+          lastEditedNodeId: workspaceRef.current.lastEditedNodeId,
           nodes: nodes.map((node) => ({ id: node.id, parentId: node.parentId, name: node.name.slice(0, 300) })),
         }),
         signal: controller.signal,
       })
       const result = await response.json() as VoiceDestination & { error?: string; upstreamStatus?: number }
-      if (!response.ok) throw new Error(`${result.error || "No se pudo interpretar el comando."} HTTP ${response.status}${
-        result.upstreamStatus ? `, AI Gateway HTTP ${result.upstreamStatus}` : ""
-      }`)
+      if (!response.ok) {
+        throw new Error(`${result.error || "No se pudo interpretar el comando."} HTTP ${response.status}${
+          result.upstreamStatus ? `, AI Gateway HTTP ${result.upstreamStatus}` : ""
+        }`)
+      }
       if (sequence !== voiceSequenceRef.current || editorOpenRef.current) return
       if (result.action === "navigate" && nodes.some((node) => node.id === result.nodeId)) navigateToNode(result.nodeId)
-      else {
-        setSuggestedNodeIds(result.action === "suggest" && Array.isArray(result.nodeIds)
-          ? result.nodeIds.filter((id) => typeof id === "string" && nodes.some((node) => node.id === id)) : [])
+      else if (result.action === "topics") { setSuggestedNodeIds([]); setTopicsOpen(true) }
+      else if (result.action === "edit") { setTopicsOpen(false); openEditor(currentParentId) }
+      else if (result.action === "suggest" && Array.isArray(result.nodeIds)) {
+        setSuggestedNodeIds(result.nodeIds.filter((id) => typeof id === "string" && nodes.some((node) => node.id === id)))
         setTopicsOpen(true)
       }
     } catch (error) {
