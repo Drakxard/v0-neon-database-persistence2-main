@@ -1700,6 +1700,7 @@
     let exportDocument;
     let canvas;
     try {
+      const { buildRasterSvg, canvasSvgImage, SVG_RENDER_SCALE } = await import("./raster-svg.mjs");
       const bytes = await source.saveDocument();
       const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(bytes) });
       exportDocument = await loadingTask.promise;
@@ -1707,29 +1708,21 @@
       const context = canvas.getContext("2d", { alpha: false });
       if (!context) throw new Error("El navegador no pudo crear el lienzo de exportacion.");
       const pages = [];
-      let totalHeight = 0;
-      let maxWidth = 0;
-      const gap = 16;
       for (let pageNumber = 1; pageNumber <= exportDocument.numPages; pageNumber += 1) {
         updateBusy(`Renderizando pagina ${pageNumber} de ${exportDocument.numPages}...`);
         const page = await exportDocument.getPage(pageNumber);
-        const viewport = page.getViewport({ scale: 2, rotation: (page.rotate + rotation) % 360 });
-        const width = viewport.width / 2;
-        const height = viewport.height / 2;
+        const viewport = page.getViewport({ scale: SVG_RENDER_SCALE, rotation: (page.rotate + rotation) % 360 });
+        const width = viewport.width / SVG_RENDER_SCALE;
+        const height = viewport.height / SVG_RENDER_SCALE;
         canvas.width = Math.ceil(viewport.width);
         canvas.height = Math.ceil(viewport.height);
         context.fillStyle = "#ffffff";
         context.fillRect(0, 0, canvas.width, canvas.height);
         await page.render({ canvasContext: context, viewport, background: "#ffffff" }).promise;
-        pages.push({ width, height, y: totalHeight, image: canvas.toDataURL("image/jpeg", 0.92) });
-        maxWidth = Math.max(maxWidth, width);
-        totalHeight += height + (pageNumber < exportDocument.numPages ? gap : 0);
+        pages.push({ width, height, image: canvasSvgImage(canvas) });
         page.cleanup?.();
       }
-      const images = pages.map(({ width, height, y, image }) =>
-        `<image x="${(maxWidth - width) / 2}" y="${y}" width="${width}" height="${height}" href="${image}"/>`
-      ).join("");
-      const markup = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${maxWidth}" height="${totalHeight}" viewBox="0 0 ${maxWidth} ${totalHeight}"><rect width="100%" height="100%" fill="white"/>${images}</svg>`;
+      const markup = buildRasterSvg(pages);
       downloadBlob(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `${sourceName}-paginas.svg`);
       showToast("SVG descargado.", "success", 2800);
     } catch (error) {

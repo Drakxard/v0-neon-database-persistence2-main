@@ -1,9 +1,10 @@
 // A standalone SVG cannot resolve the editor's external web fonts. Collect
 // only families used by exported text, including fonts in @import sheets.
-export async function embedSvgFonts(svg: Element): Promise<void> {
+export async function embedSvgFonts(svg: Element, usedFamilies?: string[]): Promise<void> {
   const familyName = (value: string) => value.trim().replace(/^['"]|['"]$/g, "").toLowerCase()
-  const families = new Set(Array.from(svg.querySelectorAll("text"))
-    .flatMap((text) => (text.getAttribute("font-family") ?? "").split(",").map(familyName)))
+  const families = new Set((usedFamilies ?? Array.from(svg.querySelectorAll("text"),
+    (text) => text.getAttribute("font-family") ?? ""))
+    .flatMap((family) => family.split(",").map(familyName)))
   const visited = new Set<CSSStyleSheet>()
   const fonts: CSSFontFaceRule[] = []
   const bases = new Map<CSSFontFaceRule, string>()

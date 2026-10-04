@@ -57,6 +57,8 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const folderBaseRef = useRef<string | null>(null)
   const preservedEmergencyRef = useRef(false)
   const [message, setMessage] = useState("")
+  const [exportingSvg, setExportingSvg] = useState(false)
+  const exportingSvgRef = useRef(false)
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
@@ -410,10 +412,24 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     return () => window.removeEventListener("keydown", keydown)
   }, [acceptWorkspace, autosave, currentParentId, editorSession, goHome, nodes, loadState, topicsOpen])
 
+  const downloadSvg = async () => {
+    if (exportingSvgRef.current) return
+    exportingSvgRef.current = true
+    setExportingSvg(true)
+    try {
+      await exportSynthesisEditorSvg()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo exportar el SVG de Síntesis.")
+    } finally {
+      exportingSvgRef.current = false
+      setExportingSvg(false)
+    }
+  }
+
   if (editorSession) return <main className={styles.editorOnly}>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
-      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void exportSynthesisEditorSvg().catch((error) => console.error("No se pudo exportar el SVG de Síntesis.", error)) }} aria-label="Exportar página como SVG" title="Exportar página como SVG"><Download aria-hidden="true" /></button>}
+      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void downloadSvg() }} disabled={exportingSvg} aria-busy={exportingSvg} aria-label={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"} title={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"}><Download aria-hidden="true" /></button>}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
         void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))
       }} />
