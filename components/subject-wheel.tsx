@@ -1,13 +1,12 @@
 "use client"
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react"
-import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Palette, Pin, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus, QrCode } from "lucide-react"
-import QRCode from "qrcode"
-import { useTheme } from "next-themes"
+import { ArrowDown, ArrowUp, BarChart3, CalendarDays, ChevronLeft, ChevronRight, RotateCcw, Check, Copy, Eye, FilePenLine, Loader2, Pin, Sparkles, GraduationCap, Pencil, X, Link2, Mic, Pause, Play, Square, Plus } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { AdminAccessModal } from "@/components/admin-access-modal"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { MaterialTagBar } from "@/components/material-tag-bar"
+import { SubjectVoiceDialog, VoiceModeButton } from "@/components/subject-voice-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -76,7 +75,6 @@ import { getSynthesisCountdown } from "@/lib/synthesis-schedule"
 import { buildSynthesisReturnTokenStorageKey } from "@/lib/synthesis-context"
 import { readMaterialSynthesis, writeMaterialSynthesis } from "@/lib/client/synthesis-materials"
 import { hasSynthesisMaterialDevelopment, removeSynthesisMaterial, renameSynthesisMaterial } from "@/lib/synthesis-material-links"
-import { APP_THEMES, isAppTheme } from "@/lib/theme-options"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import type {
   GroqModelOption,
@@ -134,15 +132,6 @@ type WorkspaceTabsState = {
 type DeleteConfirmationTarget =
   | { type: "tab"; id: string; label: string }
   | { type: "subject"; id: string; label: string }
-
-const NIGHT_SUBJECT_COLORS: Record<string, string> = {
-  algebra: "#366476",
-  calculo2: "#3f5f94",
-  calculo3: "#8b6138",
-  fisica: "#8f434a",
-  logica: "#3c6953",
-  probabilidad: "#69598b",
-}
 
 const LOCAL_STORAGE_MODE = isLocalStorageMode()
 const MAIN_WORKSPACE_TAB_ID = "main"
@@ -1300,9 +1289,8 @@ export function SubjectWheel({
   const [isPreparingPermanentDelete, setIsPreparingPermanentDelete] = useState(false)
   const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false)
   const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
-  const [subjectExportQr, setSubjectExportQr] = useState("")
-  const [subjectExportTabName, setSubjectExportTabName] = useState("")
-  const [isExportingSubjects, setIsExportingSubjects] = useState(false)
+  const [isVoiceModeEnabled, setIsVoiceModeEnabled] = useState(false)
+  const [voiceSubject, setVoiceSubject] = useState<Subject | null>(null)
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const hasUserChangedWorkspaceStateRef = useRef(false)
@@ -1350,40 +1338,11 @@ export function SubjectWheel({
       .then(() => processLocalWidgetTargetSyncQueue())
   }, [customSubjects, localWorkspaceReady])
 
-  const exportActiveWorkspaceTab = useCallback(async () => {
-    if (visibleSubjects.length === 0 || isExportingSubjects) return
-    setIsExportingSubjects(true)
-    try {
-      const response = await fetch("/api/inscreen/provider/subject-export/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tabName: activeWorkspaceTab.name,
-          subjects: visibleSubjects.map(({ id, name, color }) => ({ id, name, color })),
-        }),
-      })
-      const payload = await response.json().catch(() => null) as { exportUri?: string; expiresAt?: string; error?: string } | null
-      if (!response.ok || !payload?.exportUri) throw new Error(payload?.error || "No se pudo crear el QR de exportacion.")
-      setSubjectExportTabName(activeWorkspaceTab.name)
-      setSubjectExportQr(await QRCode.toDataURL(payload.exportUri, { width: 480, margin: 2, errorCorrectionLevel: "M" }))
-    } catch (error) {
-      setWorkspaceNoticeMessage(error instanceof Error ? error.message : "No se pudo crear el QR de exportacion.")
-    } finally {
-      setIsExportingSubjects(false)
-    }
-  }, [activeWorkspaceTab.name, isExportingSubjects, visibleSubjects])
   const synthesisSubjects = useMemo(() => getSynthesisSubjects(visibleSubjects), [visibleSubjects])
   const [activeSubjects, setActiveSubjects] = useState<Subject[]>(() => getDisplaySubjectsForDate(parseDateKey(getTodayDateString()), false, visibleSubjects))
   const [completedSubjects, setCompletedSubjects] = useState<Subject[]>([])
   const [history, setHistory] = useState<SubjectHistoryState[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
-  const { theme, setTheme } = useTheme()
-  const [themeMenuMounted, setThemeMenuMounted] = useState(false)
-
-  useEffect(() => {
-    setThemeMenuMounted(true)
-  }, [])
-
   useEffect(() => {
     const hasActiveTab = workspaceTabList.some((tab) => tab.id === activeWorkspaceTabId)
     if (!hasActiveTab) {
@@ -2034,13 +1993,9 @@ export function SubjectWheel({
   const [isExampleModalOpen, setIsExampleModalOpen] = useState(false)
   const [exampleLinkDraft, setExampleLinkDraft] = useState("")
   const [exampleImageFile, setExampleImageFile] = useState<File | null>(null)
-  const currentAppTheme = themeMenuMounted && isAppTheme(theme) ? theme : "daylight"
-  const getSubjectVisualColor = useCallback(
-    (subject: Subject) => (currentAppTheme === "night" ? NIGHT_SUBJECT_COLORS[subject.id] ?? subject.color : subject.color),
-    [currentAppTheme]
-  )
-  const wheelStrokeColor = currentAppTheme === "night" ? "#d8dfeb" : "white"
-  const wheelTextColor = currentAppTheme === "night" ? "#f2f5fb" : "white"
+  const getSubjectVisualColor = useCallback((subject: Subject) => subject.color, [])
+  const wheelStrokeColor = "white"
+  const wheelTextColor = "white"
   const [exampleError, setExampleError] = useState("")
   const [stackedDayViewReturnState, setStackedDayViewReturnState] = useState<StackedDayViewReturnState | null>(null)
   const [isReviewOpen, setIsReviewOpen] = useState(false)
@@ -3347,6 +3302,10 @@ export function SubjectWheel({
   }
 
   const handleSubjectClick = async (subject: Subject) => {
+    if (isVoiceModeEnabled) {
+      setVoiceSubject(subject)
+      return
+    }
     let weekNumbers: number[] = []
     try {
       weekNumbers = await withTimeout(
@@ -7221,9 +7180,8 @@ export function SubjectWheel({
   }
 
   const renderSynthesisOverview = () => {
-    const isNightTheme = currentAppTheme === "night"
-    const cardBorderColor = isNightTheme ? "rgba(248, 250, 252, 0.85)" : "rgba(0, 0, 0, 0.85)"
-    const cardTextColor = isNightTheme ? "#f8fafc" : "#000000"
+    const cardBorderColor = "rgba(0, 0, 0, 0.85)"
+    const cardTextColor = "#000000"
     const cornerStyles = [
       {
         shape: "left-0 top-0 -translate-x-1/2 -translate-y-1/2",
@@ -7471,6 +7429,15 @@ export function SubjectWheel({
                   </button>
                 )
               })}
+              <button
+                type="button"
+                className="flex min-h-8 w-14 shrink-0 items-center justify-center rounded-full border border-dashed border-border bg-background/70 px-3 py-1.5 text-foreground transition-colors hover:bg-background/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                aria-label="Nueva pestaña"
+                title="Nueva pestaña"
+                onClick={() => setIsCreateWorkspaceTabOpen(true)}
+              >
+                <Plus className="h-4 w-4" />
+              </button>
             </div>
             <div className="pointer-events-none flex min-h-4 items-center gap-1.5 px-1 text-[0.7rem] text-muted-foreground sm:min-h-5 sm:text-xs">
               {combinedSaveStatus === "saving" && (
@@ -7491,84 +7458,20 @@ export function SubjectWheel({
             </div>
           </div>
 
-          <div className="pointer-events-auto flex min-w-0 items-center justify-end gap-1.5 overflow-x-auto pb-1 sm:gap-2 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Exportar materias"
-                title="Exportar materias de la pestaña al APK"
-                onClick={() => void exportActiveWorkspaceTab()}
-                disabled={isExportingSubjects || visibleSubjects.length === 0}
-              >
-                {isExportingSubjects ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                    aria-label="Cambiar tema"
-                    title="Cambiar tema"
-                  >
-                    <Palette className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" sideOffset={10} className="w-64 rounded-2xl border-border bg-popover">
-                  <DropdownMenuLabel>Tema</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {APP_THEMES.map((themeOption) => {
-                    const isActive = themeOption.id === currentAppTheme
-
-                    return (
-                      <DropdownMenuItem
-                        key={themeOption.id}
-                        onClick={() => setTheme(themeOption.id)}
-                        className="flex items-center gap-3 rounded-xl px-3 py-3"
-                      >
-                        <span className={`h-8 w-8 shrink-0 rounded-full border border-white/40 bg-gradient-to-br ${themeOption.swatchClassName}`} />
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium">{themeOption.label}</span>
-                          <span className="block text-xs text-muted-foreground">{themeOption.description}</span>
-                        </span>
-                        <span className={`h-2.5 w-2.5 rounded-full transition ${isActive ? "bg-primary" : "bg-transparent"}`} />
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-10 w-10 shrink-0 rounded-full border-border bg-background/70 sm:h-11 sm:w-11"
-                aria-label="Nueva pestaña"
-                title="Nueva pestaña"
-                onClick={() => setIsCreateWorkspaceTabOpen(true)}
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+          <div className="pointer-events-auto shrink-0">
+            <VoiceModeButton
+              active={isVoiceModeEnabled}
+              label={isVoiceModeEnabled ? "Desactivar modo de voz" : "Activar modo de voz"}
+              onClick={() => setIsVoiceModeEnabled((enabled) => !enabled)}
+            />
           </div>
         </div>
       </header>
 
-      <Dialog open={Boolean(subjectExportQr)} onOpenChange={(open) => { if (!open) setSubjectExportQr("") }}>
-        <DialogContent className="max-w-sm rounded-3xl border-border bg-card">
-          <DialogHeader>
-            <DialogTitle>Exportar materias</DialogTitle>
-            <DialogDescription>
-              Escaneá este QR desde InScreen Android para importar las materias de “{subjectExportTabName}”. El QR es temporal y de un solo uso.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-center rounded-2xl bg-white p-4">
-            <img src={subjectExportQr} alt="QR para exportar materias al APK" className="h-64 w-64" />
-          </div>
-          <DialogFooter>
-            <DialogClose asChild><Button variant="outline">Cerrar</Button></DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
+      <SubjectVoiceDialog
+        subject={voiceSubject ? { id: voiceSubject.id, name: getSubjectDisplayName(voiceSubject) } : null}
+        onClose={() => setVoiceSubject(null)}
+      />
       {/* Main Content */}
       <main className="absolute inset-0 overflow-y-auto px-4 py-12 sm:px-6">
         <div className="flex min-h-[calc(100dvh-6rem)] items-center justify-center">
