@@ -60,14 +60,23 @@ export function SubjectVoiceDialog({ subject, onClose }: {
     <Dialog open={Boolean(subject)} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent
         showCloseButton={false}
-        onEscapeKeyDown={(event) => { if (imagesRef.current?.escape()) event.preventDefault() }}
+        onEscapeKeyDown={(event) => {
+          if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing || imagesRef.current?.escape()) event.preventDefault()
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Backspace" || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return
+          const target = event.target as HTMLElement
+          if (target.closest("input, textarea, select, [contenteditable]") && !(target instanceof HTMLInputElement && target.hasAttribute("data-voice-search") && target.value === "")) return
+          event.preventDefault()
+          if (!imagesRef.current?.escape()) onClose()
+        }}
         className="subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-5 text-black shadow-none sm:max-w-none sm:p-8"
       >
         <div className="flex shrink-0 items-start justify-between gap-5">
           <DialogTitle className="pt-1 text-2xl leading-tight font-normal sm:text-[32px]">
             {subject?.name}
           </DialogTitle>
-          <div className="flex shrink-0 items-center gap-3"><button type="button" aria-label="Cerrar materia" onClick={onClose} className="rounded px-2 py-1 text-2xl focus-visible:outline-2">×</button><VoiceModeButton
+          <VoiceModeButton
             active={!paused && voice.status !== "error"}
             label={voice.status === "error" ? "Reintentar micrófono" : paused ? "Activar micrófono" : "Pausar micrófono"}
             onClick={() => {
@@ -76,10 +85,10 @@ export function SubjectVoiceDialog({ subject, onClose }: {
               } else setPaused((value) => !value)
               setAttempt((value) => value + 1)
             }}
-          /></div>
+          />
         </div>
         <DialogDescription className="sr-only">
-          Dictado para {subject?.name}. Presioná Escape para cerrar.
+          Dictado para {subject?.name}. Escribí para buscar imágenes. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
         </DialogDescription>
         {subject && <SubjectVoiceImages key={subject.id} subjectId={subject.id} ref={imagesRef} />}
         <div className="max-h-[20vh] shrink-0 overflow-y-auto" data-subject-voice-canvas>

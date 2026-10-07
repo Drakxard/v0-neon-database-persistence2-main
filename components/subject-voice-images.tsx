@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useImperativeHandle, useRef, useState, type DragEvent, type Ref } from "react"
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type Ref } from "react"
 import { HandDrawnBubble } from "@/components/hand-drawn-bubble"
-import { loadVoiceImageGroups, readVoiceImage, saveVoiceImages, validateVoiceImageFiles, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
+import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, saveVoiceImages, validateVoiceImageFiles, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
+import { searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
 
 export type VoiceImagesHandle = { escape: () => boolean }
 type Target = { groupId: string } | { name: string; color: string }
@@ -13,6 +14,8 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   const [workspace, setWorkspace] = useState<VoiceImageWorkspace | null>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [pending, setPending] = useState<File[] | null>(null)
+  const [selection, setSelection] = useState<{ images: VoiceImage[]; destinationId: string } | null>(null)
+  const [query, setQuery] = useState("")
   const [name, setName] = useState("")
   const [color, setColor] = useState<string>(VOICE_IMAGE_COLORS[0])
   const [busy, setBusy] = useState(false)
@@ -22,9 +25,30 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   const [dragging, setDragging] = useState(false)
   const input = useRef<HTMLInputElement>(null)
   const inputTarget = useRef<string | null>(null)
+  const searchInput = useRef<HTMLInputElement>(null)
+  const canvas = useRef<HTMLDivElement>(null)
   const locked = useRef(false)
   const mounted = useRef(true)
   const group = workspace?.groups.find((item) => item.id === groupId)
+  const searching = Boolean(query.trim())
+  const matches = useMemo(() => searchVoiceImages(workspace?.groups ?? [], query), [workspace, query])
+  const formOpen = pending !== null || selection !== null
+
+  function focusCanvas() { canvas.current?.focus() }
+  function cancelForm() { setPending(null); setSelection(null); setRetry(null); setError(""); focusCanvas() }
+
+  useEffect(() => {
+    const capture = (event: KeyboardEvent) => {
+      if (!workspace || formOpen || viewer || locked.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.key.length !== 1) return
+      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return
+      if (event.key === " " && event.target instanceof Element && event.target.closest("button")) return
+      event.preventDefault()
+      setQuery((previous) => previous + event.key)
+      searchInput.current?.focus()
+    }
+    window.addEventListener("keydown", capture)
+    return () => window.removeEventListener("keydown", capture)
+  }, [workspace, formOpen, viewer])
 
   async function refresh() {
     setError("")
@@ -43,11 +67,13 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   useEffect(() => () => { if (viewer) URL.revokeObjectURL(viewer.url) }, [viewer])
 
   useImperativeHandle(ref, () => ({ escape: () => {
-    if (busy) return true
-    if (viewer) { setViewer(null); return true }
-    if (pending) { setPending(null); setRetry(null); setError(""); return true }
+    if (locked.current) return true
+    if (viewer) { setViewer(null); focusCanvas(); return true }
+    if (formOpen) { cancelForm(); return true }
+    if (query.length) { setQuery(""); focusCanvas(); return true }
+    if (groupId) { setGroupId(null); focusCanvas(); return true }
     return false
-  } }), [busy, viewer, pending])
+  } }), [viewer, formOpen, query, groupId])
 
   function message(failure: unknown) { return failure instanceof Error ? failure.message : "No se pudo completar la operación." }
 
@@ -57,7 +83,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
       const result = await saveVoiceImages(subjectId, files, target)
       if (!mounted.current) return
       setWorkspace(result.workspace)
-      if (result.workspace.groups.some((item) => item.id === result.groupId) && "name" in target) setGroupId(null)
+      if (result.workspace.groups.some((item) => item.id === result.groupId) && "name" in target) { setGroupId(null); setQuery("") }
       setPending(null)
       setError([...notices, ...result.errors].join("\n"))
       if (result.failed.length) setRetry({ files: result.failed, target: result.workspace.groups.some((item) => item.id === result.groupId) ? { groupId: result.groupId } : target })
@@ -69,7 +95,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   }
 
   async function receive(files: File[], targetGroup: string | null) {
-    if (locked.current || !workspace || pending || viewer) return
+    if (locked.current || !workspace || formOpen || viewer) return
     locked.current = true
     setBusy(true)
     setError("")
@@ -97,6 +123,34 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     input.current?.click()
   }
 
+  function newGroup() {
+    if (locked.current || formOpen || viewer) return
+    if (!searching) { choose(null); return }
+    if (!matches.length) return
+    setSelection({ images: matches.map((match) => match.image), destinationId: crypto.randomUUID() })
+    setName(query.trim())
+    setColor(VOICE_IMAGE_COLORS[0])
+    setRetry(null)
+    setError("")
+  }
+
+  async function runRegroup() {
+    if (!selection || !name.trim() || locked.current) return
+    locked.current = true
+    setBusy(true)
+    setError("")
+    try {
+      const next = await regroupVoiceImages(subjectId, selection.images.map((image) => image.id), { id: selection.destinationId, name, color })
+      if (!mounted.current) return
+      setWorkspace(next)
+      setSelection(null)
+      setQuery("")
+      setGroupId(null)
+      focusCanvas()
+    } catch (failure) { if (mounted.current) setError(message(failure)) }
+    finally { locked.current = false; if (mounted.current) setBusy(false) }
+  }
+
   async function runSave(files: File[], target: Target, notices: string[] = []) {
     if (locked.current) return
     locked.current = true
@@ -114,13 +168,13 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     setError("")
     try {
       const file = await readVoiceImage(subjectId, image)
-      if (mounted.current) setViewer({ image, url: URL.createObjectURL(file) })
+      if (mounted.current) { setViewer({ image, url: URL.createObjectURL(file) }); focusCanvas() }
     } catch (failure) { if (mounted.current) setError(`No se pudo abrir ${image.name}: ${message(failure)}`) }
     finally { locked.current = false; if (mounted.current) setBusy(false) }
   }
 
-  return <div className={`relative flex min-h-0 flex-1 flex-col ${dragging ? "bg-green-50" : ""}`}
-    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = busy || pending || viewer ? "none" : "copy" }}
+  return <div ref={canvas} tabIndex={-1} className={`relative flex min-h-0 flex-1 flex-col outline-none ${dragging ? "bg-green-50" : ""}`}
+    onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = busy || formOpen || viewer ? "none" : "copy" }}
     onDragEnter={(event) => { if (event.dataTransfer.types.includes("Files")) setDragging(true) }}
     onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false) }}
     onDrop={(event) => drop(event, null)} data-subject-voice-images>
@@ -129,9 +183,9 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
     {!workspace && <div className="flex flex-1 items-center justify-center text-xl">{error ? "No se pudieron cargar los conjuntos." : "Cargando conjuntos…"}</div>}
 
-    {workspace && pending && <form className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-5 overflow-y-auto py-8" aria-label="Crear conjunto"
-      onSubmit={(event) => { event.preventDefault(); if (name.trim()) void runSave(pending, { name, color }, retry ? [] : error ? [error] : []) }}>
-      <p className="text-2xl">Nombre para el conjunto de {pending.length} imágenes</p>
+    {workspace && formOpen && <form className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-5 overflow-y-auto py-8" aria-label="Crear conjunto"
+      onSubmit={(event) => { event.preventDefault(); if (selection) void runRegroup(); else if (pending && name.trim()) void runSave(pending, { name, color }, retry ? [] : error ? [error] : []) }}>
+      <p className="text-2xl">Nombre para el conjunto de {selection?.images.length ?? pending?.length} imágenes</p>
       <label className="flex flex-col gap-2">Nombre del conjunto
         <input autoFocus required value={name} disabled={busy} onChange={(event) => setName(event.target.value)} className="rounded-lg border border-neutral-400 px-4 py-3 text-xl" />
       </label>
@@ -143,44 +197,45 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
         </label>)}</div>
       </fieldset>
       <div className="flex gap-3"><button type="submit" className={control} disabled={busy || !name.trim()}>Crear conjunto</button>
-        <button type="button" className={control} disabled={busy} onClick={() => { setPending(null); setRetry(null); setError("") }}>Cancelar</button></div>
+        <button type="button" className={control} disabled={busy} onClick={cancelForm}>Cancelar</button></div>
     </form>}
 
-    {workspace && !pending && viewer && <div className="flex min-h-0 flex-1 flex-col gap-4 py-4">
-      <div className="flex flex-wrap items-center gap-3"><button autoFocus className={control} onClick={() => setViewer(null)}>Volver al conjunto</button>
-        <button className={control} onClick={() => { setViewer(null); setGroupId(null) }}>Ver conjuntos</button><span className="break-all">{viewer.image.name}</span></div>
+    {workspace && !formOpen && viewer && <div className="flex min-h-0 flex-1 flex-col py-4">
       {/* Original local image; next/image cannot optimize object URLs. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={viewer.url} alt={viewer.image.name} className="min-h-0 w-full flex-1 object-contain" onError={() => { setError(`No se pudo mostrar ${viewer.image.name}. Volvé al conjunto e intentá abrirla otra vez.`) }} />
     </div>}
 
-    {workspace && !pending && !viewer && <>
-      {workspace.groups.length === 0 ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
+    {workspace && !formOpen && !viewer && <>
+      {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
-        {group && <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
-          <button className={control} disabled={busy} onClick={() => setGroupId(null)}>Volver a conjuntos</button>
-          <HandDrawnBubble seed={group.id} color={group.color} className="min-h-24 max-w-64 text-xl" disabled={busy} onClick={() => choose(group.id)} onDrop={(event) => drop(event, group.id)} aria-label={`Agregar imágenes a ${group.name}`}>{group.name}</HandDrawnBubble>
-          <button className={control} disabled={busy} onClick={() => choose(group.id)}>Agregar imágenes</button>
-        </div>}
-        <div className={group || workspace.groups.length > 1 ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex h-full min-h-40 items-center justify-center"}>
-          {group ? group.images.map((image) => <HandDrawnBubble key={image.id} seed={image.id} color={group.color} disabled={busy} onClick={() => void openImage(image)}>{image.name.replace(/\.[^.]+$/, "") || image.name}</HandDrawnBubble>)
+        {searching && matches.length === 0 && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
+        <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
+          {searching ? matches.map(({ image, group: source }) => <HandDrawnBubble key={image.id} seed={image.id} color={source.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
+            : group ? group.images.map((image) => <HandDrawnBubble key={image.id} seed={image.id} color={group.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
             : workspace.groups.map((item) => <HandDrawnBubble key={item.id} seed={item.id} color={item.color} disabled={busy}
-              className={workspace.groups.length === 1 ? "h-full min-h-40 max-h-80 max-w-xl py-8" : "min-h-48"}
+              className="aspect-square min-h-0 max-w-full shrink-0 px-5 py-5"
+              style={{ width: voiceGroupDiameter(item.images.length), fontSize: Math.min(28, voiceGroupDiameter(item.images.length) / 8) }}
               onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${item.images.length} imágenes`}>
               <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{item.images.length}</span>
             </HandDrawnBubble>)}
         </div>
       </div>}
-      {workspace.groups.length > 0 && <div className="flex shrink-0 items-center justify-center gap-3 py-3 text-center text-sm sm:text-base">
-        <span>Soltá sobre un conjunto para agregar, o en blanco para crear otro.</span><button className={control} disabled={busy} onClick={() => choose(null)}>Nuevo conjunto</button>
-      </div>}
+      <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
+        <span aria-hidden="true" />
+        <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes" data-voice-search
+          autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
+        <button type="button" onClick={newGroup} disabled={busy || (searching && matches.length === 0)} aria-label="Nuevo conjunto" title="Nuevo conjunto"
+          className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
+      </div>
     </>}
     {busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
     {error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
       <p role="alert" className="whitespace-pre-wrap">{error}</p>
       {!workspace && <button className={control} onClick={() => void refresh()}>Reintentar carga</button>}
       {retry && <button className={control} disabled={busy} onClick={() => void runSave(retry.files, retry.target)}>Reintentar guardado</button>}
+      {selection && <button className={control} disabled={busy} onClick={() => void runRegroup()}>Reintentar guardado</button>}
     </div>}
   </div>
 }

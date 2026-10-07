@@ -46,8 +46,21 @@ nombres se repitan. Se requiere la carpeta local autorizada de la app. Cada
 escritura se verifica antes de actualizar el conteo; los errores permiten
 reintentar y los manifiestos ilegibles no se reemplazan por conjuntos vacíos.
 
-El dictado temporal aparece al pie. `Esc` cierra primero el visor o el formulario
-de creación; después cierra la materia y detiene el micrófono. El estilo usa
+El dictado temporal aparece al pie. Escribir desde los globos abre una búsqueda
+temporal de imágenes de toda la materia. Ignora mayúsculas y acentos, admite
+singular/plural y `teo` como abreviatura de `teorema`; con varias palabras exige
+todas las coincidencias. El campo sin borde al pie también permite buscar en
+móvil. El `+` naranja agrupa los resultados en un nuevo conjunto: conserva los
+IDs y archivos originales, actualiza los conteos y quita los conjuntos que
+queden vacíos. Sin búsqueda, el `+` abre el selector de nuevas imágenes.
+
+`Esc` y `Backspace` vuelven del visor a su vista anterior, del conjunto al inicio
+y del inicio salen de la materia y detienen el micrófono. Con búsqueda escrita,
+`Backspace` borra letras y `Esc` limpia la búsqueda; al abrir un resultado, volver
+conserva esa búsqueda. Los campos de creación conservan la edición normal y
+`Esc` cancela el formulario. Las escrituras pendientes impiden retroceder hasta
+terminar. No hay botones de regreso ni nombre visible del archivo en el visor.
+Los conjuntos usan tamaños según su cantidad de imágenes. El estilo usa
 Rough.js y Virgil alojada localmente, sin incorporar el editor de Excalidraw.
 
 ## Storage

@@ -86,9 +86,22 @@ export async function validateVoiceImageFiles(files: File[]) {
 
 const queues = new Map<string, Promise<unknown>>()
 
-export async function saveVoiceImages(subjectId: string, files: File[], target: { groupId: string } | { name: string; color: string }) {
+async function inQueue<T>(subjectId: string, action: () => Promise<T>): Promise<T> {
   const previous = queues.get(subjectId) ?? Promise.resolve()
-  const operation = previous.catch(() => {}).then(async () => {
+  const operation = previous.catch(() => {}).then(action)
+  queues.set(subjectId, operation)
+  try { return await operation }
+  finally { if (queues.get(subjectId) === operation) queues.delete(subjectId) }
+}
+
+async function commit(handle: FileSystemDirectoryHandle, workspace: VoiceImageWorkspace, original: VoiceImageWorkspace) {
+  validateWorkspace(workspace, workspace.subjectId)
+  await writeVerified(handle, manifestPath(workspace.subjectId).replace("workspace.json", "workspace.backup.json"), new Blob([JSON.stringify(original)]))
+  await writeVerified(handle, manifestPath(workspace.subjectId), new Blob([JSON.stringify(workspace)]))
+}
+
+export async function saveVoiceImages(subjectId: string, files: File[], target: { groupId: string } | { name: string; color: string }) {
+  return inQueue(subjectId, async () => {
     const handle = await root()
     const workspace = await load(handle, subjectId)
     const group = "groupId" in target ? workspace.groups.find((item) => item.id === target.groupId) : {
@@ -113,18 +126,37 @@ export async function saveVoiceImages(subjectId: string, files: File[], target: 
     }
     if (saved) {
       if (!("groupId" in target)) workspace.groups.push(group)
-      validateWorkspace(workspace, subjectId)
       // Keep the previous manifest before committing the new one.
       const original = await load(handle, subjectId)
-      await writeVerified(handle, manifestPath(subjectId).replace("workspace.json", "workspace.backup.json"), new Blob([JSON.stringify(original)]))
-      await writeVerified(handle, manifestPath(subjectId), new Blob([JSON.stringify(workspace)]))
-      await load(handle, subjectId)
+      await commit(handle, workspace, original)
     }
     return { workspace, groupId: group.id, failed, errors }
   })
-  queues.set(subjectId, operation)
-  try { return await operation }
-  finally { if (queues.get(subjectId) === operation) queues.delete(subjectId) }
+}
+
+export async function regroupVoiceImages(subjectId: string, imageIds: string[], destination: { id: string; name: string; color: string }) {
+  return inQueue(subjectId, async () => {
+    const handle = await root()
+    const workspace = await load(handle, subjectId)
+    const ids = new Set(imageIds)
+    if (!ids.size) throw new Error("No hay imágenes para agrupar.")
+    const existing = workspace.groups.find((group) => group.id === destination.id)
+    // A retry after a successful disk commit must not create another group or move its pairs twice.
+    if (existing) {
+      if (existing.name === destination.name.trim() && existing.color === destination.color && existing.images.length === ids.size && existing.images.every((image) => ids.has(image.id))) return workspace
+      throw new Error("El identificador del nuevo conjunto ya está en uso.")
+    }
+    const original = structuredClone(workspace)
+    const images = workspace.groups.flatMap((group) => group.images).filter((image) => ids.has(image.id))
+    if (images.length !== ids.size) throw new Error("Las imágenes cambiaron. Volvé a buscar antes de crear el conjunto.")
+    const groups = workspace.groups.flatMap((group) => {
+      const remaining = group.images.filter((image) => !ids.has(image.id))
+      return group.images.length > 0 && remaining.length === 0 ? [] : [{ ...group, images: remaining }]
+    })
+    const next: VoiceImageWorkspace = { ...workspace, groups: [...groups, { ...destination, name: destination.name.trim(), images }] }
+    await commit(handle, next, original)
+    return next
+  })
 }
 
 export async function readVoiceImage(subjectId: string, image: VoiceImage) {

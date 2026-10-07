@@ -15,7 +15,7 @@ export function HandDrawnBubble({ seed, color, className, children, ...props }: 
       let numericSeed = 1
       for (const character of seed) numericSeed = (numericSeed * 31 + character.charCodeAt(0)) >>> 0
       svg.setAttribute("viewBox", `0 0 ${width} ${height}`)
-      svg.replaceChildren(rough.svg(svg).ellipse(width / 2, height / 2, width - 12, height - 12, {
+      svg.replaceChildren(rough.svg(svg).ellipse(width / 2, height / 2, width - 20, height - 20, {
         seed: numericSeed || 1, fill: color, fillStyle: "solid", stroke: "#252525", strokeWidth: 2.5, roughness: 0.9,
       }))
     })
