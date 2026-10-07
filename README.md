@@ -30,6 +30,26 @@ El botón de micrófono de la esquina superior derecha activa el modo de voz. En
 
 En el servidor, configurar `cloudflareapi` con un token con permisos de Workers AI y `CLOUDFLARE_ACCOUNT_ID` con el identificador de la cuenta. `/api/subject-voice` informa si están configuradas esas variables sin exponer el token. El adaptador `lib/server/cloudflare-clef.ts` prepara llamadas a `@cf/cloudflare/clef-flash`; esta etapa no envía el dictado al modelo ni ejecuta acciones. Las preguntas, instrucciones y el flujo se definirán después. Clef Flash evalúa decisiones estructuradas; la transcripción se realiza mediante el reconocimiento de voz del navegador.
 
+### Conjuntos de imágenes en modo de voz
+
+Al abrir una materia con el modo de voz activo, el lienzo permite arrastrar o
+seleccionar imágenes. Soltar en blanco crea un conjunto con nombre y color;
+soltar sobre su globo agrega imágenes al conjunto. Cada globo muestra el nombre
+y la cantidad guardada. Al abrirlo aparecen los nombres de las imágenes sin
+su última extensión; pulsarlos abre el archivo original en un visor.
+
+Los conjuntos se guardan por materia, sin división semanal, en
+`manifests/subject-voice/{id-materia}/workspace.json`, con una copia anterior en
+`workspace.backup.json`. Las imágenes originales se conservan en
+`subject-voice/images/{id-materia}/`, con identificadores únicos aunque sus
+nombres se repitan. Se requiere la carpeta local autorizada de la app. Cada
+escritura se verifica antes de actualizar el conteo; los errores permiten
+reintentar y los manifiestos ilegibles no se reemplazan por conjuntos vacíos.
+
+El dictado temporal aparece al pie. `Esc` cierra primero el visor o el formulario
+de creación; después cierra la materia y detiene el micrófono. El estilo usa
+Rough.js y Virgil alojada localmente, sin incorporar el editor de Excalidraw.
+
 ## Storage
 
 Los PDF de materiales pueden replicarse en el Google Drive conectado desde el panel `|`. La copia semanal usa `Cursado2026/{materia}/Semana {n}/{contenedor}`; los contenedores fijados se guardan una sola vez en `Cursado2026/{materia}/Fijos/{contenedor}` y cada semana contiene un acceso directo a `Fijos`. La replica no reemplaza el workspace local. El refresh token se cifra en el servidor y se conserva como un sobre opaco dentro de `User.Services`.

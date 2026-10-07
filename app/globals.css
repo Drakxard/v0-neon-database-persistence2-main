@@ -1,6 +1,18 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+@font-face {
+  font-family: 'SubjectVoiceVirgil';
+  src: url('/fonts/virgil/Virgil.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+.subject-voice-handwriting {
+  font-family: 'SubjectVoiceVirgil', cursive;
+}
+
 :root,
 [data-theme='daylight'] {
   color-scheme: light;

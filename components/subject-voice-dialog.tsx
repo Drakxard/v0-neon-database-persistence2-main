@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Mic } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { useSubjectVoice } from "@/hooks/use-subject-voice"
 import { cn } from "@/lib/utils"
+import { SubjectVoiceImages, type VoiceImagesHandle } from "@/components/subject-voice-images"
 
 export function VoiceModeButton({ active, label, onClick }: {
   active: boolean
@@ -35,6 +36,7 @@ export function SubjectVoiceDialog({ subject, onClose }: {
   const [paused, setPaused] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [serviceError, setServiceError] = useState("")
+  const imagesRef = useRef<VoiceImagesHandle>(null)
   const voice = useSubjectVoice(subject?.id ?? null, !paused, attempt)
 
   useEffect(() => { setPaused(false) }, [subject?.id])
@@ -58,13 +60,14 @@ export function SubjectVoiceDialog({ subject, onClose }: {
     <Dialog open={Boolean(subject)} onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogContent
         showCloseButton={false}
-        className="inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-5 text-black shadow-none sm:max-w-none sm:p-8"
+        onEscapeKeyDown={(event) => { if (imagesRef.current?.escape()) event.preventDefault() }}
+        className="subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-5 text-black shadow-none sm:max-w-none sm:p-8"
       >
         <div className="flex shrink-0 items-start justify-between gap-5">
           <DialogTitle className="pt-1 text-2xl leading-tight font-normal sm:text-[32px]">
             {subject?.name}
           </DialogTitle>
-          <VoiceModeButton
+          <div className="flex shrink-0 items-center gap-3"><button type="button" aria-label="Cerrar materia" onClick={onClose} className="rounded px-2 py-1 text-2xl focus-visible:outline-2">×</button><VoiceModeButton
             active={!paused && voice.status !== "error"}
             label={voice.status === "error" ? "Reintentar micrófono" : paused ? "Activar micrófono" : "Pausar micrófono"}
             onClick={() => {
@@ -73,12 +76,13 @@ export function SubjectVoiceDialog({ subject, onClose }: {
               } else setPaused((value) => !value)
               setAttempt((value) => value + 1)
             }}
-          />
+          /></div>
         </div>
         <DialogDescription className="sr-only">
           Dictado para {subject?.name}. Presioná Escape para cerrar.
         </DialogDescription>
-        <div className="min-h-0 flex-1 overflow-y-auto pt-10 sm:pt-14" data-subject-voice-canvas>
+        {subject && <SubjectVoiceImages key={subject.id} subjectId={subject.id} ref={imagesRef} />}
+        <div className="max-h-[20vh] shrink-0 overflow-y-auto" data-subject-voice-canvas>
           {(voice.transcript || voice.interim) && (
             <p className="max-w-4xl text-lg leading-relaxed whitespace-pre-wrap sm:text-xl">
               {voice.transcript}{voice.transcript && voice.interim ? " " : ""}
