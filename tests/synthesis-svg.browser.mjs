@@ -114,6 +114,7 @@ test("exports complete editor appearance as standalone SVG using the PDF.js rast
     assert.equal(result.tiles.length, 2)
     assert.equal(result.tiles[1].y, result.tiles[0].height, "no gap or overlap between editor tiles")
     assert.ok(result.tiles.every((tile) => tile.jpeg && tile.pixelWidth === tile.width * 2 && tile.pixelHeight === tile.height * 2))
+    assert.ok(result.tiles.every((tile) => tile.pixelWidth * tile.pixelHeight <= 4 * 1024 * 1024), "wide editors must also respect the raster pixel budget")
     assert.equal(result.downloadedName, "sintesis.svg")
     assert.equal(result.downloadMatches, true)
 
@@ -336,8 +337,8 @@ test("cancelling while styles are copied stops export without downloading or cha
       try {
         await synthesisSvg.exportSynthesisEditorSvg({
           signal: controller.signal,
-          onProgress: ({ percent }) => {
-            if (percent >= 10 && percent < 60) setTimeout(() => controller.abort(), 0)
+          onProgress: ({ label }) => {
+            if (label === "Preparando contenido…") setTimeout(() => controller.abort(), 0)
           },
         })
         return { unexpectedSuccess: true }
@@ -348,5 +349,66 @@ test("cancelling while styles are copied stops export without downloading or cha
     assert.equal(result.error, "AbortError")
     assert.equal(result.downloads, 0)
     assert.equal(result.unchanged, true)
+  } finally { await browser.close() }
+})
+
+test("math-heavy documents rasterize only visible formulas and bounded surfaces in every strip", async () => {
+  const { browser, page } = await setup()
+  try {
+    const formula = katex.renderToString(String.raw`y(x)=e^{\alpha x}(c_1\cos\beta x+c_2\sin\beta x)`)
+    await page.route("https://katex.test/fonts/**", async (route) => {
+      const name = new URL(route.request().url()).pathname.split("/").at(-1)
+      await route.fulfill({ body: await readFile(`node_modules/katex/dist/fonts/${name}`), contentType: "font/woff2", headers: { "Access-Control-Allow-Origin": "*" } })
+    })
+    await page.setContent(`<!doctype html><base href="https://katex.test/"><style>body{margin:0}p{margin:0;height:300px;font:22px Arial}</style>
+      <div class="tiptap" style="width:360px">${`<p>${formula}</p>`.repeat(24)}</div>`)
+    await page.addStyleTag({ path: "node_modules/katex/dist/katex.min.css" })
+    const result = await page.evaluate(async () => {
+      const source = document.querySelector(".tiptap")
+      const before = source.outerHTML
+      const inputs = []
+      const decode = HTMLImageElement.prototype.decode
+      HTMLImageElement.prototype.decode = function () {
+        if (this.src.startsWith("data:image/svg+xml")) {
+          const xml = new DOMParser().parseFromString(decodeURIComponent(this.src.split(",").slice(1).join(",")), "image/svg+xml")
+          inputs.push({ formulas: xml.querySelectorAll("math").length,
+            height: Number(xml.querySelector("foreignObject").getAttribute("height")),
+            viewport: Number(xml.documentElement.getAttribute("height")) })
+        }
+        return decode.call(this)
+      }
+      let svg
+      try { svg = await synthesisSvg.buildSynthesisEditorSvg(source) }
+      finally { HTMLImageElement.prototype.decode = decode }
+      const xml = new DOMParser().parseFromString(svg, "image/svg+xml")
+      const rows = []
+      const pixels = []
+      for (const node of xml.querySelectorAll("image")) {
+        const image = new Image(); image.src = node.getAttribute("href"); await image.decode()
+        pixels.push(image.naturalWidth * image.naturalHeight)
+        const canvas = document.createElement("canvas"); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+        const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0)
+        const y = Number(node.getAttribute("y")), height = Number(node.getAttribute("height"))
+        for (let row = 0; row < 24; row++) {
+          const relativeY = row * 300 - y
+          if (relativeY < 0 || relativeY + 40 > height) continue
+          const data = ctx.getImageData(0, relativeY * 2, canvas.width, 80).data
+          let dark = 0
+          for (let i = 0; i < data.length; i += 4) if (data[i] < 150 && data[i+1] < 150 && data[i+2] < 150) dark++
+          rows.push({ row, dark })
+        }
+        image.removeAttribute("src"); canvas.width = 1; canvas.height = 1
+      }
+      return { unchanged: before === source.outerHTML, inputs, rows, pixels,
+        height: Number(xml.documentElement.getAttribute("height")) }
+    })
+    assert.equal(result.unchanged, true)
+    assert.equal(result.height, 7200)
+    assert.ok(result.inputs.length >= 4)
+    assert.ok(result.inputs.every(({ formulas }) => formulas < 12), "each decoded SVG must omit formulas outside its strip")
+    assert.ok(result.inputs.every(({ height, viewport }) => height === viewport), "foreignObject must never allocate a full-document viewport")
+    assert.ok(result.pixels.every((pixels) => pixels <= 4 * 1024 * 1024), "raster buffers have a fixed pixel budget")
+    assert.ok(result.rows.length >= 22)
+    assert.ok(result.rows.every(({ dark }) => dark > 50), "formula ink must survive throughout the document")
   } finally { await browser.close() }
 })
