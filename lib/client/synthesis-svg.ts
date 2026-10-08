@@ -32,7 +32,13 @@ async function imageDataUrl(src: string): Promise<string> {
 export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<string> {
   await document.fonts.ready
   const images = Array.from(source.querySelectorAll("img")).filter((image) => !image.closest(EDITOR_CONTROLS))
-  await Promise.all(images.map((image) => image.decode()))
+  await Promise.all(images.map(async (image, index) => {
+    try {
+      await image.decode()
+    } catch {
+      throw new Error(`No se pudo cargar la imagen ${index + 1} de Síntesis. Revisá que esté disponible y volvé a exportar.`)
+    }
+  }))
   const imageSources = new Map<string, Promise<string>>()
   for (const image of images) {
     const src = image.currentSrc || image.src
@@ -134,8 +140,17 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
       svg.setAttribute("viewBox", `0 0 ${width} ${tileHeight}`)
       content.setAttribute("y", String(-y))
       const image = new Image()
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`
-      await image.decode()
+      // PDF/clipboard text can contain invisible characters accepted by HTML
+      // but forbidden in XML 1.0. Clean only the serialized export, preserving
+      // the editor, valid whitespace, mathematical symbols and surrogate pairs.
+      const serialized = new XMLSerializer().serializeToString(svg)
+        .replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, "")
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`
+      try {
+        await image.decode()
+      } catch {
+        throw new Error("No se pudo renderizar el contenido de Síntesis para exportarlo como SVG.")
+      }
       canvas.width = width * SVG_RENDER_SCALE
       canvas.height = tileHeight * SVG_RENDER_SCALE
       context.fillStyle = "#fffdf8"

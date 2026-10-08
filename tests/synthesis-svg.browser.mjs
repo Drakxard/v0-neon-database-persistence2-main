@@ -4,6 +4,7 @@ import { build } from "esbuild"
 import { chromium } from "@playwright/test"
 import { readFile } from "node:fs/promises"
 import { buildRasterSvg } from "../public/pdfjs/web/raster-svg.mjs"
+import katex from "katex"
 
 async function setup() {
   const bundle = await build({
@@ -186,5 +187,73 @@ test("documents taller than the canvas limit export every tile and final content
     assert.equal(result.count, 17)
     assert.equal(result.bottom, result.height)
     assert.ok(result.pixel[2] > 220 && result.pixel[0] < 40, "last content is rendered beyond 32767px")
+  } finally { await browser.close() }
+})
+
+test("exports KaTeX formulas with MathML and SVG radicals", async () => {
+  const { browser, page } = await setup()
+  try {
+    await page.route("https://katex.test/fonts/**", async (route) => {
+      const name = new URL(route.request().url()).pathname.split("/").at(-1)
+      await route.fulfill({ body: await readFile(`node_modules/katex/dist/fonts/${name}`), contentType: "font/woff2", headers: { "Access-Control-Allow-Origin": "*" } })
+    })
+    await page.setContent(`<!doctype html><base href="https://katex.test/"><div class="tiptap" style="width:520px;padding:24px;font:22px Arial">
+      <p>Dado que ${katex.renderToString(String.raw`\beta > 0`)} y ${katex.renderToString(String.raw`e^{2\alpha x}\ne 0`)}</p>
+      ${katex.renderToString(String.raw`y(x)=e^{\alpha x}(c_1\cos\beta x+c_2\sin\beta x)`, { displayMode: true })}
+      ${katex.renderToString(String.raw`\sqrt{\frac{x^2+1}{2}}`, { displayMode: true })}
+      </div>`)
+    await page.addStyleTag({ path: "node_modules/katex/dist/katex.min.css" })
+    await page.addScriptTag({ path: "node_modules/katex/dist/katex.min.js" })
+    await page.evaluate(() => {
+      for (const rendered of document.querySelectorAll(".katex")) {
+        const latex = rendered.querySelector("annotation").textContent
+        const target = document.createElement("span")
+        const displayMode = !!rendered.closest(".katex-display")
+        ;(displayMode ? rendered.parentElement : rendered).replaceWith(target)
+        katex.render(latex, target, { displayMode })
+      }
+    })
+    const result = await page.evaluate(async () => {
+      const source = document.querySelector(".tiptap")
+      const before = source.outerHTML
+      const svg = await synthesisSvg.buildSynthesisEditorSvg(source)
+      return { unchanged: source.outerHTML === before, svg }
+    })
+    assert.equal(result.unchanged, true)
+    assert.match(result.svg, /data:image\/jpeg/)
+  } finally { await browser.close() }
+})
+
+test("exports pasted text with characters forbidden in XML without changing the editor", async () => {
+  const { browser, page } = await setup()
+  try {
+    await page.setContent('<div class="tiptap" style="width:520px;font:22px Arial"><p></p></div>')
+    const result = await page.evaluate(async () => {
+      const source = document.querySelector(".tiptap")
+      source.querySelector("p").textContent = "Texto\u000b pegado\u000c desde PDF\u001f: β > 0 😀\ud800\uffff"
+      source.querySelector("p").setAttribute("data-pasted", "\u000b")
+      const before = source.outerHTML
+      const svg = await synthesisSvg.buildSynthesisEditorSvg(source)
+      const unchanged = source.outerHTML === before
+      source.querySelector("p").textContent = "Texto pegado desde PDF: β > 0 😀"
+      source.querySelector("p").setAttribute("data-pasted", "")
+      const clean = await synthesisSvg.buildSynthesisEditorSvg(source)
+      return { unchanged, svg, matchesClean: svg === clean }
+    })
+    assert.equal(result.unchanged, true)
+    assert.match(result.svg, /data:image\/jpeg/)
+    assert.equal(result.matchesClean, true, "visible text, math symbols and emoji must render like clean text")
+  } finally { await browser.close() }
+})
+
+test("a broken source image reports which image needs attention", async () => {
+  const { browser, page } = await setup()
+  try {
+    await page.setContent('<div class="tiptap"><img src="data:image/png;base64,AA=="/></div>')
+    const failure = await page.evaluate(async () => {
+      try { await synthesisSvg.buildSynthesisEditorSvg(document.querySelector(".tiptap")); return "unexpected success" }
+      catch (error) { return error.message }
+    })
+    assert.match(failure, /No se pudo cargar la imagen 1 de Síntesis/)
   } finally { await browser.close() }
 })
