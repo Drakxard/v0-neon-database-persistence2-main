@@ -3,7 +3,9 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type Ref } from "react"
 import { HandDrawnBubble } from "@/components/hand-drawn-bubble"
 import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, removeVoicePdfFragment, saveVoiceImages, validateVoiceImageFiles, voiceGroupItemCount, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
-import { searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
+import { isManualTopicsQuery, searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
+import { getCurrentWeekNumber } from "@/lib/subject-utils"
+import { SubjectWeekTopics, type WeekTopicsHandle } from "@/components/subject-week-topics"
 import { useSubjectPdfSearch } from "@/hooks/use-subject-pdf-search"
 import { SubjectPdfFragment } from "@/components/subject-pdf-fragment"
 import { SubjectPdfBubble } from "@/components/subject-pdf-bubble"
@@ -15,12 +17,15 @@ type Target = { groupId: string } | { name: string; color: string }
 const control = "rounded-lg border border-neutral-300 px-4 py-2 text-base hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-black disabled:opacity-50"
 const colorNames = ["Verde", "Azul", "Amarillo", "Rosa", "Violeta", "Naranja"]
 
-export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?: Ref<VoiceImagesHandle> }) {
+export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumber(), ref }: { subjectId: string; weekNumber?: number; ref?: Ref<VoiceImagesHandle> }) {
   const [workspace, setWorkspace] = useState<VoiceImageWorkspace | null>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [pending, setPending] = useState<File[] | null>(null)
   const [selection, setSelection] = useState<{ images: VoiceImage[]; pdfs: PdfSearchResult[]; destinationId: string } | null>(null)
   const [query, setQuery] = useState("")
+  const manualTopics = isManualTopicsQuery(query)
+  const topicsRef = useRef<WeekTopicsHandle>(null)
+  const [topicsViewing, setTopicsViewing] = useState(false)
   const pdf = useSubjectPdfSearch(subjectId, query)
   const [pdfViewer, setPdfViewer] = useState<PdfSearchResult | null>(null)
   const [name, setName] = useState("")
@@ -46,7 +51,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   useEffect(() => {
     const capture = (event: KeyboardEvent) => {
-      if (!workspace || formOpen || viewer || pdfViewer || locked.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.key.length !== 1) return
+      if (!workspace || formOpen || viewer || pdfViewer || (manualTopics && topicsRef.current?.blocksInput()) || locked.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.key.length !== 1) return
       if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return
       if (event.key === " " && event.target instanceof Element && event.target.closest("button")) return
       event.preventDefault()
@@ -55,7 +60,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     }
     window.addEventListener("keydown", capture)
     return () => window.removeEventListener("keydown", capture)
-  }, [workspace, formOpen, viewer, pdfViewer])
+  }, [workspace, formOpen, viewer, pdfViewer, manualTopics])
 
   async function refresh() {
     setError("")
@@ -75,13 +80,14 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   useImperativeHandle(ref, () => ({ escape: () => {
     if (locked.current) return true
+    if (manualTopics && topicsRef.current?.escape()) { focusCanvas(); return true }
     if (pdfViewer) { setPdfViewer(null); focusCanvas(); return true }
     if (viewer) { setViewer(null); focusCanvas(); return true }
     if (formOpen) { cancelForm(); return true }
     if (query.length) { setQuery(""); focusCanvas(); return true }
     if (groupId) { setGroupId(null); focusCanvas(); return true }
     return false
-  } }), [viewer, pdfViewer, formOpen, query, groupId])
+  } }), [viewer, pdfViewer, formOpen, query, groupId, manualTopics])
 
   function message(failure: unknown) { return failure instanceof Error ? failure.message : "No se pudo completar la operación." }
 
@@ -103,6 +109,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   }
 
   async function receive(files: File[], targetGroup: string | null) {
+    if (manualTopics) { await topicsRef.current?.receive(files); return }
     if (locked.current || !workspace || formOpen || viewer || pdfViewer) return
     locked.current = true
     setBusy(true)
@@ -133,6 +140,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   function newGroup() {
     if (locked.current || formOpen || viewer || pdfViewer) return
+    if (manualTopics) { if (!topicsRef.current?.blocksInput()) topicsRef.current?.choose(); return }
     if (!searching) { choose(null); return }
     if (!matches.length && !pdf.results.length) return
     setSelection({ images: matches.map((match) => match.image), pdfs: structuredClone(pdf.results), destinationId: crypto.randomUUID() })
@@ -183,7 +191,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   return <div ref={canvas} tabIndex={-1} className={`relative flex min-h-0 flex-1 flex-col outline-none ${dragging ? "bg-green-50" : ""}`}
     onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = busy || formOpen || viewer ? "none" : "copy" }}
-    onDragEnter={(event) => { if (event.dataTransfer.types.includes("Files")) setDragging(true) }}
+    onDragEnter={(event) => { if (!manualTopics && event.dataTransfer.types.includes("Files")) setDragging(true) }}
     onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false) }}
     onDrop={(event) => drop(event, null)} data-subject-voice-images>
     <input ref={input} type="file" accept="image/*" multiple className="hidden" aria-label="Seleccionar imágenes"
@@ -217,6 +225,8 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     {workspace && !formOpen && pdfViewer && <SubjectPdfFragment result={pdfViewer} />}
 
     {workspace && !formOpen && !viewer && !pdfViewer && <>
+      {manualTopics ? <SubjectWeekTopics key={`${subjectId}:${weekNumber}`} subjectId={subjectId} weekNumber={weekNumber}
+        ref={topicsRef} onBusy={setBusy} onViewing={setTopicsViewing} /> : <>
       {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
@@ -250,15 +260,17 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
             }} failed={(failure) => setError(message(failure))} />)}
         </div>
       </div>}
+      </>}
+      {!topicsViewing &&
       <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
         <span aria-hidden="true" />
         <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes y PDF" data-voice-search
           autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
-        <button type="button" onClick={newGroup} disabled={busy || (searching && (pdf.searching || pdf.preparing || matches.length + pdf.results.length === 0))} aria-label="Nuevo conjunto" title="Nuevo conjunto"
+        <button type="button" onClick={newGroup} disabled={busy || (!manualTopics && searching && (pdf.searching || pdf.preparing || matches.length + pdf.results.length === 0))} aria-label={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"} title={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"}
           className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
-      </div>
+      </div>}
     </>}
-    {!pdfViewer && !viewer && !formOpen && <>
+    {!manualTopics && !pdfViewer && !viewer && !formOpen && <>
       {pdf.progress && <div role="status" aria-label={`Analizando PDF ${pdf.progress.current} de ${pdf.progress.total}`} data-voice-pdf-progress
         className="absolute bottom-3 left-0 flex items-center gap-1.5 text-xs text-neutral-500">
         <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
@@ -270,8 +282,8 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
         <button type="button" className={control} onClick={pdf.retry} disabled={pdf.preparing || pdf.searching}>Reintentar PDF</button>
       </div>}
     </>}
-    {busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
-    {error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
+    {!manualTopics && busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
+    {!manualTopics && error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
       <p role="alert" className="whitespace-pre-wrap">{error}</p>
       {!workspace && <button className={control} onClick={() => void refresh()}>Reintentar carga</button>}
       {retry && <button className={control} disabled={busy} onClick={() => void runSave(retry.files, retry.target)}>Reintentar guardado</button>}

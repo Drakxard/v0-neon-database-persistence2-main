@@ -26,6 +26,7 @@ const bundle = await build({
     import { splitPdfBatches } from './lib/client/subject-pdf-files';
     import { loadSavedPdfSearches, findSavedPdfSearch } from './lib/client/subject-pdf-history';
     import { saveVoiceImages, loadVoiceImageGroups, regroupVoiceImages } from './lib/subject-voice-images';
+    import { loadWeekTopics, saveWeekTopics, readWeekTopicImage } from './lib/client/subject-week-topics';
     setReadyWorkspaceHandle(window.workspaceRoot);
     window.prepareTheory = async (id='algebra', signal=new AbortController().signal) => {
       window.preparationProgress = [];
@@ -38,12 +39,15 @@ const bundle = await build({
     window.saveManualImages = (files, target) => saveVoiceImages('algebra',files,target);
     window.loadGroups = () => loadVoiceImageGroups('algebra');
     window.regroup = (ids,destination,pdfs) => regroupVoiceImages('algebra',ids,destination,pdfs);
+    window.loadTopics = loadWeekTopics;
+    window.saveTopics = saveWeekTopics;
+    window.readTopicImage = readWeekTopicImage;
     window.splitBatches = async file => { const batches = []; for await (const batch of splitPdfBatches(file, new AbortController().signal)) batches.push({pages:batch.pages,size:batch.file?.size,error:batch.error}); return batches; };
     const voiceRef = createRef();
     window.pdfEscape = () => voiceRef.current.escape();
     const root = createRoot(document.getElementById('root'));
-    window.changePdfSubject = subjectId => root.render(<SubjectVoiceImages key={subjectId} subjectId={subjectId} ref={voiceRef} />);
-    root.render(<SubjectVoiceImages key="algebra" subjectId="algebra" ref={voiceRef} />);
+    window.changePdfSubject = (subjectId,week=7) => root.render(<SubjectVoiceImages key={subjectId+':'+week} subjectId={subjectId} weekNumber={week} ref={voiceRef} />);
+    root.render(<SubjectVoiceImages key="algebra:7" subjectId="algebra" weekNumber={7} ref={voiceRef} />);
   `, resolveDir: process.cwd(), loader: "tsx" },
   bundle: true, write: false, platform: "browser", format: "iife",
   define: { "process.env.NODE_ENV": '"production"' },
@@ -87,7 +91,7 @@ async function setup(t, { holdPoll = false } = {}) {
           createWritable: async () => {
             let content
             return {
-              write: async (value) => { if (window.failWrites) throw new Error("Disco lleno"); content = typeof value === "string" ? new Blob([value]) : value },
+              write: async (value) => { if (window.failWrites || window.failWritePath === path) throw new Error("Disco lleno"); content = typeof value === "string" ? new Blob([value]) : value },
               close: async () => window.workspaceFiles.set(path, content), abort: async () => {},
             }
           },
@@ -440,6 +444,77 @@ test("historial de cualquier palabra queda en su materia, semana y contenedor de
   assert.equal(scopes.subject,null)
   assert.equal(scopes.week,null)
   assert.equal(scopes.container,null)
+})
+
+test("tema/temas guarda imágenes manuales por materia y semana sin buscar PDF", async (t) => {
+  const page = await setup(t)
+  const before = await page.evaluate(async () => {await window.prepareTheory();return window.pdfRequests.length})
+  await page.locator('[data-voice-search]').fill('tema')
+  await page.getByText('Arrastrá imágenes para la síntesis de esta semana o tocá aquí para subirlas.',{exact:true}).waitFor()
+  await page.evaluate(async () => {
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=20
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
+    window.topicFile=new File([blob],'Resumen de Laplace.png',{type:'image/png'})
+    const transfer=new DataTransfer();transfer.items.add(window.topicFile)
+    document.querySelector('[data-week-topics]').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}))
+  })
+  const image = page.locator('[data-topic-image-id]')
+  await image.waitFor()
+  assert.match(await image.innerText(),/Resumen de Laplace/)
+  assert.equal(await page.locator('[data-voice-pdf-id]').count(),0)
+  assert.equal((await page.evaluate(()=>window.loadGroups())).groups.length,0)
+  await image.click()
+  await page.getByRole('img',{name:'Resumen de Laplace.png',exact:true}).waitFor()
+  await page.evaluate(()=>window.pdfEscape())
+  await image.waitFor()
+  assert.equal(await page.locator('[data-voice-search]').inputValue(),'tema')
+  await page.evaluate(()=>window.pdfEscape())
+  await page.locator('[data-week-topics]').waitFor({state:'hidden'})
+  await page.locator('[data-voice-search]').fill('temas')
+  await image.waitFor()
+  await page.evaluate(()=>window.changePdfSubject('fisica',7))
+  await page.locator('[data-voice-search]').fill('temas')
+  await page.getByText('Síntesis manual · Semana 7',{exact:true}).waitFor()
+  assert.equal(await image.count(),0)
+  await page.evaluate(()=>window.changePdfSubject('algebra',8))
+  await page.locator('[data-voice-search]').fill('tema')
+  await page.getByText('Síntesis manual · Semana 8',{exact:true}).waitFor()
+  assert.equal(await image.count(),0)
+  await page.evaluate(()=>window.changePdfSubject('algebra',7))
+  await page.locator('[data-voice-search]').fill('TEMAS')
+  await image.waitFor()
+  assert.equal((await page.evaluate(()=>window.loadTopics('algebra',7))).images.length,1)
+  assert.equal((await page.evaluate(()=>window.loadTopics('algebra',8))).images.length,0)
+  const direct = await page.evaluate(async () => window.searchTheory(await window.prepareTheory(),'temas'))
+  assert.deepEqual(direct.results,[])
+  assert.equal(await page.evaluate(()=>window.pdfRequests.length),before)
+})
+
+test("+ sube a temas y un fallo del archivo semanal conserva lo previo y reintenta sin duplicar", async (t) => {
+  const page = await setup(t)
+  await page.locator('[data-voice-search]').fill('temas')
+  await page.locator('[data-week-topics]').waitFor()
+  const png=await page.evaluate(async () => {
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=20
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
+    return Array.from(new Uint8Array(await blob.arrayBuffer()))
+  })
+  const upload = async name => {
+    const selected=page.waitForEvent('filechooser')
+    await page.getByRole('button',{name:'Subir imágenes de temas',exact:true}).click()
+    await (await selected).setFiles({name,mimeType:'image/png',buffer:Buffer.from(png)})
+  }
+  await upload('Primero.png')
+  await page.locator('[data-topic-image-id]').waitFor()
+  await page.evaluate(()=>{window.failWritePath='manifests/subject-voice/topics/algebra/week-7.json'})
+  await upload('Segundo.png')
+  await page.getByRole('alert').filter({hasText:'Disco lleno'}).waitFor()
+  assert.equal((await page.evaluate(()=>window.loadTopics('algebra',7))).images.length,1)
+  await page.evaluate(()=>{window.failWritePath=''})
+  await page.getByRole('button',{name:'Reintentar temas',exact:true}).click()
+  await page.waitForFunction(()=>document.querySelectorAll('[data-topic-image-id]').length===2)
+  assert.equal((await page.evaluate(()=>window.loadTopics('algebra',7))).images.length,2)
+  assert.equal(await page.locator('form[aria-label="Crear conjunto"]').count(),0)
 })
 
 test("fallas de Clef se muestran y el reintento conserva la extracción", async (t) => {

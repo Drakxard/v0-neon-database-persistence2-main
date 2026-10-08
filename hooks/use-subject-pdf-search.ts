@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { latestTheoryMaterials, prepareTheoryPdfs, searchTheoryPdfs, theoryScopeSignature, type PreparedTheory, type PdfPreparationProgress } from "@/lib/client/subject-pdf-search"
 import { normalizePdfQuery, type PdfSearchResult } from "@/lib/subject-pdf-search"
 import { findSavedPdfSearch, loadSavedPdfSearches, type SavedPdfSearch } from "@/lib/client/subject-pdf-history"
+import { isManualTopicsQuery } from "@/lib/subject-voice-search"
 
 export function useSubjectPdfSearch(subjectId: string, query: string) {
   const [theory, setTheory] = useState<PreparedTheory | null>(null)
@@ -59,7 +60,7 @@ export function useSubjectPdfSearch(subjectId: string, query: string) {
   useEffect(() => {
     const controller = new AbortController(), signal = controller.signal
     setResults([]); setSearchErrors([])
-    if (!query.trim() || !theory) { setSearching(false); return () => controller.abort() }
+    if (!query.trim() || !theory || isManualTopicsQuery(query)) { setSearching(false); return () => controller.abort() }
     const visible = (items: PdfSearchResult[]) => items.filter((item) => !dismissed.current.has(`${item.query}:${item.id}`))
     const saved = findSavedPdfSearch(history.current, query)
     if (saved) {

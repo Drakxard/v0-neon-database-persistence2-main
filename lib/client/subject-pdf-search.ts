@@ -8,6 +8,7 @@ import { pdfHash, splitPdfBatches } from "./subject-pdf-files"
 import type { SubjectDayMaterial } from "../study-types"
 import { readPdfCorrection } from "./subject-pdf-corrections"
 import { savePdfSearch } from "./subject-pdf-history"
+import { isManualTopicsQuery } from "../subject-voice-search"
 
 type BatchState = { pages: number[]; token?: string; extraction?: PdfExtraction; error?: string }
 type ExtractionCache = { version: string; hash: string; complete: boolean; batches: BatchState[] }
@@ -144,6 +145,7 @@ export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, 
 
 type EvaluationCache = { version: string; query: string; hash: string; decisions: Record<string, PdfDecision> }
 export async function searchTheoryPdfs(theory: PreparedTheory, query: string, signal: AbortSignal, publish: (results: PdfSearchResult[]) => void) {
+  if (isManualTopicsQuery(query)) return {results:[] as PdfSearchResult[],errors:[] as string[]}
   const root = await pdfWorkspaceRoot(), normalized = normalizePdfQuery(query)
   if (!normalized || theory.week == null) return { results: [] as PdfSearchResult[], errors: [] as string[] }
   const queryHash = await pdfHash(new File([normalized], "query.txt"))

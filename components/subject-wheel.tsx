@@ -7470,6 +7470,7 @@ export function SubjectWheel({
 
       <SubjectVoiceDialog
         subject={voiceSubject ? { id: voiceSubject.id, name: getSubjectDisplayName(voiceSubject) } : null}
+        weekNumber={homeSelectedWeekNumber}
         onClose={() => setVoiceSubject(null)}
       />
       {/* Main Content */}

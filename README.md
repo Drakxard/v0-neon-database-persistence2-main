@@ -60,6 +60,13 @@ del conjunto. También se pueden crear conjuntos que solo contengan fragmentos.
 Mantener un globo de un conjunto presionado un segundo quita su referencia de
 ese conjunto. El guardado conserva el conjunto anterior si falla y permite reintentar.
 
+`tema` y `temas` son palabras reservadas para la síntesis manual. Abren el mismo
+apartado de imágenes de la materia y la semana seleccionada en la rueda, sin
+buscar coincidencias en los PDF ni llamar a Clef. Arrastrar imágenes o pulsar
+`+` las guarda directamente en ese apartado, sin crear un conjunto ni exigir
+que su nombre contenga la palabra tema. La carpeta local mantiene cada materia
+y semana por separado, incluso si no hay PDF de teoría para esa semana.
+
 Configurar `datalab` en el entorno del servidor con la API key de Datalab.
 `MARKER_API` y `marker_api` siguen funcionando como alternativas; también se
 admite la clave heredada del sobre cifrado de InScreen en `User.Services`.

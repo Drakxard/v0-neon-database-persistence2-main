@@ -29,9 +29,10 @@ export function VoiceModeButton({ active, label, onClick }: {
   )
 }
 
-export function SubjectVoiceDialog({ subject, onClose }: {
+export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
   subject: { id: string; name: string } | null
   onClose: () => void
+  weekNumber?: number
 }) {
   const [paused, setPaused] = useState(false)
   const [attempt, setAttempt] = useState(0)
@@ -90,7 +91,7 @@ export function SubjectVoiceDialog({ subject, onClose }: {
         <DialogDescription className="sr-only">
           Dictado para {subject?.name}. Escribí para buscar imágenes y fragmentos de PDF de teoría. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
         </DialogDescription>
-        {subject && <SubjectVoiceImages key={subject.id} subjectId={subject.id} ref={imagesRef} />}
+        {subject && <SubjectVoiceImages key={`${subject.id}:${weekNumber ?? "current"}`} subjectId={subject.id} weekNumber={weekNumber} ref={imagesRef} />}
         <div className="max-h-[20vh] shrink-0 overflow-y-auto" data-subject-voice-canvas>
           {(voice.transcript || voice.interim) && (
             <p className="max-w-4xl text-lg leading-relaxed whitespace-pre-wrap sm:text-xl">

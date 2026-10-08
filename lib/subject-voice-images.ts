@@ -68,7 +68,7 @@ async function load(handle: FileSystemDirectoryHandle, subjectId: string) {
 
 export async function loadVoiceImageGroups(subjectId: string) { return load(await root(), subjectId) }
 
-async function writeVerified(handle: FileSystemDirectoryHandle, path: string, blob: Blob) {
+export async function writeVerified(handle: FileSystemDirectoryHandle, path: string, blob: Blob) {
   const file = await fileHandle(handle, path, true)
   const writer = await file.createWritable()
   try { await writer.write(blob); await writer.close() }

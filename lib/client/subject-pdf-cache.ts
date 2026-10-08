@@ -4,7 +4,7 @@ import { getReadyWorkspaceHandle, loadWorkspaceHandle, queryWorkspacePermission 
 
 export async function pdfWorkspaceRoot() {
   const root = getReadyWorkspaceHandle() ?? await loadWorkspaceHandle()
-  if (!root || await queryWorkspacePermission(root) !== "granted") throw new Error("Autorizá la carpeta local para preparar los PDF.")
+  if (!root || await queryWorkspacePermission(root) !== "granted") throw new Error("Autorizá la carpeta local para leer y guardar archivos.")
   return root
 }
 async function handle(root: FileSystemDirectoryHandle, path: string, create = false) {

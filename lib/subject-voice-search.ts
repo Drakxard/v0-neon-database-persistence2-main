@@ -2,6 +2,10 @@ import type { VoiceImage, VoiceImageGroup } from "./subject-voice-images"
 
 export type VoiceImageMatch = { image: VoiceImage; group: VoiceImageGroup }
 
+export function isManualTopicsQuery(query: string) {
+  return /^(tema|temas)$/.test(query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase())
+}
+
 function words(text: string) {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[a-z0-9]+/g) ?? []
 }

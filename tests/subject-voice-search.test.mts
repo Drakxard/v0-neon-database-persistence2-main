@@ -1,6 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { searchVoiceImages, voiceGroupDiameter, voiceImageName } from "../lib/subject-voice-search.ts"
+import { isManualTopicsQuery, searchVoiceImages, voiceGroupDiameter, voiceImageName } from "../lib/subject-voice-search.ts"
+
+test("tema y temas abren únicamente el apartado manual", () => {
+  for (const query of ["tema","temas","  TEMAS  "]) assert.equal(isManualTopicsQuery(query),true)
+  for (const query of ["teorema","temario","tema exponencial","tem","mi tema",""]) assert.equal(isManualTopicsQuery(query),false)
+})
 
 const groups = [{ id: "conceptos", name: "Conceptos", color: "#b2f2bb", images: [
   { id: "a", name: "Teo existencia orden 1.png", path: "a" },
