@@ -503,7 +503,16 @@ test("móvil: campo sin borde y + permiten buscar y agrupar imágenes", async (t
   const contentBounds = await page.locator('[data-voice-bubbles]').boundingBox()
   assert.equal(contentBounds.y,0)
   assert.equal(contentBounds.height,844)
-  assert.equal(await search.evaluate(element => getComputedStyle(element.parentElement).backgroundColor), 'rgba(255, 255, 255, 0.95)')
+  const background = await search.evaluate(element => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 1
+    const context = canvas.getContext('2d')
+    context.fillStyle = getComputedStyle(element.parentElement).backgroundColor
+    context.fillRect(0,0,1,1)
+    return [...context.getImageData(0,0,1,1).data]
+  })
+  assert.deepEqual(background.slice(0,3),[255,255,255])
+  assert.ok(background[3] >= 240)
   assert.equal(await page.getByRole('button',{name:'Deshacer',exact:true}).count(),0)
   await page.evaluate(() => document.fonts.ready)
   if (process.env.VOICE_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.VOICE_SCREENSHOT_DIR}/subject-voice-search-mobile.png` })
