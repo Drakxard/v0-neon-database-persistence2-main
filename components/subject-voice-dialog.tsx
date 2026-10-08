@@ -20,7 +20,7 @@ export function VoiceModeButton({ active, label, onClick }: {
       title={label}
       onClick={onClick}
       className={cn(
-        "flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#c7c7c7] text-black transition-colors hover:bg-[#b9b9b9] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-black sm:h-16 sm:w-16",
+        "pointer-events-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#c7c7c7] text-black transition-colors hover:bg-[#b9b9b9] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-black sm:h-16 sm:w-16",
         active && "bg-[#b8d3c3] ring-2 ring-[#528169] ring-offset-2 hover:bg-[#a9c7b5]"
       )}
     >
@@ -72,11 +72,10 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
           event.preventDefault()
           if (!imagesRef.current?.escape()) onClose()
         }}
-        className={cn("subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white text-black shadow-none sm:max-w-none",
-          pdfViewing ? "p-0" : "p-5 sm:p-8")}
+        className="subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-0 text-black shadow-none sm:max-w-none"
       >
-        <div className={pdfViewing ? "absolute right-5 top-5 z-30 sm:right-8 sm:top-8" : "flex shrink-0 items-start justify-between gap-5"}>
-          <DialogTitle className={pdfViewing ? "sr-only" : "pt-1 text-2xl leading-tight font-normal sm:text-[32px]"}>
+        <div className="pointer-events-none absolute inset-x-5 top-5 z-30 flex items-start justify-between gap-5 sm:inset-x-8 sm:top-8">
+          <DialogTitle className={pdfViewing ? "sr-only" : "max-w-[calc(100%_-_5rem)] rounded bg-white/95 px-1 py-1 text-2xl leading-tight font-normal sm:text-[32px]"}>
             {subject?.name}
           </DialogTitle>
           <VoiceModeButton
@@ -98,7 +97,7 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
           {paused ? "Micrófono pausado" : voice.status === "listening" ? "Escuchando" : voice.status === "starting" ? "Activando micrófono" : "Micrófono detenido"}
         </p>
         {!pdfViewing && (voice.error || serviceError) && (
-          <p role="status" className="mt-4 shrink-0 text-sm text-neutral-600">{voice.error || serviceError}</p>
+          <p role="status" className="absolute bottom-24 left-5 z-30 max-w-[calc(100%_-_2.5rem)] rounded bg-white/95 px-3 py-2 text-sm text-neutral-600">{voice.error || serviceError}</p>
         )}
       </DialogContent>
     </Dialog>

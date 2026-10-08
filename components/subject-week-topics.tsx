@@ -56,7 +56,7 @@ export function SubjectWeekTopics({ subjectId, weekNumber, ref, onBusy, onViewin
     if (viewer) {setViewer(null);return true}
     return false
   }}),[viewer,subjectId,weekNumber,onBusy])
-  return <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-4" data-week-topics
+  return <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pt-28 pb-24 sm:px-8 sm:pt-32" data-week-topics
     onDragOver={event=>event.preventDefault()} onDrop={event=>{event.preventDefault();event.stopPropagation();void receive(Array.from(event.dataTransfer.files))}}>
     <input ref={input} type="file" accept="image/*" multiple className="hidden" aria-label="Seleccionar imágenes para temas"
       onChange={event=>{const files=Array.from(event.target.files??[]);event.target.value="";void receive(files)}} />

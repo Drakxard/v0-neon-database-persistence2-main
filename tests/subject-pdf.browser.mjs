@@ -449,13 +449,13 @@ test("recupera globos descartados por las correcciones anteriores", async t => {
   const search=page.locator('[data-voice-search]')
   await search.fill('teorema')
   await page.getByText('Sin coincidencias',{exact:true}).waitFor()
-  await page.getByRole('button',{name:'Deshacer',exact:true}).click()
+  await page.keyboard.press('Control+z')
   await page.locator('[data-voice-pdf-id]').waitFor()
   await page.locator('[data-voice-pdf-id]').click()
   await waitForPdfFrame(page)
 })
 
-test("borrado fallido conserva el globo y el cartel vence sin perder Deshacer", async t => {
+test("borrado fallido conserva el globo y el cartel vence y se recupera con Ctrl+Z", async t => {
   const page=await setup(t)
   await page.locator('[data-voice-search]').fill('teorema')
   const bubble=page.locator('[data-voice-pdf-id]')
@@ -469,7 +469,7 @@ test("borrado fallido conserva el globo y el cartel vence sin perder Deshacer", 
   await bubble.click({delay:1150})
   await page.getByText('Borrado',{exact:true}).waitFor()
   await page.locator('[data-discard-notice]').waitFor({state:'hidden',timeout:8000})
-  await page.getByRole('button',{name:'Deshacer',exact:true}).click()
+  await page.keyboard.press('Control+z')
   await bubble.waitFor()
 })
 
@@ -711,7 +711,7 @@ test("+ guarda globos PDF, abre páginas y permite descartarlos del conjunto", a
   await page.locator('[data-voice-pdf-id]').last().click({delay:1150})
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 1)
   assert.equal((await page.evaluate(() => window.loadGroups())).groups[0].pdfs.length,2)
-  await page.getByRole('button',{name:'Deshacer',exact:true}).first().click();
+  await page.keyboard.press('Control+z');
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 2)
 })
 
@@ -986,7 +986,7 @@ test("imágenes individuales se descartan por término y dentro del conjunto sin
   assert.equal((await page.evaluate(()=>window.loadGroups())).groups[0].images.length,1)
   await page.evaluate(()=>window.pdfEscape())
   await page.getByRole('button',{name:'Conjunto, 0 imágenes',exact:true}).click()
-  await page.getByRole('button',{name:'Deshacer',exact:true}).first().click()
+  await page.keyboard.press('Control+z')
   await page.locator('[data-voice-image-id]').waitFor()
 })
 

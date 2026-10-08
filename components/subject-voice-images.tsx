@@ -60,7 +60,6 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
   const visiblePdfs = pdf.results.filter(result => !isDiscarded(history, queryDiscardScope(result.query), "pdf", pdfDiscardId(result)))
   const undoScopes = searching && !manualTopics ? [...new Set([scope, ...history.filter(entry => entry.kind === "pdf" && entry.scope.startsWith("query:") &&
     entry.result?.query.startsWith(normalizePdfQuery(query))).map(entry => entry.scope)])] : [scope]
-  const canUndo = historyReady && history.some(entry => !entry.undone && undoScopes.includes(entry.scope))
   const visibleGroupCount = (item: NonNullable<VoiceImageWorkspace["groups"]>[number]) =>
     item.images.filter(image => !isDiscarded(history, `group:${item.id}`, "image", image.id)).length +
     (item.pdfs ?? []).filter(result => !isDiscarded(history, `group:${item.id}`, "pdf", pdfDiscardId(result))).length
@@ -288,7 +287,7 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
 
     {!workspace && <div className="flex flex-1 items-center justify-center text-xl">{error ? "No se pudieron cargar los conjuntos." : "Cargando conjuntos…"}</div>}
 
-    {workspace && formOpen && <form className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-5 overflow-y-auto py-8" aria-label="Crear conjunto"
+    {workspace && formOpen && <form className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-5 overflow-y-auto px-5 pt-28 pb-8 sm:pt-32" aria-label="Crear conjunto"
       onSubmit={(event) => { event.preventDefault(); if (selection) void runRegroup(); else if (pending && name.trim()) void runSave(pending, { name, color }, retry ? [] : error ? [error] : []) }}>
       <p className="text-2xl">Nombre para el conjunto de {selection ? selection.images.length + selection.pdfs.length : pending?.length} {selection?.pdfs.length ? "elementos" : "imágenes"}</p>
       <label className="flex flex-col gap-2">Nombre del conjunto
@@ -321,7 +320,7 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
         remove={image => removeItem({ scope: `topics:${weekNumber}`, kind: "topic", itemId: image.id })} /> : <>
       {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
-      </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
+      </button> : <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-28 pb-24 sm:px-8 sm:pt-32" data-voice-bubbles>
         {searching && matches.length === 0 && visiblePdfs.length === 0 && !pdf.searching && !pdf.preparing && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
         <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
           {searching ? matches.map(({ image, group: source }) => <SubjectImageBubble key={image.id} image={image} color={source.color} disabled={busy || !historyReady}
@@ -345,17 +344,19 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       </div>}
       </>}
       {!topicsViewing &&
-      <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
-        <span aria-hidden="true" />
+      <div className="pointer-events-none absolute inset-x-5 bottom-5 z-30 flex min-h-12 items-center justify-center sm:inset-x-8 sm:bottom-8" data-voice-floating-controls>
+        <div className="pointer-events-auto inline-grid min-w-[3ch] max-w-[calc(100%_-_8rem)] rounded-lg bg-white/95">
+        <span aria-hidden="true" className="invisible col-start-1 row-start-1 overflow-hidden px-3 py-2 text-2xl whitespace-pre">{query || " "}</span>
         <input ref={searchInput} type="text" value={query} onChange={(event) => {
           if (dictated.current) editedDictation.current = true
           dictated.current = null
           queryValue.current = event.target.value
           setQuery(event.target.value)
         }} aria-label="Buscar imágenes y PDF" data-voice-search
-          autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
+          size={1} autoComplete="off" spellCheck={false} disabled={busy} className="col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent px-3 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
+        </div>
         <button type="button" onClick={newGroup} disabled={busy || (!manualTopics && searching && (pdf.searching || pdf.preparing || matches.length + visiblePdfs.length === 0))} aria-label={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"} title={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"}
-          className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
+          className="pointer-events-auto absolute right-0 flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] bg-white/95 text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
       </div>}
     </>}
     {!manualTopics && !pdfViewer && !viewer && !formOpen && <>
@@ -364,18 +365,17 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
         <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
         <span>{pdf.progress.current}/{pdf.progress.total}</span>
       </div>}
-      {pdf.searching && <p role="status" className="shrink-0 py-2 text-center text-sm">Filtrando coincidencias en los PDF…</p>}
-      {pdf.errors.length > 0 && <div className="max-h-28 shrink-0 overflow-y-auto py-2 text-sm">
+      {pdf.searching && <p role="status" className="absolute bottom-24 left-1/2 z-20 -translate-x-1/2 rounded bg-white/95 px-3 py-2 text-center text-sm">Filtrando coincidencias en los PDF…</p>}
+      {pdf.errors.length > 0 && <div className="absolute bottom-24 left-5 z-40 max-h-28 max-w-[calc(100%_-_2.5rem)] overflow-y-auto rounded bg-white/95 px-3 py-2 text-sm">
         <p role="alert" className="whitespace-pre-wrap">{pdf.errors.join("\n")}</p>
         <button type="button" className={control} onClick={pdf.retry} disabled={pdf.preparing || pdf.searching}>Reintentar PDF</button>
       </div>}
     </>}
-    {!manualTopics && busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
-    {!pdfViewer && !formOpen && canUndo && <button type="button" className="shrink-0 self-end rounded-lg border px-3 py-1 text-sm" disabled={busy} onClick={() => void undo()}>Deshacer</button>}
+    {!manualTopics && busy && <p role="status" className="absolute bottom-24 left-5 z-40 rounded bg-white/95 px-3 py-2">Procesando imágenes…</p>}
     {notice && <div role="status" className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-lg bg-neutral-900 px-4 py-3 text-white" data-discard-notice>
-      <span>Borrado</span><button type="button" disabled={busy} className="underline" onClick={() => void undo(notice)}>Deshacer</button>
+      <span>Borrado</span>
     </div>}
-    {error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
+    {error && <div className="absolute bottom-24 left-5 z-40 max-h-36 max-w-[calc(100%_-_2.5rem)] overflow-y-auto rounded bg-white/95 px-3 py-3 text-base">
       <p role="alert" className="whitespace-pre-wrap">{error}</p>
       {!historyReady && <button className={control} onClick={() => void loadDiscardHistory(subjectId).then(entries => { setHistory(entries); setHistoryReady(true); setError("") }).catch(failure => setError(message(failure)))}>Reintentar historial</button>}
       {!workspace && <button className={control} onClick={() => void refresh()}>Reintentar carga</button>}
