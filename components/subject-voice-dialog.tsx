@@ -37,6 +37,7 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
   const [paused, setPaused] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [serviceError, setServiceError] = useState("")
+  const [pdfViewing, setPdfViewing] = useState(false)
   const imagesRef = useRef<VoiceImagesHandle>(null)
   const voice = useSubjectVoice(subject?.id ?? null, !paused, attempt)
 
@@ -71,10 +72,11 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
           event.preventDefault()
           if (!imagesRef.current?.escape()) onClose()
         }}
-        className="subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-5 text-black shadow-none sm:max-w-none sm:p-8"
+        className={cn("subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white text-black shadow-none sm:max-w-none",
+          pdfViewing ? "p-0" : "p-5 sm:p-8")}
       >
-        <div className="flex shrink-0 items-start justify-between gap-5">
-          <DialogTitle className="pt-1 text-2xl leading-tight font-normal sm:text-[32px]">
+        <div className={pdfViewing ? "absolute right-5 top-5 z-30 sm:right-8 sm:top-8" : "flex shrink-0 items-start justify-between gap-5"}>
+          <DialogTitle className={pdfViewing ? "sr-only" : "pt-1 text-2xl leading-tight font-normal sm:text-[32px]"}>
             {subject?.name}
           </DialogTitle>
           <VoiceModeButton
@@ -91,8 +93,8 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
         <DialogDescription className="sr-only">
           Dictado para {subject?.name}. Escribí para buscar imágenes y fragmentos de PDF de teoría. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
         </DialogDescription>
-        {subject && <SubjectVoiceImages key={`${subject.id}:${weekNumber ?? "current"}`} subjectId={subject.id} weekNumber={weekNumber} ref={imagesRef} />}
-        <div className="max-h-[20vh] shrink-0 overflow-y-auto" data-subject-voice-canvas>
+        {subject && <SubjectVoiceImages key={`${subject.id}:${weekNumber ?? "current"}`} subjectId={subject.id} weekNumber={weekNumber} ref={imagesRef} onPdfViewing={setPdfViewing} />}
+        <div className={pdfViewing ? "hidden" : "max-h-[20vh] shrink-0 overflow-y-auto"} data-subject-voice-canvas>
           {(voice.transcript || voice.interim) && (
             <p className="max-w-4xl text-lg leading-relaxed whitespace-pre-wrap sm:text-xl">
               {voice.transcript}{voice.transcript && voice.interim ? " " : ""}
@@ -103,7 +105,7 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
         <p className="sr-only" role="status" aria-live="polite">
           {paused ? "Micrófono pausado" : voice.status === "listening" ? "Escuchando" : voice.status === "starting" ? "Activando micrófono" : "Micrófono detenido"}
         </p>
-        {(voice.error || serviceError) && (
+        {!pdfViewing && (voice.error || serviceError) && (
           <p role="status" className="mt-4 shrink-0 text-sm text-neutral-600">{voice.error || serviceError}</p>
         )}
       </DialogContent>

@@ -16,7 +16,19 @@
       if (!file || !file.startsWith(`blob:${location.origin}/`)) throw new Error("No se pudo acceder al PDF temporal.");
       app.eventBus.on("pagesinit", () => { app.pdfViewer.currentScaleValue = "page-width"; });
       app.eventBus.on("documenterror", () => send("subjectPdfError"));
-      app.eventBus.on("pagerendered", event => send(event.error ? "subjectPdfError" : "subjectPdfReady"), { once: true });
+      let positioned = false;
+      app.eventBus.on("pagerendered", async event => {
+        if (positioned) return;
+        positioned = true;
+        if (event.error) { send("subjectPdfError"); return; }
+        try {
+          if (params.get("fragmentRegion")) {
+            const { scrollToFragmentRegion } = await import("./fragment-position.mjs");
+            await scrollToFragmentRegion(app, params.get("fragmentRegion"));
+          }
+          send("subjectPdfReady");
+        } catch { send("subjectPdfError"); }
+      });
       await app.open({ url: file });
     } catch { send("subjectPdfError", { message: "No se pudo mostrar el PDF. Reintentá o comprobá el archivo original." }); }
   };

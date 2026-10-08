@@ -9,3 +9,5 @@ html.pdfjs-embedded-readonly { --toolbar-height: 0px; --sidebar-width: 0px; }
 html.pdfjs-embedded-readonly body,
 html.pdfjs-embedded-readonly #viewerContainer { background: white; }
 html.pdfjs-embedded-readonly .pdfViewer .page { border: 0; margin: 0 auto 12px; }
+/* Leave room to align a statement near the bottom of the final page at the top. */
+html.pdfjs-embedded-readonly .pdfViewer { padding-bottom: calc(100vh - 24px); }

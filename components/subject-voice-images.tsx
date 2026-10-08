@@ -20,7 +20,7 @@ type Target = { groupId: string } | { name: string; color: string }
 const control = "rounded-lg border border-neutral-300 px-4 py-2 text-base hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-black disabled:opacity-50"
 const colorNames = ["Verde", "Azul", "Amarillo", "Rosa", "Violeta", "Naranja"]
 
-export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumber(), ref }: { subjectId: string; weekNumber?: number; ref?: Ref<VoiceImagesHandle> }) {
+export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumber(), ref, onPdfViewing }: { subjectId: string; weekNumber?: number; ref?: Ref<VoiceImagesHandle>; onPdfViewing?: (viewing: boolean) => void }) {
   const [workspace, setWorkspace] = useState<VoiceImageWorkspace | null>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [pending, setPending] = useState<File[] | null>(null)
@@ -61,6 +61,11 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
     item.images.filter(image => !isDiscarded(history, `group:${item.id}`, "image", image.id)).length +
     (item.pdfs ?? []).filter(result => !isDiscarded(history, `group:${item.id}`, "pdf", pdfDiscardId(result))).length
   const formOpen = pending !== null || selection !== null
+  const pdfViewing = Boolean(pdfViewer && workspace && !formOpen)
+  useEffect(() => {
+    onPdfViewing?.(pdfViewing)
+    return () => onPdfViewing?.(false)
+  }, [pdfViewing, onPdfViewing])
 
   useEffect(() => {
     let disposed = false
@@ -337,7 +342,7 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       </div>}
     </>}
     {!manualTopics && busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
-    {!formOpen && canUndo && <button type="button" className="shrink-0 self-end rounded-lg border px-3 py-1 text-sm" disabled={busy} onClick={() => void undo()}>Deshacer</button>}
+    {!pdfViewer && !formOpen && canUndo && <button type="button" className="shrink-0 self-end rounded-lg border px-3 py-1 text-sm" disabled={busy} onClick={() => void undo()}>Deshacer</button>}
     {notice && <div role="status" className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-lg bg-neutral-900 px-4 py-3 text-white" data-discard-notice>
       <span>Borrado</span><button type="button" disabled={busy} className="underline" onClick={() => void undo(notice)}>Deshacer</button>
     </div>}

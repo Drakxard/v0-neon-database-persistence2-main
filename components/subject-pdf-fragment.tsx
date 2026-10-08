@@ -3,13 +3,14 @@
 import { useEffect, useRef, useState } from "react"
 import { createRelatedPdf, PdfSourceError, relatedPdfPages, resolvePdfSource } from "@/lib/client/subject-pdf-pages"
 import { pdfFragmentViewerHref } from "@/lib/client/subject-pdf-viewer"
-import type { PdfSearchResult } from "@/lib/subject-pdf-search"
+import type { PdfRegion, PdfSearchResult } from "@/lib/subject-pdf-search"
+import { embeddedStatementRegion } from "@/lib/subject-pdf-target"
 import { getReadyWorkspaceHandle, loadWorkspaceHandle, requestWorkspacePermission } from "@/lib/local-workspace-client"
 
 export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearchAgain }: {
   result: PdfSearchResult; subjectId: string; onBack: () => void; onUndo: () => void; onSearchAgain: () => void
 }) {
-  const [source, setSource] = useState<{ url: string; originalUrl: string; fileId: string | null } | null>(null)
+  const [source, setSource] = useState<{ url: string; originalUrl: string; fileId: string | null; target: PdfRegion | null } | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(true)
   const [attempt, setAttempt] = useState(0)
@@ -30,7 +31,7 @@ export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearch
       const subset = await createRelatedPdf(original.file, result, controller.signal)
       controller.signal.throwIfAborted()
       const url = URL.createObjectURL(subset.blob), originalUrl = URL.createObjectURL(original.file)
-      urls.push(url, originalUrl); setSource({ url, originalUrl, fileId: original.fileId })
+      urls.push(url, originalUrl); setSource({ url, originalUrl, fileId: original.fileId, target: embeddedStatementRegion(result, subset.pages) })
     })().catch(failure => {
       if (controller.signal.aborted) return
       setError(failure instanceof DOMException && ["NotAllowedError", "SecurityError"].includes(failure.name)
@@ -51,13 +52,13 @@ export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearch
     window.addEventListener("message", receive)
     return () => window.removeEventListener("message", receive)
   }, [onBack, onUndo])
-  const params = source ? new URLSearchParams({ file: "", embeddedReadOnly: "1", embeddedFile: source.url }) : null
-  return <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden pt-4" data-voice-pdf-fragment>
-    <h2 className="shrink-0 text-xl">{result.title}</h2>
+  const params = source ? new URLSearchParams({ file: "", embeddedReadOnly: "1", embeddedFile: source.url,
+    ...(source.target ? { fragmentRegion: JSON.stringify(source.target) } : {}) }) : null
+  return <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-voice-pdf-fragment>
     <a href={source?.fileId ? pdfFragmentViewerHref({ ...result, fileId: source.fileId }) : source ? `${source.originalUrl}#page=${relatedPdfPages(result)[0] ?? 1}` : pdfFragmentViewerHref(result)}
-      target="_blank" rel="noopener noreferrer" className="shrink-0 self-start text-sm underline">Abrir PDF original ↗</a>
-    {loading && <p role="status" className="shrink-0">Abriendo páginas…</p>}
-    {error && <div className="shrink-0"><p role="alert">{error.message}</p>
+      target="_blank" rel="noopener noreferrer" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-20 focus:bg-white focus:p-2 focus:underline">Abrir PDF original ↗</a>
+    {loading && <p role="status" className="absolute left-4 top-4 z-10 rounded bg-white/90 px-3 py-2">Abriendo páginas…</p>}
+    {error && <div className="m-5 mr-24"><p role="alert">{error.message}</p>
       <button type="button" className="mt-2 rounded-lg border px-4 py-2" onClick={() => setAttempt(n => n + 1)}>Reintentar PDF</button>
       {((error instanceof PdfSourceError && error.code === "missing") || selected) && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => input.current?.click()}>Seleccionar PDF original</button>}
       {error instanceof PdfSourceError && error.code === "permission" && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => void authorize()}>Autorizar carpeta</button>}

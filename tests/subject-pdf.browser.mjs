@@ -5,6 +5,8 @@ import { build } from "esbuild"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { chromium } from "@playwright/test"
+import postcss from "postcss"
+import tailwind from "@tailwindcss/postcss"
 
 const require = createRequire(import.meta.url)
 const { PDFDocument, StandardFonts, degrees } = require("../public/vendor/pdf-lib.min.js")
@@ -22,6 +24,7 @@ const bundle = await build({
   stdin: { contents: `
     import React, { createRef } from 'react'; import { createRoot } from 'react-dom/client';
     import { SubjectVoiceImages } from './components/subject-voice-images';
+    import { SubjectVoiceDialog } from './components/subject-voice-dialog';
     import { setReadyWorkspaceHandle } from './lib/local-workspace-client';
     import { prepareTheoryPdfs, searchTheoryPdfs } from './lib/client/subject-pdf-search';
     import { renderPdfFragment } from './lib/client/subject-pdf-crops';
@@ -61,6 +64,7 @@ const bundle = await build({
     const voiceRef = createRef();
     window.pdfEscape = () => voiceRef.current.escape();
     const root = createRoot(document.getElementById('root'));
+    window.showPdfDialog = () => root.render(<SubjectVoiceDialog subject={{id:'algebra',name:'Álgebra'}} weekNumber={7} onClose={()=>{}} />);
     window.changePdfSubject = (subjectId,week=7) => root.render(<SubjectVoiceImages key={subjectId+':'+week} subjectId={subjectId} weekNumber={week} ref={voiceRef} />);
     root.render(<SubjectVoiceImages key="algebra:7" subjectId="algebra" weekNumber={7} ref={voiceRef} />);
   `, resolveDir: process.cwd(), loader: "tsx" },
@@ -188,6 +192,67 @@ async function waitForPdfFrame(page) {
     return app?.pdfDocument && app.pdfViewer.getPageView(0)?.renderingState === 3;
   });
 }
+
+test("PDF a todo el ancho y alto con solo el micrófono superpuesto en escritorio y móvil", async t => {
+  const css=await postcss([tailwind()]).process(await readFile('app/globals.css','utf8'),{from:'app/globals.css'})
+  for (const viewport of [{width:1366,height:768},{width:390,height:844}]) {
+    const page=await setup(t)
+    await page.setViewportSize(viewport)
+    await page.addStyleTag({content:css.css})
+    await page.evaluate(()=>window.showPdfDialog())
+    await page.locator('[data-voice-search]').fill('teorema')
+    await page.locator('[data-voice-pdf-id]').click()
+    await waitForPdfFrame(page)
+    await page.getByText('Abriendo páginas…',{exact:true}).waitFor({state:'hidden'})
+    const bounds=await page.locator('[data-voice-pdf-frame]').boundingBox()
+    assert.ok(Math.abs(bounds.x)<1 && Math.abs(bounds.y)<1,JSON.stringify(bounds))
+    assert.ok(Math.abs(bounds.width-viewport.width)<1 && Math.abs(bounds.height-viewport.height)<1,JSON.stringify(bounds))
+    assert.ok((await page.getByRole('heading',{name:'Álgebra'}).boundingBox()).width<=1)
+    assert.ok((await page.getByRole('link',{name:'Abrir PDF original'}).boundingBox()).width<=1)
+    const mic=page.getByRole('button',{name:/micrófono/})
+    await mic.waitFor()
+    assert.equal(await mic.isVisible(),true)
+    await page.frameLocator('[data-voice-pdf-frame]').locator('body').press('Escape')
+    await page.locator('[data-voice-search]').waitFor()
+    assert.equal(await page.getByRole('heading',{name:'Álgebra'}).isVisible(),true)
+  }
+})
+
+test("el visor no repite el título y abre el enunciado exacto después de otro bloque aceptado", async t => {
+  const page = await setup(t)
+  await page.evaluate(async () => {
+    const result = (await window.searchTheory(await window.prepareTheory(), 'teorema')).results[0]
+    const block = result.candidate.blocks[0]
+    result.candidate.blocks = [
+      {...block,id:'context',text:'EJEMPLO 6',page:2,region:{page:2,rotation:90,x1:0.1,y1:0.1,x2:0.9,y2:0.2}},
+      {...block,id:'statement',page:2,region:{page:2,rotation:90,x1:0.1,y1:0.65,x2:0.9,y2:0.75}},
+    ]
+    result.candidate.anchorIds=['statement'];result.decision.blockIds=['context','statement'];result.decision.partialIds=[]
+    await window.regroup([],{id:'exact',name:'Enunciado',color:'#a5d8ff'},[result])
+  })
+  await page.evaluate(()=>window.changePdfSubject('fisica'))
+  await page.waitForFunction(()=>document.querySelector('[data-voice-search]')?.value==='')
+  await page.evaluate(()=>window.changePdfSubject('algebra'))
+  await page.getByRole('button',{name:'Enunciado, 1 elementos',exact:true}).click()
+  await page.locator('[data-voice-pdf-id]').click()
+  await waitForPdfFrame(page)
+  await page.getByText('Abriendo páginas…',{exact:true}).waitFor({state:'hidden'})
+  assert.equal(await page.locator('[data-voice-pdf-fragment] h2').count(),0)
+  const frame=page.frameLocator('[data-voice-pdf-frame]')
+  const location=await frame.locator('body').evaluate(() => {
+    const app=window.PDFViewerApplication
+    const region=JSON.parse(new URLSearchParams(location.search).get('fragmentRegion'))
+    const view=app.pdfViewer.getPageView(0)
+    const top=view.div.getBoundingClientRect().top + region.y1*view.viewport.height - app.pdfViewer.container.getBoundingClientRect().top
+    return {page:region.page,y:region.y1,top,scroll:app.pdfViewer.container.scrollTop}
+  })
+  assert.equal(location.page,1);assert.equal(location.y,0.65)
+  assert.ok(location.scroll>0)
+  assert.ok(location.top>=0 && location.top<100, `Enunciado a ${location.top}px del borde`)
+  await frame.locator('body').press('Backspace')
+  await page.locator('[data-voice-pdf-frame]').waitFor({state:'hidden'})
+  await page.locator('[data-voice-pdf-id]').waitFor()
+})
 
 test("páginas relacionadas deduplicadas, selección y atajos desde el iframe", async t => {
   const page = await setup(t)
