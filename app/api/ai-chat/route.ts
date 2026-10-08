@@ -1,7 +1,5 @@
 import Groq from 'groq-sdk'
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-
 export async function POST(request: Request) {
   try {
     const { userPrompt, completedContext } = await request.json()
@@ -9,6 +7,8 @@ export async function POST(request: Request) {
     if (!userPrompt?.trim()) {
       return Response.json({ error: 'Empty prompt' }, { status: 400 })
     }
+
+    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
     const fullMessage = completedContext
       ? `${userPrompt}\n\nMaterias completadas hoy:\n${completedContext}`
