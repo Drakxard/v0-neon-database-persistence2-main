@@ -62,11 +62,12 @@ import {
 } from "@/lib/local-workspace-data"
 import { SUBJECT_IDS } from "@/lib/subjects"
 import { getReadyDriveConfigToken, getReadyInscreenConfigToken } from "@/lib/local-workspace-client"
+import { isSubjectVoiceServerRequest } from "@/lib/subject-voice-api"
 
 const INSCREEN_CONFIG_TOKEN_HEADER = "x-inscreen-config-token"
 
-function isProtectedInscreenRequest(pathname: string) {
-  return pathname.startsWith("/api/subject-voice") || pathname === "/api/pdf-translate" || (
+function isProtectedInscreenRequest(pathname: string, method: string) {
+  return isSubjectVoiceServerRequest(pathname, method) || pathname === "/api/pdf-translate" || (
     pathname.startsWith("/api/inscreen/") && !pathname.startsWith("/api/inscreen/config/")
   )
 }
@@ -808,7 +809,7 @@ export function LocalFetchInterceptor() {
       if (url.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") {
         return originalFetch(request)
       }
-      if (isProtectedInscreenRequest(url.pathname)) {
+      if (isProtectedInscreenRequest(url.pathname, request.method)) {
         const configToken = getReadyInscreenConfigToken()
         const headers = new Headers(request.headers)
         if (configToken) headers.set(INSCREEN_CONFIG_TOKEN_HEADER, configToken)

@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server"
 
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS } from "@/lib/subjects"
+import { isSubjectVoiceServerRequest } from "@/lib/subject-voice-api"
 
 export function proxy(request: NextRequest) {
   if (isLocalStorageMode() && request.nextUrl.pathname.startsWith("/api/")) {
@@ -18,6 +19,7 @@ export function proxy(request: NextRequest) {
     if (
       (request.nextUrl.pathname === "/api/pdf-translate" && request.method.toUpperCase() === "POST") ||
       (request.nextUrl.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") ||
+      isSubjectVoiceServerRequest(request.nextUrl.pathname, request.method) ||
       request.nextUrl.pathname.startsWith("/api/inscreen/")
     ) {
       return NextResponse.next()
