@@ -24,6 +24,15 @@ const assets = Promise.all([
     `, resolveDir: process.cwd(), loader: "tsx" },
     bundle: true, write: false, platform: "browser", format: "iife",
     define: { "process.env.NODE_ENV": '"production"' },
+    plugins: [{ name: "empty-theory-workspace", setup(builder) {
+      // This harness covers manually uploaded images; PDF behavior has a dedicated workspace harness.
+      builder.onLoad({ filter: /local-workspace-data\.ts$/ }, () => ({ loader: "ts", contents: `
+        export async function listLocalSubjectMaterialContainers() { return []; }
+        export async function listLocalSubjectWeekNumbersWithContent() { return []; }
+        export async function listLocalSubjectDayMaterials() { return []; }
+        export async function getWorkspaceFile() { throw new Error('No PDFs in this harness'); }
+      ` }));
+    } }],
   }),
   readFile("app/globals.css", "utf8").then((css) => postcss([tailwind()]).process(css, { from: "app/globals.css" })),
 ])

@@ -72,7 +72,7 @@ const CHARACTER_REPLACEMENTS: Record<string, string> = {
 
 let pdfLibPromise: Promise<PdfLibGlobal> | null = null
 
-function loadPdfLib() {
+export function loadPdfLib() {
   if (typeof window === "undefined") {
     return Promise.reject(new Error("La generación del PDF sólo está disponible en el navegador."))
   }

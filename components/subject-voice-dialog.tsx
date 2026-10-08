@@ -88,7 +88,7 @@ export function SubjectVoiceDialog({ subject, onClose }: {
           />
         </div>
         <DialogDescription className="sr-only">
-          Dictado para {subject?.name}. Escribí para buscar imágenes. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
+          Dictado para {subject?.name}. Escribí para buscar imágenes y fragmentos de PDF de teoría. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
         </DialogDescription>
         {subject && <SubjectVoiceImages key={subject.id} subjectId={subject.id} ref={imagesRef} />}
         <div className="max-h-[20vh] shrink-0 overflow-y-auto" data-subject-voice-canvas>

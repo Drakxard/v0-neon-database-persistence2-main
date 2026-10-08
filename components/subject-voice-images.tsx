@@ -4,6 +4,9 @@ import { useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEve
 import { HandDrawnBubble } from "@/components/hand-drawn-bubble"
 import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, saveVoiceImages, validateVoiceImageFiles, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
 import { searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
+import { useSubjectPdfSearch } from "@/hooks/use-subject-pdf-search"
+import { SubjectPdfFragment } from "@/components/subject-pdf-fragment"
+import type { PdfSearchResult } from "@/lib/subject-pdf-search"
 
 export type VoiceImagesHandle = { escape: () => boolean }
 type Target = { groupId: string } | { name: string; color: string }
@@ -16,6 +19,8 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   const [pending, setPending] = useState<File[] | null>(null)
   const [selection, setSelection] = useState<{ images: VoiceImage[]; destinationId: string } | null>(null)
   const [query, setQuery] = useState("")
+  const pdf = useSubjectPdfSearch(subjectId, query)
+  const [pdfViewer, setPdfViewer] = useState<PdfSearchResult | null>(null)
   const [name, setName] = useState("")
   const [color, setColor] = useState<string>(VOICE_IMAGE_COLORS[0])
   const [busy, setBusy] = useState(false)
@@ -39,7 +44,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   useEffect(() => {
     const capture = (event: KeyboardEvent) => {
-      if (!workspace || formOpen || viewer || locked.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.key.length !== 1) return
+      if (!workspace || formOpen || viewer || pdfViewer || locked.current || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.key.length !== 1) return
       if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return
       if (event.key === " " && event.target instanceof Element && event.target.closest("button")) return
       event.preventDefault()
@@ -48,7 +53,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     }
     window.addEventListener("keydown", capture)
     return () => window.removeEventListener("keydown", capture)
-  }, [workspace, formOpen, viewer])
+  }, [workspace, formOpen, viewer, pdfViewer])
 
   async function refresh() {
     setError("")
@@ -68,12 +73,13 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
   useImperativeHandle(ref, () => ({ escape: () => {
     if (locked.current) return true
+    if (pdfViewer) { setPdfViewer(null); focusCanvas(); return true }
     if (viewer) { setViewer(null); focusCanvas(); return true }
     if (formOpen) { cancelForm(); return true }
     if (query.length) { setQuery(""); focusCanvas(); return true }
     if (groupId) { setGroupId(null); focusCanvas(); return true }
     return false
-  } }), [viewer, formOpen, query, groupId])
+  } }), [viewer, pdfViewer, formOpen, query, groupId])
 
   function message(failure: unknown) { return failure instanceof Error ? failure.message : "No se pudo completar la operación." }
 
@@ -95,7 +101,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   }
 
   async function receive(files: File[], targetGroup: string | null) {
-    if (locked.current || !workspace || formOpen || viewer) return
+    if (locked.current || !workspace || formOpen || viewer || pdfViewer) return
     locked.current = true
     setBusy(true)
     setError("")
@@ -124,7 +130,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   }
 
   function newGroup() {
-    if (locked.current || formOpen || viewer) return
+    if (locked.current || formOpen || viewer || pdfViewer) return
     if (!searching) { choose(null); return }
     if (!matches.length) return
     setSelection({ images: matches.map((match) => match.image), destinationId: crypto.randomUUID() })
@@ -206,11 +212,14 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
       <img src={viewer.url} alt={viewer.image.name} className="min-h-0 w-full flex-1 object-contain" onError={() => { setError(`No se pudo mostrar ${viewer.image.name}. Volvé al conjunto e intentá abrirla otra vez.`) }} />
     </div>}
 
-    {workspace && !formOpen && !viewer && <>
+    {workspace && !formOpen && pdfViewer && <SubjectPdfFragment result={pdfViewer} />}
+
+    {workspace && !formOpen && !viewer && !pdfViewer && <>
       {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
-        {searching && matches.length === 0 && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
+        {searching && matches.length === 0 && pdf.results.length === 0 && !pdf.searching && !pdf.progress && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
+        {searching && pdf.week != null && <p className="mb-3 text-center text-sm text-neutral-500">Teoría · Semana {pdf.week}</p>}
         <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
           {searching ? matches.map(({ image, group: source }) => <HandDrawnBubble key={image.id} seed={image.id} color={source.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
             : group ? group.images.map((image) => <HandDrawnBubble key={image.id} seed={image.id} color={group.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
@@ -220,15 +229,27 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
               onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${item.images.length} imágenes`}>
               <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{item.images.length}</span>
             </HandDrawnBubble>)}
+          {searching && pdf.results.map((result) => <HandDrawnBubble key={result.id} seed={result.id} color="#a5d8ff" data-voice-pdf-id={result.id}
+            onClick={() => { setPdfViewer(result); focusCanvas() }}>
+            <span className="block">{result.title}</span>
+            <span className="mt-2 block text-sm">{result.fileName} · p. {result.candidate.blocks.find((b) => result.decision.blockIds.includes(b.id) || result.decision.partialIds.includes(b.id))?.page ?? result.candidate.blocks[0].page}</span>
+          </HandDrawnBubble>)}
         </div>
       </div>}
       <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
         <span aria-hidden="true" />
-        <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes" data-voice-search
+        <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes y PDF" data-voice-search
           autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
         <button type="button" onClick={newGroup} disabled={busy || (searching && matches.length === 0)} aria-label="Nuevo conjunto" title="Nuevo conjunto"
           className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
       </div>
+    </>}
+    {!pdfViewer && !viewer && !formOpen && <>
+      {(pdf.progress || pdf.searching) && <p role="status" className="shrink-0 py-2 text-center text-sm">{pdf.progress || "Filtrando coincidencias en los PDF…"}</p>}
+      {pdf.errors.length > 0 && <div className="max-h-28 shrink-0 overflow-y-auto py-2 text-sm">
+        <p role="alert" className="whitespace-pre-wrap">{pdf.errors.join("\n")}</p>
+        <button type="button" className={control} onClick={pdf.retry} disabled={Boolean(pdf.progress) || pdf.searching}>Reintentar PDF</button>
+      </div>}
     </>}
     {busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
     {error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">

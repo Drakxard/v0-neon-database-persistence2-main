@@ -66,7 +66,7 @@ import { getReadyDriveConfigToken, getReadyInscreenConfigToken } from "@/lib/loc
 const INSCREEN_CONFIG_TOKEN_HEADER = "x-inscreen-config-token"
 
 function isProtectedInscreenRequest(pathname: string) {
-  return pathname === "/api/pdf-translate" || (
+  return pathname.startsWith("/api/subject-voice") || pathname === "/api/pdf-translate" || (
     pathname.startsWith("/api/inscreen/") && !pathname.startsWith("/api/inscreen/config/")
   )
 }

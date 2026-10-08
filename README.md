@@ -28,7 +28,51 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 El botón de micrófono de la esquina superior derecha activa el modo de voz. En ese modo, tocar una esfera abre un lienzo blanco con el nombre de la materia y dictado en español. El micrófono del modal permite pausar o reintentar; `Esc` cierra el modal y detiene la captura. El texto es temporal y se limpia al cerrar. Con el modo apagado, las esferas conservan su apertura habitual.
 
-En el servidor, configurar `cloudflareapi` con un token con permisos de Workers AI y `CLOUDFLARE_ACCOUNT_ID` con el identificador de la cuenta. `/api/subject-voice` informa si están configuradas esas variables sin exponer el token. El adaptador `lib/server/cloudflare-clef.ts` prepara llamadas a `@cf/cloudflare/clef-flash`; esta etapa no envía el dictado al modelo ni ejecuta acciones. Las preguntas, instrucciones y el flujo se definirán después. Clef Flash evalúa decisiones estructuradas; la transcripción se realiza mediante el reconocimiento de voz del navegador.
+En el servidor, configurar `cloudflareapi` con un token con permisos de Workers AI y `CLOUDFLARE_ACCOUNT_ID` con el identificador de la cuenta. `/api/subject-voice` informa si están configuradas esas variables sin exponer el token. Clef Flash filtra las coincidencias de PDF mediante decisiones estructuradas; el dictado sigue siendo temporal y se realiza mediante el reconocimiento de voz del navegador, sin enviarlo a Clef.
+
+### Búsqueda de fragmentos de PDF
+
+Al entrar a una materia en modo de voz se preparan los PDF del contenedor fijo
+Teoría de la semana de mayor número que tenga PDF allí. Escribir busca en todo
+su texto; los fragmentos aparecen junto a las imágenes, únicamente durante la
+búsqueda. Se ignoran mayúsculas y tildes, con singular/plural y `teo`. No hay
+categorías académicas obligatorias ni búsqueda por significado.
+
+Configurar `datalab` en el entorno del servidor con la API key de Datalab.
+`MARKER_API` y `marker_api` siguen funcionando como alternativas; también se
+admite la clave heredada del sobre cifrado de InScreen en `User.Services`.
+No usar variables `NEXT_PUBLIC_` para estas claves. Datalab recibe lotes de hasta
+diez páginas y 3 MiB mediante `/api/v1/convert`, en modo `balanced`, con salida
+`json,markdown`. Una página que supere 3 MiB se informa sin impedir procesar las
+restantes. Los trabajos llevan seguimiento firmado y se retoman al volver a
+entrar; no se mantiene una petición de servidor abierta durante toda la conversión.
+
+Clef valida cada candidato: acepta contenido desarrollado, incluidos ejemplos
+resueltos, y descarta menciones, índices y consignas que solo pidan aplicar lo
+buscado. Luego elige los bloques originales que pertenecen al fragmento; nunca
+genera títulos, texto ni coordenadas. El globo usa el encabezado original o un
+extracto inicial, con archivo y página. Al abrirlo, PDF.js muestra recortes del
+PDF original, separados por bloque y página para conservar fórmulas y columnas.
+Un bloque mixto solicita una extracción adicional de esa página con
+`word_bboxes=true`, y Clef selecciona unidades del texto original. Si no puede
+delimitarse con fiabilidad, el visor informa la limitación y omite ese bloque.
+Este refinamiento puede tener un cargo adicional del proveedor.
+
+La carpeta local guarda extracción, JSON original, trabajos pendientes y filtros
+en `manifests/subject-voice/pdf/`, con verificación de escritura y copias `.backup`.
+El SHA-256 de cada PDF y las versiones de extracción y filtro identifican la
+caché. Repetir una consulta no vuelve a llamar a los servicios; una consulta
+nueva solo necesita evaluar sus candidatos. Un PDF nuevo o reemplazado se
+procesa por separado; retirarlo lo excluye de las búsquedas. La selección se
+actualiza al recuperar el foco o en la comprobación periódica de 30 segundos.
+Una falla de Clef se muestra con reintento y no se interpreta como una búsqueda
+sin resultados. Escape y Backspace conservan la navegación habitual; el `+`
+solo agrupa imágenes manuales, no los fragmentos automáticos.
+
+Verificación: `npm test`, `npm run test:voice`, `npm run test:pdf-search`,
+`npm run typecheck` y `npm run build`. Las pruebas de navegador usan PDF reales
+generados localmente y respuestas simuladas de los servicios; no certifican la
+calidad de OCR o de clasificación de un proveedor sobre apuntes reales.
 
 ### Conjuntos de imágenes en modo de voz
 

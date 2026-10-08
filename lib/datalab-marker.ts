@@ -17,7 +17,7 @@ type FetchLike = typeof fetch
 export class DatalabMarkerError extends Error {}
 
 export function getDatalabMarkerApiKey(env: NodeJS.ProcessEnv = process.env) {
-  return String(getInscreenRuntimeSecret("MARKER_API") || env.MARKER_API || env.marker_api || "").trim()
+  return String(env.datalab || getInscreenRuntimeSecret("MARKER_API") || env.MARKER_API || env.marker_api || "").trim()
 }
 
 function asResponse(value: unknown): DatalabResponse {
