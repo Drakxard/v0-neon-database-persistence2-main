@@ -7,7 +7,7 @@ import { isManualTopicsQuery, searchVoiceImages, voiceGroupDiameter, voiceImageN
 import { getCurrentWeekNumber } from "@/lib/subject-utils"
 import { SubjectWeekTopics, type WeekTopicsHandle } from "@/components/subject-week-topics"
 import { useSubjectPdfSearch } from "@/hooks/use-subject-pdf-search"
-import { SubjectPdfFragment } from "@/components/subject-pdf-fragment"
+import { SubjectPdfViewPool } from "@/components/subject-pdf-view-pool"
 import { SubjectPdfBubble } from "@/components/subject-pdf-bubble"
 import type { PdfSearchResult } from "@/lib/subject-pdf-search"
 import { SubjectImageBubble } from "@/components/subject-image-bubble"
@@ -286,7 +286,7 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       <img src={viewer.url} alt={viewer.image.name} className="min-h-0 w-full flex-1 object-contain" onError={() => { setError(`No se pudo mostrar ${viewer.image.name}. Volvé al conjunto e intentá abrirla otra vez.`) }} />
     </div>}
 
-    {workspace && !formOpen && pdfViewer && <SubjectPdfFragment key={pdfViewer.id} result={pdfViewer} subjectId={subjectId}
+    {workspace && <SubjectPdfViewPool candidates={formOpen || manualTopics ? [] : searching ? visiblePdfs : (group?.pdfs ?? []).filter(result => !isDiscarded(history, scope, "pdf", pdfDiscardId(result)))} active={formOpen ? null : pdfViewer} subjectId={subjectId}
       onBack={() => { setPdfViewer(null); focusCanvas() }} onUndo={() => void undo()}
       onSearchAgain={() => { setPdfViewer(null); pdf.retry(); focusCanvas() }} />}
 

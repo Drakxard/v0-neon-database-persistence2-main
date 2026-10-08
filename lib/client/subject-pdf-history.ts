@@ -12,9 +12,9 @@ const validHistory = (value: History) => typeof value.source === "string" && Boo
   Object.values(value.queries).every(results => Array.isArray(results) && results.every(result => Boolean(result) && typeof result.query === "string" &&
     Array.isArray(result.candidate?.blocks) && Array.isArray(result.candidate?.anchorIds) && Array.isArray(result.decision?.blockIds) && Array.isArray(result.decision?.partialIds)))
 export type SavedPdfSearch = { query: string; results: PdfSearchResult[]; complete: boolean }
-const pathFor = (file: PreparedPdf) => {
+const pathFor = (file: PreparedPdf, version = PDF_FILTER_VERSION) => {
   const subject = encodeURIComponent(file.material.subject_id).replace(/\./g, "%2E")
-  return `manifests/subject-voice/search-history/${subject}/${file.material.week_number}/${file.material.container_id}/${PDF_EXTRACTION_VERSION}/${file.hash}/${PDF_FILTER_VERSION}/search-history-v2.json`
+  return `manifests/subject-voice/search-history/${subject}/${file.material.week_number}/${file.material.container_id}/${PDF_EXTRACTION_VERSION}/${file.hash}/${version}/search-history-v2.json`
 }
 const sourceFor = (file: PreparedPdf) => pdfHash(new File([JSON.stringify(file.blocks)], "source.txt"))
 
@@ -33,8 +33,13 @@ export async function loadSavedPdfSearches(theory: PreparedTheory, signal: Abort
   const restored = (theory.files.length ? await loadDiscardHistory(theory.files[0].material.subject_id) : []).filter(entry => entry.legacy && entry.undone && entry.result)
   for (const file of theory.files) {
     signal.throwIfAborted()
-    const history = await readPdfCache<History>(root, pathFor(file), { valid: validHistory })
-    const previous = history?.source === await sourceFor(file) ? history.queries : {}
+    const modern = await readPdfCache<History>(root, pathFor(file), { valid: validHistory })
+    let legacy: History | null = null
+    try { legacy = await readPdfCache<History>(root, pathFor(file, "clef-fragments-v1"), { valid: validHistory }) }
+    catch (error) { if (!modern) throw error }
+    const source = await sourceFor(file)
+    const modernQueries = modern?.source === source ? modern.queries : {}
+    const previous = { ...(legacy?.source === source ? legacy.queries : {}), ...modernQueries }
     const current: Record<string, PdfSearchResult[]> = Object.fromEntries(Object.entries(previous).map(([query, results]) => [query, [...results]]))
     for (const entry of restored) {
       const result = entry.result!
@@ -43,12 +48,14 @@ export async function loadSavedPdfSearches(theory: PreparedTheory, signal: Abort
       if (!results.some(item => item.candidate.id === result.candidate.id)) results.push(result)
     }
     for (const [query, results] of Object.entries(current)) {
+      const fromLegacy = !Object.hasOwn(modernQueries, query)
+      if (fromLegacy && !results.length) continue
       const saved = queries.get(query) ?? {results:[],files:0}
       saved.files++
       for (const original of results) {
         signal.throwIfAborted()
         // Metadata and scope always come from the current selection, even for identical PDF bytes.
-        const result = {...original, id:`${file.material.id}:${file.hash}:${original.candidate.id}`,
+        const result = {...original, ...(fromLegacy ? { decision: { ...original.decision, blockIds: original.candidate.blocks.map(block => block.id), partialIds: [] } } : {}), id:`${file.material.id}:${file.hash}:${original.candidate.id}`,
           fileId:file.material.drive_file_id, fileName:file.material.file_name, week:theory.week!}
         if (!(await readPdfCorrection(result)).hidden || !await importLegacyPdfDiscard(file.material.subject_id, result)) saved.results.push(result)
       }

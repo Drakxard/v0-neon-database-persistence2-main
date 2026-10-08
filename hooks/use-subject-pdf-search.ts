@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { latestTheoryMaterials, prepareTheoryPdfs, searchTheoryPdfs, theoryScopeSignature, type PreparedTheory, type PdfPreparationProgress } from "@/lib/client/subject-pdf-search"
-import { normalizePdfQuery, type PdfSearchResult } from "@/lib/subject-pdf-search"
+import { completePdfQuery, normalizePdfQuery, type PdfSearchResult } from "@/lib/subject-pdf-search"
 import { findSavedPdfSearch, loadSavedPdfSearches, type SavedPdfSearch } from "@/lib/client/subject-pdf-history"
 import { isManualTopicsQuery } from "@/lib/subject-voice-search"
 
@@ -62,7 +62,8 @@ export function useSubjectPdfSearch(subjectId: string, query: string) {
     setResults([]); setSearchErrors([])
     if (!query.trim() || !theory || isManualTopicsQuery(query)) { setSearching(false); return () => controller.abort() }
     const visible = (items: PdfSearchResult[]) => items.filter((item) => !dismissed.current.has(`${item.query}:${item.id}`))
-    const saved = findSavedPdfSearch(history.current, query)
+    const searchQuery = completePdfQuery(theory.files.flatMap(file => file.blocks), query)
+    const saved = findSavedPdfSearch(history.current, searchQuery)
     if (saved) {
       setResults(visible(saved.results))
       // A prefix previews previously filtered content; it does not send a partial word to Clef.
@@ -70,10 +71,10 @@ export function useSubjectPdfSearch(subjectId: string, query: string) {
     }
     setSearching(true)
     const timer = window.setTimeout(() => {
-      void searchTheoryPdfs(theory, query, signal, (next) => { if (!signal.aborted) setResults(visible(next)) })
+      void searchTheoryPdfs(theory, searchQuery, signal, (next) => { if (!signal.aborted) setResults(visible(next)) })
         .then((next) => { if (!signal.aborted) {
           if (!next.errors.length) {
-            const normalized = normalizePdfQuery(query)
+            const normalized = normalizePdfQuery(searchQuery)
             history.current = [...history.current.filter((item) => item.query !== normalized), {query:normalized,results:next.results,complete:true}]
           }
           setResults(visible(next.results)); setSearchErrors(next.errors); setSearching(false)

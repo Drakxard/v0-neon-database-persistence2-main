@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { buildPdfCandidates, chosenClefOption, htmlToPdfText, normalizePdfQuery, normalizedPdfRegion, parsePdfExtraction, pdfEvaluationCacheKey, pdfResultTitle, pdfTextMatches, type PdfCandidate } from "../lib/subject-pdf-search.ts"
+import { buildPdfCandidates, completePdfQuery, chosenClefOption, htmlToPdfText, normalizePdfQuery, normalizedPdfRegion, parsePdfExtraction, pdfEvaluationCacheKey, pdfResultTitle, pdfTextMatches, type PdfCandidate } from "../lib/subject-pdf-search.ts"
 import { evaluatePdfCandidate } from "../lib/server/subject-pdf-clef.ts"
 import { evaluatePdfWordUnits } from "../lib/server/subject-pdf-words.ts"
 import { pollDatalabFragments, signDatalabJob, submitDatalabFragments, verifyDatalabJob } from "../lib/server/datalab-fragments.ts"
@@ -78,16 +78,26 @@ test("Clef valida los candidatos y selecciona exclusivamente IDs del original", 
   const decision = await evaluatePdfCandidate("teorema", candidate, async (state, questions) => {
     calls++
     if (calls === 1) {
+      assert.deepEqual(Object.keys(questions), ["relevance"])
+      assert.deepEqual((state as { coincidencias: string[] }).coincidencias, candidate.anchorIds)
       assert.match(questions.relevance.instructions, /sin exigir una categoría/)
       return { answers: { relevance: { choice: "contenido_desarrollado" } } }
     }
     assert.deepEqual((state as { coincidencias: string[] }).coincidencias, candidate.anchorIds)
     return { answers: Object.fromEntries(candidate.blocks.map((b, i) => [`b${i}`, { choice: i === 2 ? "excluir" : "incluir" }])) }
   })
-  assert.equal(calls, 2)
+  assert.equal(calls, 1)
   assert.equal(decision.accepted, true)
-  assert.deepEqual(decision.blockIds, candidate.blocks.slice(0, 2).map((b) => b.id))
+  assert.deepEqual(decision.blockIds, candidate.blocks.map((b) => b.id))
   assert.equal(pdfResultTitle(candidate, decision), candidate.title)
+})
+
+test("completa DEFINICI desde el PDF sin alterar palabras completas ni prefijos ambiguos", () => {
+  const blocks = [{text:"Definición y definiciones. Teorema y teoremas. Transformada y transformación."}] as Parameters<typeof completePdfQuery>[0]
+  assert.equal(completePdfQuery(blocks,"DEFINICI"),"definicion")
+  assert.equal(completePdfQuery(blocks,"teore"),"teorema")
+  assert.equal(completePdfQuery(blocks,"transform"),"transform")
+  assert.equal(completePdfQuery(blocks,"definicion"),"definicion")
 })
 test("menciones, índices y consignas son rechazados; fallas no se presentan como rechazo", async () => {
   const candidate = buildPdfCandidates(parsePdfExtraction(payload(), [1, 2]).blocks, "teorema").at(-1)!
@@ -106,7 +116,8 @@ test("detecta bloques mixtos y refina unidades sin generar texto", async () => {
     calls++
     return { answers: Object.fromEntries(Object.keys(questions).map((id) => [id, { choice: calls === 1 ? "contenido_desarrollado" : "parcial" }])) }
   })
-  assert.deepEqual(decision.partialIds, candidate.blocks.map((b) => b.id))
+  assert.deepEqual(decision.partialIds, [])
+  assert.equal(calls, 1)
   const units = [{ id: "u0", text: "Enunciado.", regions: [] }, { id: "u1", text: "Ejercicio.", regions: [] }]
   const refined = await evaluatePdfWordUnits("teorema", candidate.title, units, async () => ({ answers: { u0: { choice: "incluir" }, u1: { choice: "excluir" } } }))
   assert.deepEqual(refined, { ids: ["u0"], uncertain: false })

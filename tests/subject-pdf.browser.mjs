@@ -178,7 +178,7 @@ async function setup(t, { holdPoll = false } = {}) {
       return Response.json({})
     }
   }, { bytes: pdfBytes, holdPoll })
-  await page.addStyleTag({content:'html,body,#root{height:100%;margin:0} [data-subject-voice-images]{display:flex;flex-direction:column;height:100%} [data-voice-pdf-fragment]{display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden} [data-voice-pdf-frame]{flex:1;min-height:0;width:100%;border:0}'});
+  await page.addStyleTag({content:'html,body,#root{height:100%;margin:0} [data-subject-voice-images]{display:flex;flex-direction:column;height:100%} [data-pdf-view]{display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden} [data-pdf-view-frame]{flex:1;min-height:0;width:100%;border:0}'});
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
   await page.waitForFunction(() => window.prepareTheory)
   await page.waitForFunction(() => window.workspaceFiles.size > 0)
@@ -192,6 +192,68 @@ async function waitForPdfFrame(page) {
     return app?.pdfDocument && app.pdfViewer.getPageView(0)?.renderingState === 3;
   });
 }
+
+test("los globos abren un iframe ya renderizado y ubicado, y lo reutilizan al volver", async t => {
+  const page=await setup(t)
+  const search=page.locator('[data-voice-search]')
+  await search.fill('derivada')
+  await page.waitForFunction(()=>document.querySelectorAll('[data-voice-pdf-id]').length===2)
+  await page.waitForFunction(()=>document.querySelectorAll('[data-pdf-preloaded] iframe[data-pdf-ready="true"]').length===2)
+  await page.evaluate(()=>{
+    const id=document.querySelector('[data-voice-pdf-id]').getAttribute('data-voice-pdf-id')
+    window.preparedFrame=[...document.querySelectorAll('[data-pdf-preloaded]')].find(node=>node.getAttribute('data-pdf-preloaded')===id).querySelector('iframe')
+    window.subsetLoads=0
+    const load=window.PDFLib.PDFDocument.load
+    window.PDFLib.PDFDocument.load=(...args)=>{window.subsetLoads++;return load(...args)}
+  })
+  await page.locator('[data-voice-pdf-id]').first().click()
+  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-frame]')===window.preparedFrame),true)
+  assert.equal(await page.locator('[data-voice-pdf-frame]').getAttribute('data-pdf-ready'),'true')
+  assert.equal(await page.getByText('Abriendo páginas…',{exact:true}).count(),0)
+  await page.frameLocator('[data-voice-pdf-frame]').locator('body').evaluate(()=>{window.PDFViewerApplication.pdfViewer.container.scrollTop=300})
+  await page.frameLocator('[data-voice-pdf-frame]').locator('body').press('Backspace')
+  await search.waitFor()
+  await page.waitForFunction(()=>window.preparedFrame.getAttribute('data-pdf-ready')==='true')
+  await page.locator('[data-voice-pdf-id]').first().click()
+  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-frame]')===window.preparedFrame),true)
+  assert.equal(await page.evaluate(()=>window.subsetLoads),0)
+  const scroll=await page.frameLocator('[data-voice-pdf-frame]').locator('body').evaluate(()=>window.PDFViewerApplication.pdfViewer.container.scrollTop)
+  assert.ok(scroll<150,`Se conservó el scroll manual de ${scroll}px`)
+})
+
+test("DEFINICI encuentra el término completo y el historial anterior se adapta a páginas", async t => {
+  const page=await setup(t)
+  await page.locator('[data-voice-search]').fill('teorem')
+  await page.locator('[data-voice-pdf-id]').waitFor()
+  const calls=await page.evaluate(()=>window.pdfRequests.length)
+  await page.locator('[data-voice-search]').fill('teorema')
+  await page.locator('[data-voice-pdf-id]').waitFor()
+  assert.equal(await page.evaluate(()=>window.pdfRequests.length),calls)
+  const recovered=await page.evaluate(async()=>{
+    const theory=await window.prepareTheory()
+    const key=[...window.workspaceFiles.keys()].find(key=>key.includes('/clef-pages-v1/') && key.endsWith('search-history-v2.json'))
+    const saved=JSON.parse(await window.workspaceFiles.get(key).text())
+    for(const results of Object.values(saved.queries)) for(const result of results) {result.decision.blockIds=[result.candidate.blocks[0].id];result.decision.partialIds=[]}
+    window.workspaceFiles.set(key.replace('/clef-pages-v1/','/clef-fragments-v1/'),new Blob([JSON.stringify(saved)]))
+    window.workspaceFiles.delete(key)
+    const search=await window.savedSearch(theory,'teorem')
+    return {blocks:search.results[0].decision.blockIds.length,total:search.results[0].candidate.blocks.length}
+  })
+  assert.equal(recovered.blocks,recovered.total)
+  await page.evaluate(()=>{
+    window.fixturePayload=JSON.parse(JSON.stringify(window.fixturePayload).replaceAll('TEOREMA','DEFINICIÓN'))
+    const file=window.pdfFiles.get('pdf-1')
+    window.pdfFiles.set('pdf-definitions',new File([file,'\n%definitions'],'definiciones.pdf',{type:'application/pdf'}))
+    window.materials=[window.makeMaterial(12,7,1,'pdf-definitions')]
+    window.changePdfSubject('fisica')
+  })
+  await page.waitForFunction(()=>document.querySelector('[data-voice-search]')?.value==='')
+  await page.evaluate(()=>window.changePdfSubject('algebra'))
+  await page.locator('[data-voice-search]').fill('DEFINICI')
+  await page.locator('[data-voice-pdf-id]').waitFor()
+  assert.match(await page.locator('[data-voice-pdf-id]').innerText(),/DEFINICIÓN/)
+  assert.equal(await page.locator('[data-voice-search]').inputValue(),'DEFINICI')
+})
 
 test("PDF a todo el ancho y alto con solo el micrófono superpuesto en escritorio y móvil", async t => {
   const css=await postcss([tailwind()]).process(await readFile('app/globals.css','utf8'),{from:'app/globals.css'})

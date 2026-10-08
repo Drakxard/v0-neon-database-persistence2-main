@@ -7,8 +7,8 @@ import type { PdfRegion, PdfSearchResult } from "@/lib/subject-pdf-search"
 import { embeddedStatementRegion } from "@/lib/subject-pdf-target"
 import { getReadyWorkspaceHandle, loadWorkspaceHandle, requestWorkspacePermission } from "@/lib/local-workspace-client"
 
-export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearchAgain }: {
-  result: PdfSearchResult; subjectId: string; onBack: () => void; onUndo: () => void; onSearchAgain: () => void
+export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearchAgain, active = true }: {
+  result: PdfSearchResult; subjectId: string; onBack: () => void; onUndo: () => void; onSearchAgain: () => void; active?: boolean
 }) {
   const [source, setSource] = useState<{ url: string; originalUrl: string; fileId: string | null; target: PdfRegion | null } | null>(null)
   const [error, setError] = useState<Error | null>(null)
@@ -16,6 +16,15 @@ export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearch
   const [attempt, setAttempt] = useState(0)
   const [selected, setSelected] = useState<File | undefined>()
   const iframe = useRef<HTMLIFrameElement>(null), input = useRef<HTMLInputElement>(null)
+  const wasActive = useRef(active)
+  useEffect(() => {
+    if (wasActive.current && !active && !loading && iframe.current?.contentWindow) {
+      setLoading(true)
+      iframe.current.contentWindow.postMessage({ type: "subjectPdfReposition" }, window.location.origin)
+    }
+    wasActive.current = active
+  }, [active])
+  useEffect(() => { if (active && !loading) iframe.current?.contentWindow?.focus() }, [active, loading])
   async function authorize() {
     try {
       const root = getReadyWorkspaceHandle() ?? await loadWorkspaceHandle()
@@ -47,25 +56,25 @@ export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearch
       if (event.origin !== window.location.origin || event.source !== iframe.current?.contentWindow || !event.data) return
       if (event.data.type === "subjectPdfReady") setLoading(false)
       if (event.data.type === "subjectPdfError") { setLoading(false); setError(new Error("No se pudo mostrar el PDF. Reintentá o comprobá el archivo original.")) }
-      if (event.data.type === "subjectPdfKey") { if (event.data.key === "undo") onUndo(); else if (event.data.key === "back") onBack() }
+      if (active && event.data.type === "subjectPdfKey") { if (event.data.key === "undo") onUndo(); else if (event.data.key === "back") onBack() }
     }
     window.addEventListener("message", receive)
     return () => window.removeEventListener("message", receive)
-  }, [onBack, onUndo])
+  }, [onBack, onUndo, active])
   const params = source ? new URLSearchParams({ file: "", embeddedReadOnly: "1", embeddedFile: source.url,
     ...(source.target ? { fragmentRegion: JSON.stringify(source.target) } : {}) }) : null
-  return <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-voice-pdf-fragment>
+  return <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden" data-pdf-view data-voice-pdf-fragment={active ? "" : undefined}>
     <a href={source?.fileId ? pdfFragmentViewerHref({ ...result, fileId: source.fileId }) : source ? `${source.originalUrl}#page=${relatedPdfPages(result)[0] ?? 1}` : pdfFragmentViewerHref(result)}
       target="_blank" rel="noopener noreferrer" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-20 focus:bg-white focus:p-2 focus:underline">Abrir PDF original ↗</a>
-    {loading && <p role="status" className="absolute left-4 top-4 z-10 rounded bg-white/90 px-3 py-2">Abriendo páginas…</p>}
-    {error && <div className="m-5 mr-24"><p role="alert">{error.message}</p>
+    {active && loading && <p role="status" className="absolute left-4 top-4 z-10 rounded bg-white/90 px-3 py-2">Abriendo páginas…</p>}
+    {active && error && <div className="m-5 mr-24"><p role="alert">{error.message}</p>
       <button type="button" className="mt-2 rounded-lg border px-4 py-2" onClick={() => setAttempt(n => n + 1)}>Reintentar PDF</button>
       {((error instanceof PdfSourceError && error.code === "missing") || selected) && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => input.current?.click()}>Seleccionar PDF original</button>}
       {error instanceof PdfSourceError && error.code === "permission" && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => void authorize()}>Autorizar carpeta</button>}
       {error instanceof PdfSourceError && ["changed", "invalid"].includes(error.code) && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={onSearchAgain}>Volver a buscar</button>}
     </div>}
     <input ref={input} type="file" accept="application/pdf,.pdf" className="hidden" aria-label="Seleccionar PDF original" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) setSelected(file) }} />
-    {params && !error && <iframe key={source!.url} ref={iframe} title={`Páginas de ${result.title}`} data-voice-pdf-frame
-      src={`/pdfjs/web/viewer.html?${params}#zoom=page-width`} className="min-h-0 w-full flex-1 border-0" />}
+    {params && !error && <iframe key={source!.url} ref={iframe} title={`Páginas de ${result.title}`} data-pdf-view-frame data-voice-pdf-frame={active ? "" : undefined} data-pdf-ready={!loading ? "true" : undefined}
+      style={{ opacity: loading ? 0 : 1 }} src={`/pdfjs/web/viewer.html?${params}#zoom=page-width`} className="min-h-0 w-full flex-1 border-0" />}
   </div>
 }

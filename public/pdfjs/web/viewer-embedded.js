@@ -16,17 +16,37 @@
       if (!file || !file.startsWith(`blob:${location.origin}/`)) throw new Error("No se pudo acceder al PDF temporal.");
       app.eventBus.on("pagesinit", () => { app.pdfViewer.currentScaleValue = "page-width"; });
       app.eventBus.on("documenterror", () => send("subjectPdfError"));
+      const position = async () => {
+        const serialized = params.get("fragmentRegion");
+        if (serialized) {
+          const { scrollToFragmentRegion } = await import("./fragment-position.mjs");
+          await scrollToFragmentRegion(app, serialized);
+        } else app.pdfViewer.scrollPageIntoView({ pageNumber: 1 });
+        const targetPage = serialized ? JSON.parse(serialized).page : 1;
+        app.pdfViewer.update();
+        if (app.pdfViewer.getPageView(targetPage - 1)?.renderingState !== 3) await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => { app.eventBus.off("pagerendered", rendered); reject(new Error("Render timeout")); }, 15000);
+          const rendered = event => {
+            if (event.pageNumber !== targetPage) return;
+            clearTimeout(timer); app.eventBus.off("pagerendered", rendered);
+            if (event.error) reject(event.error); else resolve();
+          };
+          app.eventBus.on("pagerendered", rendered);
+        });
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        send("subjectPdfReady");
+      };
+      window.addEventListener("message", event => {
+        if (event.origin !== location.origin || event.source !== parent || event.data?.type !== "subjectPdfReposition") return;
+        void position().catch(() => send("subjectPdfError"));
+      });
       let positioned = false;
       app.eventBus.on("pagerendered", async event => {
         if (positioned) return;
         positioned = true;
         if (event.error) { send("subjectPdfError"); return; }
         try {
-          if (params.get("fragmentRegion")) {
-            const { scrollToFragmentRegion } = await import("./fragment-position.mjs");
-            await scrollToFragmentRegion(app, params.get("fragmentRegion"));
-          }
-          send("subjectPdfReady");
+          await position();
         } catch { send("subjectPdfError"); }
       });
       await app.open({ url: file });

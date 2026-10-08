@@ -1,6 +1,6 @@
 // Shared, deterministic document/search logic. No provider credentials or browser state.
 export const PDF_EXTRACTION_VERSION = "datalab-balanced-json-v1"
-export const PDF_FILTER_VERSION = "clef-fragments-v1"
+export const PDF_FILTER_VERSION = "clef-pages-v1"
 export const PDF_BATCH_BYTES = 3 * 1024 * 1024
 export const PDF_BATCH_PAGES = 10
 
@@ -21,6 +21,18 @@ export type PdfSearchResult = {
 export function normalizePdfQuery(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
     .match(/[\p{L}\p{N}]+(?:\.[\p{N}]+)*/gu)?.map((word) => word === "teo" ? "teorema" : word === "def" ? "definicion" : word).join(" ") ?? ""
+}
+// Complete a final word only when the document vocabulary makes it unambiguous.
+export function completePdfQuery(blocks: PdfBlock[], query: string) {
+  const normalized = normalizePdfQuery(query), words = normalized.split(" ")
+  const last = words.at(-1) ?? ""
+  if (last.length < 3) return normalized
+  const vocabulary = new Set(blocks.flatMap(block => normalizePdfQuery(block.text).split(" ")))
+  if (vocabulary.has(last)) return normalized
+  const options = [...vocabulary].filter(word => word.startsWith(last))
+  const singulars = options.filter(word => !options.some(other => other !== word && (word === other + "s" || word === other + "es")))
+  if (singulars.length === 1) { words[words.length - 1] = singulars[0]; return words.join(" ") }
+  return normalized
 }
 function variants(word: string) {
   return [word, ...(word.length > 3 && word.endsWith("s") ? [word.slice(0, -1)] : []),
