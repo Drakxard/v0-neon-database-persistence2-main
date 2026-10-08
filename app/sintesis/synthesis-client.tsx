@@ -307,7 +307,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     const document = ensureSynthesisDocument(documentInput, () => {
       if (firstGeneratedId) { firstGeneratedId = false; return session.normalizationId }
       return createSynthesisId()
-    }, !session.nodeId)
+    })
     const completeDocument = session.nodeId ? replaceSynthesisBranch(session.baseDocument, session.nodeId, document) : document
     const previousImageIds = new Set(referencedLocalImageIds(workspaceRef.current.document))
     const nextImageIds = new Set(referencedLocalImageIds(completeDocument))

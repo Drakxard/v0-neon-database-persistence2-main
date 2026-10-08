@@ -10,6 +10,8 @@ test("pega NotebookLM con listas, marcas y fórmulas; guarda, reabre y deshace",
     import { SynthesisMath } from './components/synthesis/math-extension';
     import { CleanReferencePaste } from './components/synthesis/clean-reference-paste';
     import { normalizeSynthesisMath } from './lib/synthesis-math';
+    import { deriveSynthesisNodes, normalizeSynthesisWorkspace } from './lib/synthesis-workspace';
+    window.synthesisNodes = document => deriveSynthesisNodes(normalizeSynthesisWorkspace({document}).document);
     window.openEditor = content => {
       window.mathEditor?.destroy();
       window.mathEditor = new Editor({element:document.querySelector('#editor'),extensions:[StarterKit,SynthesisMath,CleanReferencePaste],content:normalizeSynthesisMath(content)});
@@ -38,4 +40,17 @@ test("pega NotebookLM con listas, marcas y fórmulas; guarda, reabre y deshace",
   await page.evaluate(content => window.openEditor(content),saved)
   assert.equal(await page.locator('[data-synthesis-math] .katex').count(),4)
   assert.deepEqual(await page.evaluate(() => window.mathEditor.getJSON()),saved)
+  await page.evaluate(() => {
+    window.openEditor({type:'doc',content:[{type:'paragraph'}]})
+    const clipboard = new DataTransfer()
+    clipboard.setData('text/html', '<h1>Delimitador pegado</h1><p>Contenido</p><h3>Subtítulo</h3>')
+    window.mathEditor.commands.focus()
+    window.mathEditor.view.dom.dispatchEvent(new ClipboardEvent('paste',{clipboardData:clipboard,bubbles:true,cancelable:true}))
+  })
+  assert.equal(await page.locator('#editor h1').count(), 0)
+  assert.equal(await page.locator('#editor h3').count(), 2)
+  const pasted = await page.evaluate(() => window.mathEditor.getJSON())
+  assert.deepEqual(await page.evaluate(document => window.synthesisNodes(document), pasted), [])
+  await page.evaluate(() => window.mathEditor.commands.setTextSelection(1) && window.mathEditor.commands.setHeading({level:1}))
+  assert.equal(await page.evaluate(() => window.synthesisNodes(window.mathEditor.getJSON()).length), 1)
 })

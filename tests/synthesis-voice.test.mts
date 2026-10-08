@@ -99,7 +99,7 @@ test("identifica la última edición real incluso desde el editor completo", () 
   const before = { type: "doc", content: [
     { type: "heading", attrs: { level: 1, synthesisId: "first" }, content: [{ type: "text", text: "Primero" }] },
     { type: "paragraph", content: [{ type: "text", text: "Inicial" }] },
-    { type: "heading", attrs: { level: 2, synthesisId: "second" }, content: [{ type: "text", text: "Segundo" }] },
+    { type: "heading", attrs: { level: 1, synthesisId: "second" }, content: [{ type: "text", text: "Segundo" }] },
     { type: "paragraph", content: [{ type: "text", text: "Sin cambio" }] },
   ] }
   const after = structuredClone(before)
@@ -110,6 +110,11 @@ test("identifica la última edición real incluso desde el editor completo", () 
   assert.equal(normalized.lastEditedNodeId, "second")
   assert.equal(normalizeSynthesisWorkspace({ ...normalized, lastEditedNodeId: "deleted" }).lastEditedNodeId, undefined)
   assert.equal(removeSynthesisNode(normalized, "second").lastEditedNodeId, undefined)
+  const subtitleBefore = structuredClone(before)
+  const subtitleAfter = structuredClone(after)
+  subtitleBefore.content[2].attrs!.level = 2
+  subtitleAfter.content[2].attrs!.level = 2
+  assert.equal(findEditedSynthesisNode(subtitleBefore, subtitleAfter), "first")
 })
 
 test("la clave del Gateway queda en la ruta de servidor y el modo local la deja pasar", () => {

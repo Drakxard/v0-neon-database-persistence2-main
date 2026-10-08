@@ -175,7 +175,7 @@ test("v2 representa una Síntesis vacía con un párrafo editable sin crear nodo
   assert.deepEqual(normalizedWorkspace.document, emptyDocument)
 })
 
-test("v2 deriva nodos por encabezados y conserva las listas como contenido", () => {
+test("v2 solo deriva objetos H1 y conserva H2, H3 y listas como contenido", () => {
   const document = ensureSynthesisDocument({ type: "doc", content: [
     { type: "heading", attrs: { level: 1, synthesisId: "h1" }, content: [{ type: "text", text: "Tema" }] },
     { type: "paragraph", content: [{ type: "text", marks: [{ type: "bold" }], text: "Introducción" }] },
@@ -189,10 +189,10 @@ test("v2 deriva nodos por encabezados y conserva las listas como contenido", () 
   ] }, () => "unused")
   const nodes = deriveSynthesisNodes(document)
   assert.deepEqual(nodes.map(({ id, parentId }) => [id, parentId]), [
-    ["h1", null], ["h2", "h1"], ["h3", "h2"],
+    ["h1", null],
   ])
   assert.equal(nodes[0].body[0].content?.[0].marks?.[0].type, "bold")
-  assert.deepEqual(nodes[2].body, [document.content![4]])
+  assert.deepEqual(nodes[0].body, document.content!.slice(1))
 })
 
 test("v2 normaliza contenido huérfano y conserva IDs, posiciones y formato", () => {
@@ -201,9 +201,9 @@ test("v2 normaliza contenido huérfano y conserva IDs, posiciones y formato", ()
     { type: "paragraph", content: [{ type: "text", marks: [{ type: "italic" }], text: "Antes del título" }] },
     { type: "heading", attrs: { level: 1, synthesisId: "tema" }, content: [{ type: "text", text: "Tema" }] },
   ] }, () => `auto-${++sequence}`)
-  assert.equal(document.content?.[0].type, "heading")
-  assert.equal(document.content?.[0].content?.[0].text, "Sin título")
-  assert.equal(document.content?.[0].attrs?.synthesisId, "auto-1")
+  assert.equal(document.content?.[0].type, "paragraph")
+  assert.equal(sequence, 0)
+  assert.deepEqual(deriveSynthesisNodes(document).map((node) => node.id), ["tema"])
   const workspace = normalizeSynthesisWorkspace({ version: 2, document, layout: { tema: { x: .8, y: .7, scale: 1.2 } } })
   assert.deepEqual(workspace.layout.tema, { x: .8, y: .7, scale: 1.2 })
   assert.equal(JSON.stringify(workspace.document).includes("italic"), true)
@@ -224,22 +224,20 @@ test("v2 extrae y reintegra una rama sin inferir identidad por texto", () => {
   assert.equal(derived[1].id, "b")
 })
 
-test("v2 reintegra una rama H2 sin crear un H1 Sin título ni promoverla", () => {
+test("v2 reintegra subtítulos sin crear un H1 Sin título ni promoverlos", () => {
   const document = ensureSynthesisDocument({ type: "doc", content: [
     { type: "heading", attrs: { level: 1, synthesisId: "parent" }, content: [{ type: "text", text: "Padre" }] },
     { type: "heading", attrs: { level: 2, synthesisId: "edited" }, content: [{ type: "text", text: "Editado" }] },
     { type: "paragraph", content: [{ type: "text", text: "Contenido" }] },
     { type: "heading", attrs: { level: 2, synthesisId: "sibling" }, content: [{ type: "text", text: "Hermano" }] },
   ] })
-  const branch = extractSynthesisBranchDocument(document, "edited")
-  const editorUpdate = ensureSynthesisDocument(branch, () => "generated", false)
-  const replaced = replaceSynthesisBranch(document, "edited", editorUpdate)
+  const branch = extractSynthesisBranchDocument(document, "parent")
+  const editorUpdate = ensureSynthesisDocument(branch, () => "generated")
+  const replaced = replaceSynthesisBranch(document, "parent", editorUpdate)
 
   assert.equal(JSON.stringify(replaced).includes("Sin título"), false)
   assert.deepEqual(deriveSynthesisNodes(replaced).map(({ id, parentId, level }) => [id, parentId, level]), [
     ["parent", null, 1],
-    ["edited", "parent", 2],
-    ["sibling", "parent", 2],
   ])
 })
 
@@ -250,4 +248,16 @@ test("v2 guarda imágenes como IDs locales y usa una clave R2 nueva y aislada", 
   const second = parseSynthesisContext("materia-custom", 24)
   assert.match(buildSynthesisWorkspaceObjectKey(first), /semana-23\/synthesis-v2\.json$/)
   assert.notEqual(buildSynthesisWorkspaceObjectKey(first), buildSynthesisWorkspaceObjectKey(second))
+})
+
+test("contenido sin delimitadores H1 no crea objetos al normalizar ni recargar", () => {
+  const document = { type: "doc", content: [
+    { type: "heading", attrs: { level: 3 }, content: [{ type: "text", text: "Pegado" }] },
+    { type: "paragraph", content: [{ type: "text", text: "Contenido" }] },
+  ] }
+  const workspace = normalizeSynthesisWorkspace({ document })
+  assert.deepEqual(deriveSynthesisNodes(workspace.document), [])
+  assert.deepEqual(workspace.document.content!.map((block) => block.type), ["heading", "paragraph"])
+  assert.equal(workspace.document.content![0].attrs!.level, 3)
+  assert.deepEqual(normalizeSynthesisWorkspace(workspace), workspace)
 })

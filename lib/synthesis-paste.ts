@@ -38,7 +38,10 @@ export function cleanSynthesisPaste(slice: Slice): Slice {
         return
       }
       flush()
-      result.push(node.isLeaf ? node : node.copy(clean(node.content)))
+      const content = clean(node.content)
+      result.push(node.type.name === "heading" && node.attrs.level === 1
+        ? node.type.create({ ...node.attrs, level: 3, synthesisId: null, synthesisParentId: null }, content, node.marks)
+        : node.isLeaf ? node : node.copy(content))
     })
     flush()
     return Fragment.fromArray(result)

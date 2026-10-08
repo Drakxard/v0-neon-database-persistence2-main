@@ -10,6 +10,11 @@ export const StructuralId = Extension.create({
     return [{
       types: [...TYPES],
       attributes: {
+        synthesisParentId: {
+          default: null,
+          parseHTML: (element) => element.getAttribute("data-synthesis-parent-id"),
+          renderHTML: (attributes) => attributes.synthesisParentId ? { "data-synthesis-parent-id": attributes.synthesisParentId } : {},
+        },
         synthesisId: {
           default: null,
           parseHTML: (element) => element.getAttribute("data-synthesis-id"),

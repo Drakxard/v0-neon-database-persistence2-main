@@ -1,6 +1,6 @@
 import {
   createSynthesisId, deriveSynthesisNodes, ensureSynthesisDocument, normalizeSynthesisWorkspace, repairSynthesisLayout,
-  plainText, type SynthesisWorkspaceV2, type TiptapJSON, type SynthesisSourceLink,
+  synthesisBranchEnd, plainText, type SynthesisWorkspaceV2, type TiptapJSON, type SynthesisSourceLink,
 } from "./synthesis-workspace.ts"
 
 type Container = { id: number; name: string; kind: string; orderIndex: number }
@@ -33,9 +33,7 @@ export function removeSynthesisNode(workspace: SynthesisWorkspaceV2, nodeId: str
   const blocks = document.content ?? []
   const index = blocks.findIndex((block) => block.type === "heading" && block.attrs?.synthesisId === nodeId)
   if (index >= 0) {
-    const level = Number(blocks[index].attrs?.level) || 1
-    let end = index + 1
-    while (end < blocks.length && !(blocks[end].type === "heading" && Number(blocks[end].attrs?.level) <= level)) end++
+    const end = synthesisBranchEnd(document, index)
     blocks.splice(index, end - index)
   } else {
     const visit = (node: TiptapJSON) => {
@@ -89,8 +87,8 @@ export function reconcileSynthesisMaterials(workspace: SynthesisWorkspaceV2, con
   const next = normalizeSynthesisWorkspace(workspace)
   next.sources ??= { containers: {}, materials: {} }
   const sources = next.sources
-  const makeHeading = (id: string, title: string, level: number): TiptapJSON => ({
-    type: "heading", attrs: { synthesisId: id, level }, content: [{ type: "text", text: title }],
+  const makeHeading = (id: string, title: string, parentId: string | null = null): TiptapJSON => ({
+    type: "heading", attrs: { synthesisId: id, level: 1, synthesisParentId: parentId }, content: [{ type: "text", text: title }],
   })
   const eligible = materials.filter((material) => /\.pdf$/i.test(material.file_name))
   for (const container of [...containers].sort((a, b) => a.orderIndex - b.orderIndex)) {
@@ -105,7 +103,7 @@ export function reconcileSynthesisMaterials(workspace: SynthesisWorkspaceV2, con
       link = { nodeId: createSynthesisId(), autoTitle: container.name }
       sources.containers[String(container.id)] = link
       if (!nodes.length && !plainText(next.document)) next.document.content = []
-      next.document.content!.push(makeHeading(link.nodeId, container.name, 1))
+      next.document.content!.push(makeHeading(link.nodeId, container.name))
     }
     renameAutomaticHeading(next.document, link, container.name)
     for (const file of files) {
@@ -118,10 +116,8 @@ export function reconcileSynthesisMaterials(workspace: SynthesisWorkspaceV2, con
       sources.materials[String(file.id)] = fileLink
       const blocks = next.document.content!
       const parentIndex = blocks.findIndex((block) => block.attrs?.synthesisId === link.nodeId)
-      const parentLevel = Number(blocks[parentIndex]?.attrs?.level) || 1
-      let end = parentIndex + 1
-      while (end < blocks.length && !(blocks[end].type === "heading" && Number(blocks[end].attrs?.level) <= parentLevel)) end++
-      blocks.splice(end, 0, makeHeading(fileLink.nodeId, fileLink.autoTitle, Math.min(3, parentLevel + 1)))
+      const end = synthesisBranchEnd(next.document, parentIndex)
+      blocks.splice(end, 0, makeHeading(fileLink.nodeId, fileLink.autoTitle, link.nodeId))
     }
   }
   return normalizeSynthesisWorkspace(next)

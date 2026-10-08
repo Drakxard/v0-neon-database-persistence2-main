@@ -27,7 +27,7 @@ test("convertir un H2 en H1 busca espacio libre sin mover los elementos de la pa
   assert.deepEqual(edited.layout.existente, workspace.layout.existente)
   assert.deepEqual(edited.layout.padre, workspace.layout.padre)
   assert.notDeepEqual(edited.layout.nuevo, workspace.layout.nuevo)
-  assert.equal(edited.layout.nuevo.scale, 1.3)
+  assert.equal(edited.layout.nuevo.scale, workspace.defaultScale)
   assert.equal(deriveSynthesisNodes(edited.document).find((node) => node.id === "nuevo")?.parentId, null)
   assert.deepEqual(repairSynthesisLayout(reload(edited)), edited)
 })
@@ -177,4 +177,18 @@ test("la carpeta aísla materia y semana, conserva el desarrollo y rechaza JSON 
   assert.equal(await store.read({ ...context, subjectId: "fisica" }), null)
   files.set(synthesisFolderPath(context).join("/"), new Blob(["{broken"]))
   await assert.rejects(store.read(context))
+})
+
+test("migra delimitadores PDF antiguos a H1 conservando asociación y desarrollo", () => {
+  const workspace = initial()
+  const link = workspace.sources!.materials[1]
+  const index = workspace.document.content!.findIndex((block) => block.attrs?.synthesisId === link.nodeId)
+  workspace.document.content![index].attrs = { synthesisId: link.nodeId, level: 2 }
+  workspace.document.content!.splice(index + 1, 0, { type: "paragraph", content: [{ type: "text", text: "Notas" }] })
+  const migrated = reload(workspace)
+  const node = deriveSynthesisNodes(migrated.document).find((node) => node.id === link.nodeId)!
+  assert.equal(node.source.attrs!.level, 1)
+  assert.equal(node.parentId, migrated.sources!.containers[1].nodeId)
+  assert.equal(node.body[0].content![0].text, "Notas")
+  assert.deepEqual(reload(migrated), migrated)
 })

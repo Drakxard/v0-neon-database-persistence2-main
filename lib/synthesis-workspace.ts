@@ -98,8 +98,7 @@ function structuralId(node: TiptapJSON) {
 
 export function ensureSynthesisDocument(
   input: unknown,
-  idFactory: () => string = createSynthesisId,
-  requireRootHeading = true
+  idFactory: () => string = createSynthesisId
 ): TiptapJSON {
   const candidate = clone(input && typeof input === "object" ? input : { type: "doc", content: [] }) as TiptapJSON
   candidate.type = "doc"
@@ -107,19 +106,6 @@ export function ensureSynthesisDocument(
 
   if (candidate.content.length === 0) {
     candidate.content.push({ type: "paragraph" })
-  }
-
-  const isEmptyDocument = candidate.content.length === 1
-    && candidate.content[0]?.type === "paragraph"
-    && (candidate.content[0].content?.length ?? 0) === 0
-  const firstHeading = candidate.content.findIndex((node) => node?.type === "heading" && (Number(node.attrs?.level) || 1) === 1)
-  if (requireRootHeading && !isEmptyDocument && firstHeading !== 0) {
-    const orphanEnd = firstHeading < 0 ? candidate.content.length : firstHeading
-    const orphan = candidate.content.splice(0, orphanEnd)
-    candidate.content.unshift(
-      { type: "heading", attrs: { level: 1, synthesisId: idFactory() }, content: [{ type: "text", text: "Sin título" }] },
-      ...orphan
-    )
   }
 
   const seen = new Set<string>()
@@ -139,21 +125,17 @@ export function ensureSynthesisDocument(
 export function deriveSynthesisNodes(documentInput: TiptapJSON): DerivedSynthesisNode[] {
   const document = ensureSynthesisDocument(documentInput)
   const nodes: DerivedSynthesisNode[] = []
-  const headings: Array<{ id: string; level: number }> = []
-  let activeHeadingId: string | null = null
+  let activeHeading: DerivedSynthesisNode | undefined
 
   for (const block of document.content ?? []) {
-    if (block.type === "heading") {
-      const level = Math.max(1, Math.min(3, Number(block.attrs?.level) || 1))
-      while (headings.length && headings[headings.length - 1].level >= level) headings.pop()
+    if (block.type === "heading" && Number(block.attrs?.level) === 1) {
       const id = structuralId(block)!
-      const parentId = headings.at(-1)?.id ?? null
-      nodes.push({ id, parentId, name: plainText(block) || "Sin título", kind: "heading", level, body: [], source: block })
-      headings.push({ id, level })
-      activeHeadingId = id
+      const parent = nodes.find((node) => node.id === block.attrs?.synthesisParentId)
+      activeHeading = { id, parentId: parent?.id ?? null, name: plainText(block) || "Sin título", kind: "heading", level: parent ? parent.level + 1 : 1, body: [], source: block }
+      nodes.push(activeHeading)
       continue
     }
-    if (activeHeadingId) nodes.find((node) => node.id === activeHeadingId)?.body.push(block)
+    activeHeading?.body.push(block)
   }
   return nodes
 }
@@ -223,6 +205,15 @@ export function repairSynthesisLayout(workspace: SynthesisWorkspaceV2, previousD
 export function normalizeSynthesisWorkspace(input: unknown): SynthesisWorkspaceV2 {
   const value = input && typeof input === "object" ? input as Partial<SynthesisWorkspaceV2> : {}
   const document = ensureSynthesisDocument(value.document)
+  // Older linked PDFs used H2 delimiters. Migrate their IDs and parent links once;
+  // later manual heading changes must remain ordinary formatting.
+  for (const link of Object.values(value.sources?.materials ?? {})) {
+    const heading = document.content?.find((block) => block.type === "heading" && structuralId(block) === link.nodeId)
+    const parentId = value.sources?.containers[String(link.containerId)]?.nodeId
+    if (heading && Number(heading.attrs?.level) > 1 && parentId && !("synthesisParentId" in heading.attrs!)) {
+      heading.attrs = { ...heading.attrs, level: 1, synthesisParentId: parentId }
+    }
+  }
   const defaultScale = Math.max(0.5, Math.min(2, Number(value.defaultScale) || 1))
   const rawLayout = value.layout && typeof value.layout === "object" ? value.layout : {}
   const layout: Record<string, SynthesisNodeLayout> = {}
@@ -275,14 +266,28 @@ function listContainsId(node: TiptapJSON, id: string): boolean {
   return (node.content ?? []).some((child) => listContainsId(child, id))
 }
 
+/** Include formatted content and explicitly associated children until the next sibling. */
+export function synthesisBranchEnd(document: TiptapJSON, index: number): number {
+  const blocks = document.content ?? []
+  const nodes = deriveSynthesisNodes(document)
+  const rootId = structuralId(blocks[index])
+  const descendants = new Set([rootId])
+  for (const node of nodes) if (descendants.has(node.parentId)) descendants.add(node.id)
+  let end = index + 1
+  while (end < blocks.length) {
+    const block = blocks[end]
+    if (block.type === "heading" && Number(block.attrs?.level) === 1 && !descendants.has(structuralId(block))) break
+    end++
+  }
+  return end
+}
+
 export function extractSynthesisBranchDocument(documentInput: TiptapJSON, id: string): TiptapJSON {
   const document = ensureSynthesisDocument(documentInput)
   const blocks = document.content ?? []
   const headingIndex = blocks.findIndex((node) => node.type === "heading" && structuralId(node) === id)
   if (headingIndex >= 0) {
-    const level = Number(blocks[headingIndex].attrs?.level) || 1
-    let end = headingIndex + 1
-    while (end < blocks.length && !(blocks[end].type === "heading" && (Number(blocks[end].attrs?.level) || 1) <= level)) end++
+    const end = synthesisBranchEnd(document, headingIndex)
     return { type: "doc", content: clone(blocks.slice(headingIndex, end)) }
   }
   const findListItem = (node: TiptapJSON): TiptapJSON | null => {
@@ -303,15 +308,11 @@ export function extractSynthesisBranchDocument(documentInput: TiptapJSON, id: st
 
 export function replaceSynthesisBranch(documentInput: TiptapJSON, id: string, branchInput: TiptapJSON): TiptapJSON {
   const document = ensureSynthesisDocument(documentInput)
-  // A branch can legitimately start at H2 or H3. Treating it as a complete
-  // document would prepend an artificial H1 and promote the edited branch.
-  const branch = ensureSynthesisDocument(branchInput, createSynthesisId, false)
+  const branch = ensureSynthesisDocument(branchInput)
   const blocks = document.content ?? []
   const headingIndex = blocks.findIndex((node) => node.type === "heading" && structuralId(node) === id)
   if (headingIndex >= 0) {
-    const level = Number(blocks[headingIndex].attrs?.level) || 1
-    let end = headingIndex + 1
-    while (end < blocks.length && !(blocks[end].type === "heading" && (Number(blocks[end].attrs?.level) || 1) <= level)) end++
+    const end = synthesisBranchEnd(document, headingIndex)
     blocks.splice(headingIndex, end - headingIndex, ...(branch.content ?? []))
     return ensureSynthesisDocument(document)
   }
