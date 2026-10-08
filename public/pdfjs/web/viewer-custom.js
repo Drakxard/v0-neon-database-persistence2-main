@@ -152,6 +152,7 @@
       key: String(params.get("key") || "").trim(),
       localWorkspace: params.get("localWorkspace") === "1",
       workspaceFileId: String(params.get("workspaceFileId") || "").trim(),
+      fragmentRegion: String(params.get("fragmentRegion") || ""),
       viewerMode: String(params.get("viewerMode") || "standalone").trim() === "inline" ? "inline" : "standalone",
       returnToken: String(params.get("returnToken") || "").trim(),
       presentationTagIds: Array.from(new Set(
@@ -503,6 +504,10 @@
         filename: state.query.fileName || "material.pdf",
       });
       refreshDocumentViewerMetadata();
+      if (state.query.fragmentRegion) {
+        const { scrollToFragmentRegion } = await import("./fragment-position.mjs");
+        await scrollToFragmentRegion(state.app, state.query.fragmentRegion);
+      }
       return true;
     } catch (error) {
       if (objectUrl && state.localWorkspaceObjectUrl === objectUrl) {

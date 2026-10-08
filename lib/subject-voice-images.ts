@@ -1,10 +1,12 @@
 "use client"
 
 import { getReadyWorkspaceHandle, loadWorkspaceHandle, queryWorkspacePermission } from "./local-workspace-client"
+import type { PdfSearchResult } from "./subject-pdf-search"
 
 export const VOICE_IMAGE_COLORS = ["#b2f2bb", "#a5d8ff", "#ffec99", "#fcc2d7", "#d0bfff", "#ffd8a8"] as const
 export type VoiceImage = { id: string; name: string; path: string }
-export type VoiceImageGroup = { id: string; name: string; color: string; images: VoiceImage[] }
+export type VoiceImageGroup = { id: string; name: string; color: string; images: VoiceImage[]; pdfs?: PdfSearchResult[] }
+export const voiceGroupItemCount = (group: VoiceImageGroup) => group.images.length + (group.pdfs?.length ?? 0)
 export type VoiceImageWorkspace = { version: 1; subjectId: string; groups: VoiceImageGroup[] }
 
 function subjectSegment(subjectId: string) {
@@ -37,6 +39,14 @@ function validateWorkspace(value: unknown, subjectId: string): VoiceImageWorkspa
   for (const group of workspace.groups) {
     if (!group || typeof group.id !== "string" || !group.id || ids.has(group.id) || typeof group.name !== "string" || !group.name.trim() || !VOICE_IMAGE_COLORS.includes(group.color as typeof VOICE_IMAGE_COLORS[number]) || !Array.isArray(group.images)) throw new Error("El archivo de conjuntos contiene un conjunto inválido.")
     ids.add(group.id)
+    if (group.pdfs !== undefined && (!Array.isArray(group.pdfs) || new Set(group.pdfs.map((pdf) => pdf?.id)).size !== group.pdfs.length)) throw new Error("El conjunto contiene fragmentos de PDF inválidos.")
+    for (const pdf of group.pdfs ?? []) {
+      if (!pdf || typeof pdf.id !== "string" || !pdf.id || typeof pdf.title !== "string" || typeof pdf.fileId !== "string" || !pdf.fileId ||
+        typeof pdf.hash !== "string" || !/^[a-f0-9]{64}$/.test(pdf.hash) || typeof pdf.fileName !== "string" || typeof pdf.query !== "string" || !Number.isInteger(pdf.week) ||
+        !pdf.candidate || !Array.isArray(pdf.candidate.blocks) || !pdf.candidate.blocks.length || !Array.isArray(pdf.candidate.anchorIds) ||
+        !pdf.decision || pdf.decision.accepted !== true || !Array.isArray(pdf.decision.blockIds) || !Array.isArray(pdf.decision.partialIds) ||
+        [...pdf.decision.blockIds,...pdf.decision.partialIds].some((id) => !pdf.candidate.blocks.some((block) => block.id === id))) throw new Error("El conjunto contiene un fragmento de PDF inválido.")
+    }
     for (const image of group.images) {
       if (!image || typeof image.id !== "string" || !image.id || ids.has(image.id) || typeof image.name !== "string" || !image.name || typeof image.path !== "string" || !image.path.startsWith(prefix) || !image.path.slice(prefix.length) || /[/\\]/.test(image.path.slice(prefix.length)) || [".", ".."].includes(image.path.slice(prefix.length))) throw new Error("El archivo de conjuntos contiene una imagen inválida.")
       ids.add(image.id)
@@ -134,16 +144,19 @@ export async function saveVoiceImages(subjectId: string, files: File[], target: 
   })
 }
 
-export async function regroupVoiceImages(subjectId: string, imageIds: string[], destination: { id: string; name: string; color: string }) {
+export async function regroupVoiceImages(subjectId: string, imageIds: string[], destination: { id: string; name: string; color: string }, pdfResults: PdfSearchResult[] = []) {
   return inQueue(subjectId, async () => {
     const handle = await root()
     const workspace = await load(handle, subjectId)
     const ids = new Set(imageIds)
-    if (!ids.size) throw new Error("No hay imágenes para agrupar.")
+    const pdfs = [...new Map(pdfResults.map((pdf) => [pdf.id, pdf])).values()]
+    const pdfIds = new Set(pdfs.map((pdf) => pdf.id))
+    if (!ids.size && !pdfs.length) throw new Error("No hay resultados para agrupar.")
     const existing = workspace.groups.find((group) => group.id === destination.id)
     // A retry after a successful disk commit must not create another group or move its pairs twice.
     if (existing) {
-      if (existing.name === destination.name.trim() && existing.color === destination.color && existing.images.length === ids.size && existing.images.every((image) => ids.has(image.id))) return workspace
+      if (existing.name === destination.name.trim() && existing.color === destination.color && existing.images.length === ids.size && existing.images.every((image) => ids.has(image.id)) &&
+        (existing.pdfs?.length ?? 0) === pdfIds.size && (existing.pdfs ?? []).every((pdf) => pdfIds.has(pdf.id))) return workspace
       throw new Error("El identificador del nuevo conjunto ya está en uso.")
     }
     const original = structuredClone(workspace)
@@ -151,11 +164,24 @@ export async function regroupVoiceImages(subjectId: string, imageIds: string[], 
     if (images.length !== ids.size) throw new Error("Las imágenes cambiaron. Volvé a buscar antes de crear el conjunto.")
     const groups = workspace.groups.flatMap((group) => {
       const remaining = group.images.filter((image) => !ids.has(image.id))
-      return group.images.length > 0 && remaining.length === 0 ? [] : [{ ...group, images: remaining }]
+      const remainingPdfs = (group.pdfs ?? []).filter((pdf) => !pdfIds.has(pdf.id))
+      return voiceGroupItemCount(group) > 0 && remaining.length + remainingPdfs.length === 0 ? [] : [{ ...group, images: remaining, ...(group.pdfs ? {pdfs:remainingPdfs} : {}) }]
     })
-    const next: VoiceImageWorkspace = { ...workspace, groups: [...groups, { ...destination, name: destination.name.trim(), images }] }
+    const next: VoiceImageWorkspace = { ...workspace, groups: [...groups, { ...destination, name: destination.name.trim(), images, ...(pdfs.length ? {pdfs:structuredClone(pdfs)} : {}) }] }
     await commit(handle, next, original)
     return next
+  })
+}
+
+export async function removeVoicePdfFragment(subjectId: string, groupId: string, pdfId: string) {
+  return inQueue(subjectId, async () => {
+    const handle = await root(), workspace = await load(handle, subjectId), original = structuredClone(workspace)
+    const group = workspace.groups.find((item) => item.id === groupId)
+    if (!group) throw new Error("El conjunto ya no está disponible.")
+    group.pdfs = (group.pdfs ?? []).filter((pdf) => pdf.id !== pdfId)
+    if (!voiceGroupItemCount(group)) workspace.groups = workspace.groups.filter((item) => item.id !== groupId)
+    await commit(handle, workspace, original)
+    return workspace
   })
 }
 

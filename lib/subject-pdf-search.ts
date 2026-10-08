@@ -20,7 +20,7 @@ export type PdfSearchResult = {
 
 export function normalizePdfQuery(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
-    .match(/[\p{L}\p{N}]+(?:\.[\p{N}]+)*/gu)?.map((word) => word === "teo" ? "teorema" : word).join(" ") ?? ""
+    .match(/[\p{L}\p{N}]+(?:\.[\p{N}]+)*/gu)?.map((word) => word === "teo" ? "teorema" : word === "def" ? "definicion" : word).join(" ") ?? ""
 }
 function variants(word: string) {
   return [word, ...(word.length > 3 && word.endsWith("s") ? [word.slice(0, -1)] : []),

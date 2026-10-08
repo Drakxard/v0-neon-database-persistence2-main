@@ -27,6 +27,7 @@ function payload() {
 }
 test("normaliza consultas genéricas y no confunde una subcadena con una palabra", () => {
   assert.equal(normalizePdfQuery("  DEFINICIÓN  Teo "), "definicion teorema")
+  assert.equal(normalizePdfQuery("def"), "definicion")
   assert.equal(pdfTextMatches("Teorema de funciones", "teoremas"), true)
   assert.equal(pdfTextMatches("Definición de orden exponencial", "definicion exponencial"), true)
   assert.equal(pdfTextMatches("Economía: mercados", "mercado"), true)

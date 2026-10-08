@@ -21,6 +21,15 @@ export async function readPdfCache<T>(root: FileSystemDirectoryHandle, path: str
   try { return JSON.parse(await (await file.getFile()).text()) as T }
   catch { throw new Error("La caché de PDF está dañada; no se reemplazó su contenido.") }
 }
+export async function readPdfCrop(root: FileSystemDirectoryHandle, path: string): Promise<File | null> {
+  try { return await (await handle(root, path)).getFile() }
+  catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error }
+}
+export async function writePdfCrop(root: FileSystemDirectoryHandle, path: string, blob: Blob) {
+  const file = await handle(root, path, true), writer = await file.createWritable()
+  try { await writer.write(blob); await writer.close() } catch (error) { await writer.abort().catch(() => {}); throw error }
+  if ((await file.getFile()).size !== blob.size) throw new Error("No se pudo verificar el recorte guardado.")
+}
 export async function writePdfCache(root: FileSystemDirectoryHandle, path: string, value: unknown) {
   const text = JSON.stringify(value)
   const file = await handle(root, path, true)

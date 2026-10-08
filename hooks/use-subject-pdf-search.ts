@@ -1,31 +1,42 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { latestTheoryMaterials, prepareTheoryPdfs, searchTheoryPdfs, theoryScopeSignature, type PreparedTheory } from "@/lib/client/subject-pdf-search"
-import type { PdfSearchResult } from "@/lib/subject-pdf-search"
+import { latestTheoryMaterials, prepareTheoryPdfs, searchTheoryPdfs, theoryScopeSignature, type PreparedTheory, type PdfPreparationProgress } from "@/lib/client/subject-pdf-search"
+import { normalizePdfQuery, type PdfSearchResult } from "@/lib/subject-pdf-search"
+import { findSavedPdfSearch, loadSavedPdfSearches, type SavedPdfSearch } from "@/lib/client/subject-pdf-history"
 
 export function useSubjectPdfSearch(subjectId: string, query: string) {
   const [theory, setTheory] = useState<PreparedTheory | null>(null)
   const [results, setResults] = useState<PdfSearchResult[]>([])
-  const [progress, setProgress] = useState("")
+  const [progress, setProgress] = useState<PdfPreparationProgress | null>(null)
+  const [preparing, setPreparing] = useState(false)
   const [searching, setSearching] = useState(false)
   const [preparationErrors, setPreparationErrors] = useState<string[]>([])
   const [searchErrors, setSearchErrors] = useState<string[]>([])
   const [attempt, setAttempt] = useState(0)
   const signature = useRef("")
+  const dismissed = useRef(new Set<string>())
+  const history = useRef<SavedPdfSearch[]>([])
   useEffect(() => {
     const controller = new AbortController(), signal = controller.signal
-    setTheory(null); setResults([]); setPreparationErrors([]); setProgress("Preparando PDF de teoría…")
-    void prepareTheoryPdfs(subjectId, signal, (text) => { if (!signal.aborted) setProgress(text) })
+    history.current = []
+    setTheory(null); setResults([]); setPreparationErrors([]); setProgress(null); setPreparing(true)
+    void prepareTheoryPdfs(subjectId, signal, (value) => { if (!signal.aborted) setProgress(value) })
       .then(async (next) => {
+        if (signal.aborted) return
+        try {
+          const savedHistory = await loadSavedPdfSearches(next, signal)
+          if (!signal.aborted) history.current = savedHistory
+        }
+        catch (error) { if (!signal.aborted) next.errors.push(error instanceof Error ? error.message : "No se pudieron cargar las búsquedas guardadas.") }
         if (signal.aborted) return
         signature.current = next.signature
         const currentSignature = theoryScopeSignature(await latestTheoryMaterials(subjectId))
         if (signal.aborted) return
-        setTheory(next); setPreparationErrors(next.errors); setProgress("")
+        setTheory(next); setPreparationErrors(next.errors); setProgress(null); setPreparing(false)
         if (currentSignature !== next.signature) setAttempt((n) => n + 1)
       }).catch((error) => {
-        if (!signal.aborted) { setPreparationErrors([error instanceof Error ? error.message : "No se pudieron preparar los PDF."]); setProgress("") }
+        if (!signal.aborted) { setPreparationErrors([error instanceof Error ? error.message : "No se pudieron preparar los PDF."]); setProgress(null); setPreparing(false) }
       })
     return () => controller.abort()
   }, [subjectId, attempt])
@@ -49,14 +60,33 @@ export function useSubjectPdfSearch(subjectId: string, query: string) {
     const controller = new AbortController(), signal = controller.signal
     setResults([]); setSearchErrors([])
     if (!query.trim() || !theory) { setSearching(false); return () => controller.abort() }
+    const visible = (items: PdfSearchResult[]) => items.filter((item) => !dismissed.current.has(`${item.query}:${item.id}`))
+    const saved = findSavedPdfSearch(history.current, query)
+    if (saved) {
+      setResults(visible(saved.results))
+      // A prefix previews previously filtered content; it does not send a partial word to Clef.
+      if (saved.previewOnly || saved.complete) { setSearching(false); return () => controller.abort() }
+    }
     setSearching(true)
     const timer = window.setTimeout(() => {
-      void searchTheoryPdfs(theory, query, signal, (next) => { if (!signal.aborted) setResults(next) })
-        .then((next) => { if (!signal.aborted) { setResults(next.results); setSearchErrors(next.errors); setSearching(false) } })
+      void searchTheoryPdfs(theory, query, signal, (next) => { if (!signal.aborted) setResults(visible(next)) })
+        .then((next) => { if (!signal.aborted) {
+          if (!next.errors.length) {
+            const normalized = normalizePdfQuery(query)
+            history.current = [...history.current.filter((item) => item.query !== normalized), {query:normalized,results:next.results,complete:true}]
+          }
+          setResults(visible(next.results)); setSearchErrors(next.errors); setSearching(false)
+        } })
         .catch((error) => { if (!signal.aborted) { setSearchErrors([error instanceof Error ? error.message : "No se pudo buscar en los PDF."]); setSearching(false) } })
     }, 450)
     return () => { controller.abort(); window.clearTimeout(timer) }
   }, [query, theory])
-  return { results, progress, searching, errors: [...preparationErrors, ...searchErrors], week: theory?.week,
+  return { results, progress, preparing, searching, errors: [...preparationErrors, ...searchErrors], week: theory?.week,
+    dismiss: (id: string, sourceQuery: string) => {
+      dismissed.current.add(`${sourceQuery}:${id}`)
+      history.current = history.current.map((item) => ({...item,results:item.results.filter((result) => result.id !== id || result.query !== sourceQuery)}))
+      setResults((items) => items.filter((item) => item.id !== id))
+    },
+    correctionFailed: (error: unknown) => setSearchErrors((items) => [...items, error instanceof Error ? error.message : "No se pudo guardar la corrección."]),
     retry: () => setAttempt((n) => n + 1) }
 }

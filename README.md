@@ -38,6 +38,28 @@ su texto; los fragmentos aparecen junto a las imágenes, únicamente durante la
 búsqueda. Se ignoran mayúsculas y tildes, con singular/plural y `teo`. No hay
 categorías académicas obligatorias ni búsqueda por significado.
 
+El visor de fragmentos permite abrir el PDF original en otra pestaña, situado
+en la región seleccionada (también en páginas rotadas). Mantener un recorte
+presionado durante un segundo lo quita de ese fragmento; mantener un globo
+presionado durante un segundo oculta ese resultado. Las correcciones se guardan
+en el workspace por PDF y consulta y se respetan al volver a abrir o buscar.
+
+Las búsquedas terminadas de cualquier palabra y los recortes PNG también se guardan en esa carpeta.
+Al repetir una consulta o escribir el inicio de una búsqueda anterior, los globos
+guardados aparecen sin la espera de 450 ms ni llamadas a los proveedores. `teo`
+y `def` equivalen a `teorema` y `definición`. Los recortes abiertos previamente se
+leen directamente del disco. El historial se limita a los PDF de la semana
+actual y deja de reutilizar datos de archivos reemplazados o extracciones cambiadas.
+El historial queda separado por materia, semana y contenedor de Teoría: subir
+el mismo PDF a otra materia o apartado no importa sus búsquedas anteriores.
+
+El botón `+` de una búsqueda crea un conjunto con toda la vista: imágenes y
+globos de PDF. Los fragmentos se guardan como referencias al PDF y sus bloques,
+conservan el visor de recortes y el enlace al original, y cuentan como elementos
+del conjunto. También se pueden crear conjuntos que solo contengan fragmentos.
+Mantener un globo de un conjunto presionado un segundo quita su referencia de
+ese conjunto. El guardado conserva el conjunto anterior si falla y permite reintentar.
+
 Configurar `datalab` en el entorno del servidor con la API key de Datalab.
 `MARKER_API` y `marker_api` siguen funcionando como alternativas; también se
 admite la clave heredada del sobre cifrado de InScreen en `User.Services`.

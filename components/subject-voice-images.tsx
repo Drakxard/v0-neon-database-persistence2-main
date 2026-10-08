@@ -2,11 +2,13 @@
 
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type Ref } from "react"
 import { HandDrawnBubble } from "@/components/hand-drawn-bubble"
-import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, saveVoiceImages, validateVoiceImageFiles, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
+import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, removeVoicePdfFragment, saveVoiceImages, validateVoiceImageFiles, voiceGroupItemCount, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
 import { searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
 import { useSubjectPdfSearch } from "@/hooks/use-subject-pdf-search"
 import { SubjectPdfFragment } from "@/components/subject-pdf-fragment"
+import { SubjectPdfBubble } from "@/components/subject-pdf-bubble"
 import type { PdfSearchResult } from "@/lib/subject-pdf-search"
+import { LoaderCircle } from "lucide-react"
 
 export type VoiceImagesHandle = { escape: () => boolean }
 type Target = { groupId: string } | { name: string; color: string }
@@ -17,7 +19,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   const [workspace, setWorkspace] = useState<VoiceImageWorkspace | null>(null)
   const [groupId, setGroupId] = useState<string | null>(null)
   const [pending, setPending] = useState<File[] | null>(null)
-  const [selection, setSelection] = useState<{ images: VoiceImage[]; destinationId: string } | null>(null)
+  const [selection, setSelection] = useState<{ images: VoiceImage[]; pdfs: PdfSearchResult[]; destinationId: string } | null>(null)
   const [query, setQuery] = useState("")
   const pdf = useSubjectPdfSearch(subjectId, query)
   const [pdfViewer, setPdfViewer] = useState<PdfSearchResult | null>(null)
@@ -132,8 +134,8 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
   function newGroup() {
     if (locked.current || formOpen || viewer || pdfViewer) return
     if (!searching) { choose(null); return }
-    if (!matches.length) return
-    setSelection({ images: matches.map((match) => match.image), destinationId: crypto.randomUUID() })
+    if (!matches.length && !pdf.results.length) return
+    setSelection({ images: matches.map((match) => match.image), pdfs: structuredClone(pdf.results), destinationId: crypto.randomUUID() })
     setName(query.trim())
     setColor(VOICE_IMAGE_COLORS[0])
     setRetry(null)
@@ -146,7 +148,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
     setBusy(true)
     setError("")
     try {
-      const next = await regroupVoiceImages(subjectId, selection.images.map((image) => image.id), { id: selection.destinationId, name, color })
+      const next = await regroupVoiceImages(subjectId, selection.images.map((image) => image.id), { id: selection.destinationId, name, color }, selection.pdfs)
       if (!mounted.current) return
       setWorkspace(next)
       setSelection(null)
@@ -191,7 +193,7 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
 
     {workspace && formOpen && <form className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col gap-5 overflow-y-auto py-8" aria-label="Crear conjunto"
       onSubmit={(event) => { event.preventDefault(); if (selection) void runRegroup(); else if (pending && name.trim()) void runSave(pending, { name, color }, retry ? [] : error ? [error] : []) }}>
-      <p className="text-2xl">Nombre para el conjunto de {selection?.images.length ?? pending?.length} imágenes</p>
+      <p className="text-2xl">Nombre para el conjunto de {selection ? selection.images.length + selection.pdfs.length : pending?.length} {selection?.pdfs.length ? "elementos" : "imágenes"}</p>
       <label className="flex flex-col gap-2">Nombre del conjunto
         <input autoFocus required value={name} disabled={busy} onChange={(event) => setName(event.target.value)} className="rounded-lg border border-neutral-400 px-4 py-3 text-xl" />
       </label>
@@ -218,37 +220,54 @@ export function SubjectVoiceImages({ subjectId, ref }: { subjectId: string; ref?
       {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
-        {searching && matches.length === 0 && pdf.results.length === 0 && !pdf.searching && !pdf.progress && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
+        {searching && matches.length === 0 && pdf.results.length === 0 && !pdf.searching && !pdf.preparing && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
         {searching && pdf.week != null && <p className="mb-3 text-center text-sm text-neutral-500">Teoría · Semana {pdf.week}</p>}
         <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
           {searching ? matches.map(({ image, group: source }) => <HandDrawnBubble key={image.id} seed={image.id} color={source.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
             : group ? group.images.map((image) => <HandDrawnBubble key={image.id} seed={image.id} color={group.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
             : workspace.groups.map((item) => <HandDrawnBubble key={item.id} seed={item.id} color={item.color} disabled={busy}
               className="aspect-square min-h-0 max-w-full shrink-0 px-5 py-5"
-              style={{ width: voiceGroupDiameter(item.images.length), fontSize: Math.min(28, voiceGroupDiameter(item.images.length) / 8) }}
-              onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${item.images.length} imágenes`}>
-              <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{item.images.length}</span>
+              style={{ width: voiceGroupDiameter(voiceGroupItemCount(item)), fontSize: Math.min(28, voiceGroupDiameter(voiceGroupItemCount(item)) / 8) }}
+              onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${voiceGroupItemCount(item)} ${item.pdfs?.length ? "elementos" : "imágenes"}`}>
+              <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{voiceGroupItemCount(item)}</span>
             </HandDrawnBubble>)}
-          {searching && pdf.results.map((result) => <HandDrawnBubble key={result.id} seed={result.id} color="#a5d8ff" data-voice-pdf-id={result.id}
-            onClick={() => { setPdfViewer(result); focusCanvas() }}>
-            <span className="block">{result.title}</span>
-            <span className="mt-2 block text-sm">{result.fileName} · p. {result.candidate.blocks.find((b) => result.decision.blockIds.includes(b.id) || result.decision.partialIds.includes(b.id))?.page ?? result.candidate.blocks[0].page}</span>
-          </HandDrawnBubble>)}
+          {searching && pdf.results.map((result) => <SubjectPdfBubble key={result.id} result={result}
+            disabled={busy}
+            open={() => { setPdfViewer(result); focusCanvas() }} removed={() => pdf.dismiss(result.id, result.query)}
+            failed={pdf.correctionFailed} />)}
+          {!searching && group?.pdfs?.map((result) => <SubjectPdfBubble key={result.id} result={result} disabled={busy} color={group.color}
+            open={() => { setPdfViewer(result); focusCanvas() }} removed={() => {}}
+            remove={async () => {
+              if (locked.current) return
+              locked.current = true; setBusy(true); setError("")
+              try {
+                const next = await removeVoicePdfFragment(subjectId, group.id, result.id)
+                if (mounted.current) {
+                  setWorkspace(next)
+                  if (!next.groups.some((item) => item.id === group.id)) setGroupId(null)
+                }
+              } finally { locked.current = false; if (mounted.current) setBusy(false) }
+            }} failed={(failure) => setError(message(failure))} />)}
         </div>
       </div>}
       <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
         <span aria-hidden="true" />
         <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes y PDF" data-voice-search
           autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
-        <button type="button" onClick={newGroup} disabled={busy || (searching && matches.length === 0)} aria-label="Nuevo conjunto" title="Nuevo conjunto"
+        <button type="button" onClick={newGroup} disabled={busy || (searching && (pdf.searching || pdf.preparing || matches.length + pdf.results.length === 0))} aria-label="Nuevo conjunto" title="Nuevo conjunto"
           className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
       </div>
     </>}
     {!pdfViewer && !viewer && !formOpen && <>
-      {(pdf.progress || pdf.searching) && <p role="status" className="shrink-0 py-2 text-center text-sm">{pdf.progress || "Filtrando coincidencias en los PDF…"}</p>}
+      {pdf.progress && <div role="status" aria-label={`Analizando PDF ${pdf.progress.current} de ${pdf.progress.total}`} data-voice-pdf-progress
+        className="absolute bottom-3 left-0 flex items-center gap-1.5 text-xs text-neutral-500">
+        <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
+        <span>{pdf.progress.current}/{pdf.progress.total}</span>
+      </div>}
+      {pdf.searching && <p role="status" className="shrink-0 py-2 text-center text-sm">Filtrando coincidencias en los PDF…</p>}
       {pdf.errors.length > 0 && <div className="max-h-28 shrink-0 overflow-y-auto py-2 text-sm">
         <p role="alert" className="whitespace-pre-wrap">{pdf.errors.join("\n")}</p>
-        <button type="button" className={control} onClick={pdf.retry} disabled={Boolean(pdf.progress) || pdf.searching}>Reintentar PDF</button>
+        <button type="button" className={control} onClick={pdf.retry} disabled={pdf.preparing || pdf.searching}>Reintentar PDF</button>
       </div>}
     </>}
     {busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}

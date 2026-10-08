@@ -2,9 +2,10 @@
 
 import { getWorkspaceFile } from "../local-workspace-data"
 import { normalizedPdfRegion, parsePdfExtraction, PDF_EXTRACTION_VERSION, PDF_FILTER_VERSION, type PdfRegion, type PdfSearchResult, type PdfWordUnit } from "../subject-pdf-search"
-import { inPdfCacheQueue, pdfWorkspaceRoot, readPdfCache, writePdfCache } from "./subject-pdf-cache"
+import { inPdfCacheQueue, pdfWorkspaceRoot, readPdfCache, writePdfCache, readPdfCrop, writePdfCrop } from "./subject-pdf-cache"
 import { pdfHash } from "./subject-pdf-files"
 import { refinedPageWords } from "./subject-pdf-search"
+import { pdfRegionId, readPdfCorrection } from "./subject-pdf-corrections"
 
 function intersects(a: PdfRegion, b: PdfRegion) {
   return a.page === b.page && Math.max(a.x1, b.x1) < Math.min(a.x2, b.x2) && Math.max(a.y1, b.y1) < Math.min(a.y2, b.y2)
@@ -17,11 +18,15 @@ function wordUnits(payload: Record<string, unknown>, target: PdfRegion): PdfWord
     if (text.length) units.push({ id: `u${units.length}`, text: text.join(" "), regions })
     text = []; regions = []
   }
-  for (const block of extraction.blocks) {
+  // Word add-ons can be present only in the top-level HTML, rather than JSON block HTML.
+  const source = extraction.blocks.some((block) => block.region && intersects(block.region, target) && /data-bbox=/.test(block.html)) ? extraction.blocks
+    : typeof payload.html === "string" && extraction.blocks[0]
+      ? [{ ...extraction.blocks[0], region: target, html: payload.html }] : extraction.blocks
+  for (const block of source) {
     if (!block.region || !intersects(block.region, target)) continue
     const document = new DOMParser().parseFromString(block.html, "text/html")
     const spans = [...document.querySelectorAll("span[data-bbox]")]
-    if (!spans.length) throw new Error("Datalab no devolvió coordenadas por palabra para el bloque mixto.")
+    if (!spans.length) continue
     let parent: Element | null = null
     for (const span of spans) {
       const coords = (span.getAttribute("data-bbox") ?? "").split(/[\s,]+/).filter(Boolean).map(Number)
@@ -56,11 +61,12 @@ function lineRegions(regions: PdfRegion[]) {
 async function resolveRegions(result: PdfSearchResult, signal: AbortSignal, progress: (text: string) => void) {
   const root = await pdfWorkspaceRoot()
   const key = await pdfHash(new File([JSON.stringify([result.query, result.candidate, result.decision])], "region.txt"))
-  const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/${PDF_FILTER_VERSION}/regions-${key}.json`
+  const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/${PDF_FILTER_VERSION}/regions-html-v2-${key}.json`
   return inPdfCacheQueue(root, path, async () => {
     const saved = await readPdfCache<{ regions: PdfRegion[]; warnings: string[] }>(root, path)
     if (saved) return saved
     const regions: PdfRegion[] = [], warnings: string[] = []
+    let failed = false
     for (const block of result.candidate.blocks) {
       signal.throwIfAborted()
       if (result.decision.blockIds.includes(block.id)) {
@@ -68,30 +74,36 @@ async function resolveRegions(result: PdfSearchResult, signal: AbortSignal, prog
         else warnings.push("Un bloque relevante no tiene coordenadas fiables y no pudo recortarse.")
       } else if (result.decision.partialIds.includes(block.id)) {
         if (!block.region) { warnings.push("No se pudo delimitar un bloque mixto sin coordenadas."); continue }
-        const payload = await refinedPageWords(result, block.page, signal, progress)
-        const units = wordUnits(payload, block.region)
-        if (!units.length) { warnings.push("No se encontraron palabras con coordenadas fiables en el bloque mixto."); continue }
-        let uncertain = false, included = 0
-        const selected: PdfRegion[] = []
-        for (let i = 0; i < units.length; i += 64) {
+        try {
+          const payload = await refinedPageWords(result, block.page, signal, progress)
+          const units = wordUnits(payload, block.region)
+          if (!units.length) { failed = true; warnings.push("Datalab no devolvió palabras con coordenadas fiables para un bloque mixto; podés comprobarlo en el PDF original."); continue }
+          let uncertain = false, included = 0
+          const selected: PdfRegion[] = []
+          for (let i = 0; i < units.length; i += 64) {
+            signal.throwIfAborted()
+            const group = units.slice(i, i + 64)
+            const response = await fetch("/api/subject-voice/pdf-refine", { method: "POST", headers: { "Content-Type": "application/json" },
+              signal: AbortSignal.timeout(55_000),
+              body: JSON.stringify({ query: result.query, context: result.candidate.blocks.map((b) => b.text).join("\n"), units: group }) })
+            const decision = await response.json() as { ids?: string[]; uncertain?: boolean; error?: string }
+            if (!response.ok) throw new Error(decision.error ?? "No se pudo delimitar con Clef.")
+            if (!Array.isArray(decision.ids) || decision.ids.some((id) => !group.some((u) => u.id === id)) || typeof decision.uncertain !== "boolean") throw new Error("Clef devolvió unidades desconocidas.")
+            uncertain ||= decision.uncertain
+            for (const unit of group) if (decision.ids.includes(unit.id)) { included++; selected.push(...unit.regions) }
+          }
+          // If every unit was included, the contradiction with 'partial' remains unresolved.
+          if (uncertain || included === units.length || !included) warnings.push("No se pudo separar con fiabilidad el contenido pertinente de un bloque mixto; ese bloque no se muestra.")
+          else regions.push(...lineRegions(selected))
+        } catch (error) {
           signal.throwIfAborted()
-          const group = units.slice(i, i + 64)
-          const response = await fetch("/api/subject-voice/pdf-refine", { method: "POST", headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(55_000),
-            body: JSON.stringify({ query: result.query, context: result.candidate.blocks.map((b) => b.text).join("\n"), units: group }) })
-          const decision = await response.json() as { ids?: string[]; uncertain?: boolean; error?: string }
-          if (!response.ok) throw new Error(decision.error ?? "No se pudo delimitar con Clef.")
-          if (!Array.isArray(decision.ids) || decision.ids.some((id) => !group.some((u) => u.id === id)) || typeof decision.uncertain !== "boolean") throw new Error("Clef devolvió unidades desconocidas.")
-          uncertain ||= decision.uncertain
-          for (const unit of group) if (decision.ids.includes(unit.id)) { included++; selected.push(...unit.regions) }
+          failed = true
+          warnings.push(error instanceof Error ? error.message : "No se pudo delimitar un bloque mixto.")
         }
-        // If every unit was included, the contradiction with 'partial' remains unresolved.
-        if (uncertain || included === units.length || !included) warnings.push("No se pudo separar con fiabilidad el contenido pertinente de un bloque mixto; ese bloque no se muestra.")
-        else regions.push(...lineRegions(selected))
       }
     }
     const savedRegions = { regions, warnings }
-    await writePdfCache(root, path, savedRegions)
+    if (!failed) await writePdfCache(root, path, savedRegions)
     return savedRegions
   })
 }
@@ -100,17 +112,34 @@ export async function renderPdfFragment(result: PdfSearchResult, signal: AbortSi
   const file = await getWorkspaceFile(result.fileId)
   if (await pdfHash(file) !== result.hash) throw new Error("El PDF cambió. Volvé a buscar para usar su nueva versión.")
   const { regions, warnings } = await resolveRegions(result, signal, progress)
+  const correction = await readPdfCorrection(result)
   signal.throwIfAborted()
-  const pdfjs = await import("pdfjs-dist/build/pdf.mjs")
-  pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/build/pdf.worker.min.mjs"
-  const document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise
-  const images: Array<{ page: number; url: string }> = []
-  const canvas = window.document.createElement("canvas"), context = canvas.getContext("2d")
+  const root = await pdfWorkspaceRoot()
+  let document: Awaited<ReturnType<typeof import("pdfjs-dist/build/pdf.mjs").getDocument>["promise"]> | null = null
+  const images: Array<{ page: number; url: string; region: PdfRegion; id: string }> = []
+  const canvas = window.document.createElement("canvas")
+  let context: CanvasRenderingContext2D | null = null
   let renderedPage = -1
   try {
-    if (!context) throw new Error("El navegador no pudo dibujar el fragmento.")
     for (const region of regions) {
+      const id = pdfRegionId(region)
+      if (correction.removedRegions.includes(id)) continue
       signal.throwIfAborted()
+      const cropKey = await pdfHash(new File([id], "crop.txt"))
+      const cropPath = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/crops-png-v1/${cropKey}.png`
+      const savedCrop = await readPdfCrop(root, cropPath)
+      signal.throwIfAborted()
+      if (savedCrop && savedCrop.size) {
+        images.push({page:region.page,url:URL.createObjectURL(savedCrop),region,id})
+        continue
+      }
+      if (!document) {
+        context = canvas.getContext("2d")
+        const pdfjs = await import("pdfjs-dist/build/pdf.mjs")
+        pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/build/pdf.worker.min.mjs"
+        document = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise
+      }
+      if (!context) throw new Error("El navegador no pudo dibujar el fragmento.")
       if (renderedPage !== region.page) {
         const page = await document.getPage(region.page)
         // PDF.js applies intrinsic rotation; provider boxes describe the visible page.
@@ -131,9 +160,10 @@ export async function renderPdfFragment(result: PdfSearchResult, signal: AbortSi
       cropContext.drawImage(canvas, x, y, crop.width, crop.height, 0, 0, crop.width, crop.height)
       const blob = await new Promise<Blob>((resolve, reject) => crop.toBlob((blob) => blob ? resolve(blob) : reject(new Error("No se pudo crear el recorte.")), "image/png"))
       crop.width = crop.height = 1
-      images.push({ page: region.page, url: URL.createObjectURL(blob) })
+      await writePdfCrop(root, cropPath, blob)
+      images.push({ page: region.page, url: URL.createObjectURL(blob), region, id })
     }
     return { images, warnings }
   } catch (error) { images.forEach((image) => URL.revokeObjectURL(image.url)); throw error }
-  finally { canvas.width = canvas.height = 1; await document.destroy() }
+  finally { canvas.width = canvas.height = 1; await document?.destroy() }
 }

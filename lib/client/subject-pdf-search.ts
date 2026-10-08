@@ -6,6 +6,8 @@ import { buildPdfCandidates, normalizePdfQuery, parsePdfExtraction, pdfResultTit
 import { inPdfCacheQueue, pdfWorkspaceRoot, readPdfCache, writePdfCache } from "./subject-pdf-cache"
 import { pdfHash, splitPdfBatches } from "./subject-pdf-files"
 import type { SubjectDayMaterial } from "../study-types"
+import { readPdfCorrection } from "./subject-pdf-corrections"
+import { savePdfSearch } from "./subject-pdf-history"
 
 type BatchState = { pages: number[]; token?: string; extraction?: PdfExtraction; error?: string }
 type ExtractionCache = { version: string; hash: string; complete: boolean; batches: BatchState[] }
@@ -62,15 +64,29 @@ export async function latestTheoryMaterials(subjectId: string) {
   }
   return { week: null, materials: [] as SubjectDayMaterial[] }
 }
-export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, progress: (text: string) => void): Promise<PreparedTheory> {
+export type PdfPreparationProgress = { current: number; total: number }
+export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, progress: (value: PdfPreparationProgress | null) => void): Promise<PreparedTheory> {
   const root = await pdfWorkspaceRoot()
   const { week, materials } = await latestTheoryMaterials(subjectId)
   const result: PreparedTheory = { week, files: [], errors: [], signature: theoryScopeSignature({ week, materials }) }
+  const inputs: Array<{ material: SubjectDayMaterial; file: File; hash: string }> = []
+  const pendingHashes = new Set<string>(), startedHashes = new Set<string>(), finishedHashes = new Set<string>()
+  // Count only documents whose extraction is missing or incomplete. Reading a complete cache is silent.
   for (const material of materials) {
     signal.throwIfAborted()
-    progress(`Preparando ${material.file_name}…`)
     try {
       const file = await getWorkspaceFile(material.drive_file_id), hash = await pdfHash(file)
+      const saved = await readPdfCache<ExtractionCache>(root, extractionPath(hash))
+      inputs.push({ material, file, hash })
+      if (!saved?.complete) pendingHashes.add(hash)
+    } catch (error) {
+      signal.throwIfAborted()
+      result.errors.push(`${material.file_name}: ${error instanceof Error ? error.message : "No se pudo preparar."}`)
+    }
+  }
+  for (const { material, file, hash } of inputs) {
+    signal.throwIfAborted()
+    try {
       const cache = await inPdfCacheQueue(root, hash, async () => {
         signal.throwIfAborted()
         const path = extractionPath(hash)
@@ -78,6 +94,9 @@ export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, 
         if (saved && (saved.version !== PDF_EXTRACTION_VERSION || saved.hash !== hash || !Array.isArray(saved.batches))) throw new Error("La caché de extracción no es válida.")
         const state: ExtractionCache = saved ?? { version: PDF_EXTRACTION_VERSION, hash, complete: false, batches: [] }
         if (state.complete) return state
+        pendingHashes.add(hash)
+        startedHashes.add(hash)
+        progress({ current: startedHashes.size, total: pendingHashes.size })
         let index = 0
         for await (const batch of splitPdfBatches(file, signal)) {
           let current = state.batches[index]
@@ -115,6 +134,9 @@ export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, 
     } catch (error) {
       signal.throwIfAborted()
       result.errors.push(`${material.file_name}: ${error instanceof Error ? error.message : "No se pudo preparar."}`)
+    } finally {
+      if (pendingHashes.has(hash)) finishedHashes.add(hash)
+      if (finishedHashes.size === pendingHashes.size) progress(null)
     }
   }
   return result
@@ -128,6 +150,7 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
   const results: PdfSearchResult[] = [], errors: string[] = []
   for (const file of theory.files) {
     signal.throwIfAborted()
+    const errorsBefore = errors.length, resultsBefore = results.length
     const candidates = buildPdfCandidates(file.blocks, normalized)
     const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${file.hash}/${PDF_FILTER_VERSION}/${queryHash}.json`
     await inPdfCacheQueue(root, path, async () => {
@@ -153,8 +176,10 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
           }
           signal.throwIfAborted()
           if (decision.accepted) {
-            results.push({ id: `${file.material.id}:${file.hash}:${candidate.id}`, title: pdfResultTitle(candidate, decision),
-              fileId: file.material.drive_file_id, fileName: file.material.file_name, hash: file.hash, week: theory.week!, query: normalized, candidate, decision })
+            const result = { id: `${file.material.id}:${file.hash}:${candidate.id}`, title: pdfResultTitle(candidate, decision),
+              fileId: file.material.drive_file_id, fileName: file.material.file_name, hash: file.hash, week: theory.week!, query: normalized, candidate, decision }
+            if ((await readPdfCorrection(result)).hidden) continue
+            results.push(result)
             publish([...results])
           }
         } catch (error) {
@@ -165,13 +190,17 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
         }
       }
     }).catch((error) => { signal.throwIfAborted(); errors.push(`${file.material.file_name}: ${error instanceof Error ? error.message : "No se pudo leer la búsqueda."}`) })
+    if (errors.length === errorsBefore) {
+      try { await savePdfSearch(file, normalized, results.slice(resultsBefore)) }
+      catch (error) { signal.throwIfAborted(); errors.push(error instanceof Error ? error.message : "No se pudo guardar la búsqueda.") }
+    }
   }
   return { results, errors }
 }
 
 export async function refinedPageWords(result: PdfSearchResult, page: number, signal: AbortSignal, progress: (text: string) => void) {
   const root = await pdfWorkspaceRoot()
-  const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/words-${page}.json`
+  const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/words-html-v2-${page}.json`
   return inPdfCacheQueue(root, path, async () => {
     signal.throwIfAborted()
     let state = await readPdfCache<{ token?: string; payload?: Record<string, unknown> }>(root, path) ?? {}
