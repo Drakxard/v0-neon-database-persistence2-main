@@ -1,7 +1,9 @@
 import { buildRasterSvg, canvasSvgImage, SVG_RENDER_SCALE } from "../../public/pdfjs/web/raster-svg.mjs"
 import { embedSvgFonts } from "./svg-fonts"
 
-const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget"
+// ProseMirror adds src-less <img> caret separators after non-editable inline
+// nodes such as formulas. They are editor helpers, not document images.
+const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, .ProseMirror-gapcursor, .ProseMirror-widget, .ProseMirror-separator"
 const SVG_NS = "http://www.w3.org/2000/svg"
 const TILE_HEIGHT = 2048
 

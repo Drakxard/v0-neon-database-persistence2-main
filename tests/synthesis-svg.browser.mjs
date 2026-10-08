@@ -257,3 +257,36 @@ test("a broken source image reports which image needs attention", async () => {
     assert.match(failure, /No se pudo cargar la imagen 1 de Síntesis/)
   } finally { await browser.close() }
 })
+
+test("exports the actual Tiptap math editor without treating caret separators as images", async () => {
+  const { browser, page } = await setup()
+  try {
+    const editorBundle = await build({
+      stdin: { contents: `
+        import { Editor } from '@tiptap/core';
+        import StarterKit from '@tiptap/starter-kit';
+        import { SynthesisMath } from './components/synthesis/math-extension';
+        window.testEditor = new Editor({
+          element: document.querySelector('#editor'), extensions: [StarterKit, SynthesisMath],
+          content: { type: 'doc', content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Dado que ' },
+              { type: 'synthesisMath', attrs: { latex: 'beta > 0', display: false } }] },
+            { type: 'paragraph', content: [{ type: 'synthesisMath', attrs: { latex: 'y(x)=x^2', display: true } }] }
+          ] }
+        });
+      `, resolveDir: process.cwd(), loader: "ts" },
+      bundle: true, write: false, platform: "browser", format: "iife",
+    })
+    await page.setContent('<!doctype html><div id="editor" style="width:520px;font:22px Arial"></div>')
+    await page.addScriptTag({ content: editorBundle.outputFiles[0].text })
+    assert.ok(await page.locator("img.ProseMirror-separator").count() > 0, "real editor inserts src-less images after math nodes")
+    const result = await page.evaluate(async () => {
+      const source = document.querySelector(".tiptap")
+      const before = source.outerHTML
+      const svg = await synthesisSvg.buildSynthesisEditorSvg(source)
+      return { unchanged: before === source.outerHTML, svg }
+    })
+    assert.equal(result.unchanged, true)
+    assert.match(result.svg, /data:image\/jpeg/)
+  } finally { await browser.close() }
+})
