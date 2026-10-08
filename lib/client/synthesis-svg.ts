@@ -7,6 +7,24 @@ const EDITOR_CONTROLS = ".synthesis-image-size-controls, .column-resize-handle, 
 const SVG_NS = "http://www.w3.org/2000/svg"
 const TILE_HEIGHT = 2048
 
+export type SynthesisSvgProgress = { percent: number; label: string }
+type ExportOptions = {
+  onProgress?: (progress: SynthesisSvgProgress) => void
+  signal?: AbortSignal
+}
+
+function checkCancelled(signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Exportación cancelada.", "AbortError")
+}
+
+// A resolved Promise keeps work on the same microtask queue. Yield to a new
+// browser task so React, painting, input and cancellation can run between batches.
+async function yieldToBrowser(signal?: AbortSignal) {
+  checkCancelled(signal)
+  await new Promise<void>((resolve) => window.setTimeout(resolve, 16))
+  checkCancelled(signal)
+}
+
 function copyStyle(source: CSSStyleDeclaration, target: CSSStyleDeclaration) {
   for (const property of Array.from(source)) {
     if (!property.startsWith("--")) target.setProperty(property, source.getPropertyValue(property))
@@ -31,8 +49,14 @@ async function imageDataUrl(src: string): Promise<string> {
 
 // Like PDF.js, render at 2x and embed JPEGs in a plain, self-contained SVG.
 // HTML is only an intermediate browser render, never part of the downloaded SVG.
-export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<string> {
+export async function buildSynthesisEditorSvg(source: HTMLElement, options: ExportOptions = {}): Promise<string> {
+  const { signal, onProgress } = options
+  const progress = (percent: number, label: string) => onProgress?.({ percent, label })
+  progress(0, "Preparando apunte…")
+  await yieldToBrowser(signal)
   await document.fonts.ready
+  checkCancelled(signal)
+  progress(5, "Preparando imágenes…")
   const images = Array.from(source.querySelectorAll("img")).filter((image) => !image.closest(EDITOR_CONTROLS))
   await Promise.all(images.map(async (image, index) => {
     try {
@@ -47,14 +71,22 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
     if (!imageSources.has(src)) imageSources.set(src, imageDataUrl(src))
   }
   await Promise.all(imageSources.values())
+  await yieldToBrowser(signal)
 
   const clone = source.cloneNode(true) as HTMLElement
   const originals = [source, ...Array.from(source.querySelectorAll<HTMLElement>("*"))]
   const copies = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))]
   const pseudoRules: string[] = []
   const families = new Set<string>()
+  let batchStarted = performance.now()
 
   for (let index = 0; index < originals.length; index++) {
+    checkCancelled(signal)
+    if (performance.now() - batchStarted >= 12) {
+      progress(10 + Math.floor(50 * index / originals.length), "Preparando contenido…")
+      await yieldToBrowser(signal)
+      batchStarted = performance.now()
+    }
     const original = originals[index]
     const copy = copies[index]
     if (original.closest(EDITOR_CONTROLS)) {
@@ -128,7 +160,35 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
   content.setAttribute("height", String(height))
   content.append(clone)
   svg.append(content)
+  progress(60, "Preparando fuentes…")
+  await yieldToBrowser(signal)
   await embedSvgFonts(svg, [...families])
+  checkCancelled(signal)
+
+  // Fonts and document markup are identical in every tile. Serialize and encode
+  // them once instead of repeating the expensive work for every document strip.
+  const serializer = new XMLSerializer()
+  const markup = Array.from(svg.children).filter((child) => child !== content)
+    .map((child) => serializer.serializeToString(child)).join("")
+  // Clipboard control characters are valid in HTML but forbidden in XML 1.0.
+  // Clean the export only, preserving whitespace, math symbols and emoji.
+  const documentMarkup = serializer.serializeToString(clone)
+    .replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, "")
+  const encodedFonts = encodeURIComponent(markup)
+  let encodedDocument = ""
+  batchStarted = performance.now()
+  for (let start = 0; start < documentMarkup.length;) {
+    checkCancelled(signal)
+    let end = Math.min(start + 65536, documentMarkup.length)
+    // Never split a UTF-16 surrogate pair before URI encoding.
+    if (end < documentMarkup.length && /[\ud800-\udbff]/.test(documentMarkup[end - 1])) end--
+    encodedDocument += encodeURIComponent(documentMarkup.slice(start, end))
+    start = end
+    if (performance.now() - batchStarted >= 12) {
+      await yieldToBrowser(signal)
+      batchStarted = performance.now()
+    }
+  }
 
   const canvas = document.createElement("canvas")
   const context = canvas.getContext("2d", { alpha: false })
@@ -137,22 +197,19 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
   try {
     // Short canvases also handle documents beyond the browser's canvas height limit.
     for (let y = 0; y < height; y += TILE_HEIGHT) {
+      progress(65 + Math.floor(30 * y / height), "Generando archivo…")
+      await yieldToBrowser(signal)
       const tileHeight = Math.min(TILE_HEIGHT, height - y)
-      svg.setAttribute("height", String(tileHeight))
-      svg.setAttribute("viewBox", `0 0 ${width} ${tileHeight}`)
-      content.setAttribute("y", String(-y))
       const image = new Image()
-      // PDF/clipboard text can contain invisible characters accepted by HTML
-      // but forbidden in XML 1.0. Clean only the serialized export, preserving
-      // the editor, valid whitespace, mathematical symbols and surrogate pairs.
-      const serialized = new XMLSerializer().serializeToString(svg)
-        .replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, "")
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serialized)}`
+      const header = `<svg xmlns="${SVG_NS}" width="${width}" height="${tileHeight}" viewBox="0 0 ${width} ${tileHeight}">`
+      const tile = `<foreignObject width="${width}" height="${height}" y="${-y}">`
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(header)}${encodedFonts}${encodeURIComponent(tile)}${encodedDocument}${encodeURIComponent("</foreignObject></svg>")}`
       try {
         await image.decode()
       } catch {
         throw new Error("No se pudo renderizar el contenido de Síntesis para exportarlo como SVG.")
       }
+      checkCancelled(signal)
       canvas.width = width * SVG_RENDER_SCALE
       canvas.height = tileHeight * SVG_RENDER_SCALE
       context.fillStyle = "#fffdf8"
@@ -162,6 +219,8 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
       if (!raster.startsWith("data:image/jpeg")) throw new Error("No se pudo renderizar el SVG de Síntesis.")
       pages.push({ width, height: tileHeight, image: raster })
     }
+    progress(98, "Terminando archivo…")
+    await yieldToBrowser(signal)
     return buildRasterSvg(pages, 0)
   } finally {
     canvas.width = 1
@@ -169,10 +228,13 @@ export async function buildSynthesisEditorSvg(source: HTMLElement): Promise<stri
   }
 }
 
-export async function exportSynthesisEditorSvg() {
+export async function exportSynthesisEditorSvg(options: ExportOptions = {}) {
   const source = document.querySelector<HTMLElement>(".simple-editor-wrapper .tiptap")
   if (!source) throw new Error("No se encontró el editor de Síntesis para exportar.")
-  const svg = await buildSynthesisEditorSvg(source)
+  const svg = await buildSynthesisEditorSvg(source, options)
+  checkCancelled(options.signal)
+  options.onProgress?.({ percent: 100, label: "Descargando archivo…" })
+  await yieldToBrowser(options.signal)
   const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }))
   const link = document.createElement("a")
   link.href = url

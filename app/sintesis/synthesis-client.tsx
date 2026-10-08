@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Download, Mic, MicOff, Pencil, Trash2 } from "lucide-react"
+import { ArrowLeft, Download, LoaderCircle, Mic, MicOff, Pencil, Trash2 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { fetchSubjectMaterialContainers } from "@/lib/material-containers-client"
 import { requireOkJson } from "@/lib/client/api"
@@ -26,7 +26,7 @@ import {
   referencedLocalImageIds,
   type SynthesisWorkspaceV2, type TiptapJSON,
 } from "@/lib/synthesis-workspace"
-import { exportSynthesisEditorSvg } from "@/lib/client/synthesis-svg"
+import { exportSynthesisEditorSvg, type SynthesisSvgProgress } from "@/lib/client/synthesis-svg"
 import { useSynthesisSpeech } from "@/lib/client/synthesis-speech"
 import { voiceNodePath, type VoiceDestination } from "@/lib/synthesis-voice-navigation"
 import styles from "./sintesis.module.css"
@@ -59,6 +59,10 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const [message, setMessage] = useState("")
   const [exportingSvg, setExportingSvg] = useState(false)
   const exportingSvgRef = useRef(false)
+  const [exportProgress, setExportProgress] = useState<SynthesisSvgProgress>({ percent: 0, label: "Preparando apunte…" })
+  const [cancellingExport, setCancellingExport] = useState(false)
+  const exportControllerRef = useRef<AbortController | null>(null)
+  useEffect(() => () => exportControllerRef.current?.abort(), [])
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading")
   const [savedWeeks, setSavedWeeks] = useState<number[]>([])
   const [retry, setRetry] = useState(0)
@@ -415,21 +419,48 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const downloadSvg = async () => {
     if (exportingSvgRef.current) return
     exportingSvgRef.current = true
+    const controller = new AbortController()
+    exportControllerRef.current = controller
+    setExportProgress({ percent: 0, label: "Preparando apunte…" })
+    setCancellingExport(false)
     setExportingSvg(true)
     try {
-      await exportSynthesisEditorSvg()
+      await exportSynthesisEditorSvg({ signal: controller.signal, onProgress: setExportProgress })
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No se pudo exportar el SVG de Síntesis.")
+      if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "No se pudo exportar el SVG de Síntesis.")
     } finally {
+      exportControllerRef.current = null
       exportingSvgRef.current = false
       setExportingSvg(false)
     }
   }
 
+  const cancelExport = () => {
+    setCancellingExport(true)
+    exportControllerRef.current?.abort()
+  }
+
   if (editorSession) return <main className={styles.editorOnly}>
+    <Dialog open={exportingSvg} onOpenChange={(open) => { if (!open) cancelExport() }}>
+      <DialogContent showCloseButton={false} className={styles.exportDialog}>
+        <DialogHeader>
+          <DialogTitle>Exportando apunte</DialogTitle>
+          <DialogDescription>Estamos preparando tu archivo para descargarlo.</DialogDescription>
+        </DialogHeader>
+        <div className={styles.exportStatus} role="status" aria-live="polite">
+          <LoaderCircle className={styles.spinner} aria-hidden="true" />
+          <span>{cancellingExport ? "Cancelando…" : exportProgress.label}</span>
+          <strong>{exportProgress.percent}%</strong>
+        </div>
+        <progress className={styles.exportProgress} value={exportProgress.percent} max={100} aria-label="Progreso de exportación" />
+        <button type="button" className={styles.cancelExport} onClick={cancelExport} disabled={cancellingExport}>
+          {cancellingExport ? "Cancelando…" : "Cancelar"}
+        </button>
+      </DialogContent>
+    </Dialog>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
-      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void downloadSvg() }} disabled={exportingSvg} aria-busy={exportingSvg} aria-label={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"} title={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"}><Download aria-hidden="true" /></button>}
+      toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void downloadSvg() }} disabled={exportingSvg} aria-busy={exportingSvg} aria-label={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"} title={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"}>{exportingSvg ? <LoaderCircle className={styles.spinner} aria-hidden="true" /> : <Download aria-hidden="true" />}</button>}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
         void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))
       }} />

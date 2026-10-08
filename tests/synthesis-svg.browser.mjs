@@ -290,3 +290,63 @@ test("exports the actual Tiptap math editor without treating caret separators as
     assert.match(result.svg, /data:image\/jpeg/)
   } finally { await browser.close() }
 })
+
+test("long exports report increasing progress while browser timers keep running", async () => {
+  const { browser, page } = await setup()
+  try {
+    await page.setContent(`<div class="tiptap" style="width:160px;font:16px Arial">
+      ${"<p>Texto <strong>con formato</strong> y <em>cursiva</em>.</p>".repeat(180)}
+      </div>`)
+    const result = await page.evaluate(async () => {
+      let ticks = 0, contentTicks = 0, startedContent = false
+      const timer = setInterval(() => { ticks++; if (startedContent) contentTicks++ }, 5)
+      const progress = []
+      const source = document.querySelector(".tiptap")
+      const before = source.outerHTML
+      try {
+        const svg = await synthesisSvg.buildSynthesisEditorSvg(source, {
+          onProgress: (value) => { progress.push(value.percent); if (value.percent >= 10 && value.percent < 60) startedContent = true },
+        })
+        return { ticks, contentTicks, progress, unchanged: before === source.outerHTML, svg: svg.startsWith("<?xml") }
+      } finally { clearInterval(timer) }
+    })
+    assert.ok(result.ticks > 10, "browser tasks must run during export")
+    assert.ok(result.contentTicks > 0, "style copying must yield to the browser")
+    assert.equal(result.unchanged, true)
+    assert.equal(result.svg, true)
+    assert.equal(result.progress[0], 0)
+    assert.equal(result.progress.at(-1), 98)
+    assert.ok(result.progress.every((value, index) => index === 0 || value >= result.progress[index - 1]))
+  } finally { await browser.close() }
+})
+
+test("cancelling while styles are copied stops export without downloading or changing the editor", async () => {
+  const { browser, page } = await setup()
+  try {
+    await page.setContent(`<div class="simple-editor-wrapper"><div class="tiptap" style="width:520px">
+      ${"<p>Contenido <strong>del apunte</strong>.</p>".repeat(300)}
+      </div></div>`)
+    const result = await page.evaluate(async () => {
+      const controller = new AbortController()
+      const source = document.querySelector(".tiptap")
+      const before = source.outerHTML
+      let downloads = 0
+      const originalClick = HTMLAnchorElement.prototype.click
+      HTMLAnchorElement.prototype.click = () => { downloads++ }
+      try {
+        await synthesisSvg.exportSynthesisEditorSvg({
+          signal: controller.signal,
+          onProgress: ({ percent }) => {
+            if (percent >= 10 && percent < 60) setTimeout(() => controller.abort(), 0)
+          },
+        })
+        return { unexpectedSuccess: true }
+      } catch (error) {
+        return { error: error.name, downloads, unchanged: before === source.outerHTML }
+      } finally { HTMLAnchorElement.prototype.click = originalClick }
+    })
+    assert.equal(result.error, "AbortError")
+    assert.equal(result.downloads, 0)
+    assert.equal(result.unchanged, true)
+  } finally { await browser.close() }
+})
