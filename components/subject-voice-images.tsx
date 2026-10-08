@@ -15,7 +15,7 @@ import { discardItem, undoDiscard, loadDiscardHistory, isDiscarded, queryDiscard
 import { normalizePdfQuery } from "@/lib/subject-pdf-search"
 import { LoaderCircle } from "lucide-react"
 
-export type VoiceImagesHandle = { escape: () => boolean }
+export type VoiceImagesHandle = { escape: () => boolean; dictate: (final: string, interim: string) => void }
 type Target = { groupId: string } | { name: string; color: string }
 const control = "rounded-lg border border-neutral-300 px-4 py-2 text-base hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-black disabled:opacity-50"
 const colorNames = ["Verde", "Azul", "Amarillo", "Rosa", "Violeta", "Naranja"]
@@ -26,6 +26,10 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
   const [pending, setPending] = useState<File[] | null>(null)
   const [selection, setSelection] = useState<{ images: VoiceImage[]; pdfs: PdfSearchResult[]; destinationId: string } | null>(null)
   const [query, setQuery] = useState("")
+  const queryValue = useRef(query)
+  queryValue.current = query
+  const dictated = useRef<{start: number; text: string} | null>(null)
+  const editedDictation = useRef(false)
   const manualTopics = isManualTopicsQuery(query)
   const topicsRef = useRef<WeekTopicsHandle>(null)
   const [topicsViewing, setTopicsViewing] = useState(false)
@@ -142,7 +146,28 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
 
   useEffect(() => () => { if (viewer) URL.revokeObjectURL(viewer.url) }, [viewer])
 
-  useImperativeHandle(ref, () => ({ escape: () => {
+  useImperativeHandle(ref, () => ({ dictate: (final, interim) => {
+    if (formOpen || viewer || pdfViewer || locked.current) return
+    if (editedDictation.current) {
+      if (!final && interim) return
+      editedDictation.current = false
+      final = ""
+    }
+    const previous = queryValue.current
+    const pending = dictated.current
+    const valid = pending && previous.slice(pending.start, pending.start + pending.text.length) === pending.text
+    const cursor = valid ? pending.start : document.activeElement === searchInput.current ? searchInput.current?.selectionStart ?? previous.length : previous.length
+    const head = previous.slice(0, cursor), tail = previous.slice(cursor + (valid ? pending.text.length : 0))
+    const prefix = head && !/\s$/.test(head) ? " " : ""
+    const confirmed = final ? prefix + final : ""
+    const temporary = interim ? (final ? " " : prefix) + interim : ""
+    const separator = (confirmed || temporary) && tail && !/^\s/.test(tail) ? " " : ""
+    const next = head + confirmed + temporary + separator + tail
+    dictated.current = temporary ? { start: head.length + confirmed.length, text: temporary + separator } : null
+    queryValue.current = next
+    setQuery(next)
+    if (document.activeElement === searchInput.current) queueMicrotask(() => searchInput.current?.setSelectionRange(head.length + confirmed.length + temporary.length, head.length + confirmed.length + temporary.length))
+  }, escape: () => {
     if (locked.current) return true
     if (manualTopics && topicsRef.current?.escape()) { focusCanvas(); return true }
     if (pdfViewer) { setPdfViewer(null); focusCanvas(); return true }
@@ -298,7 +323,6 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
         {searching && matches.length === 0 && visiblePdfs.length === 0 && !pdf.searching && !pdf.preparing && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
-        {searching && pdf.week != null && <p className="mb-3 text-center text-sm text-neutral-500">Teoría · Semana {pdf.week}</p>}
         <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
           {searching ? matches.map(({ image, group: source }) => <SubjectImageBubble key={image.id} image={image} color={source.color} disabled={busy || !historyReady}
             open={() => void openImage(image)} remove={() => removeItem({ scope, kind: "image", itemId: image.id })} failed={failure => setError(message(failure))} />)
@@ -323,7 +347,12 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       {!topicsViewing &&
       <div className="grid shrink-0 grid-cols-[3rem_minmax(0,1fr)_3rem] items-center gap-3 py-2">
         <span aria-hidden="true" />
-        <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes y PDF" data-voice-search
+        <input ref={searchInput} type="text" value={query} onChange={(event) => {
+          if (dictated.current) editedDictation.current = true
+          dictated.current = null
+          queryValue.current = event.target.value
+          setQuery(event.target.value)
+        }} aria-label="Buscar imágenes y PDF" data-voice-search
           autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
         <button type="button" onClick={newGroup} disabled={busy || (!manualTopics && searching && (pdf.searching || pdf.preparing || matches.length + visiblePdfs.length === 0))} aria-label={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"} title={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"}
           className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>

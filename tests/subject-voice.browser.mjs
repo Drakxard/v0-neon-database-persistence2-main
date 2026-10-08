@@ -114,14 +114,14 @@ test("dictado temporal, pausa, reanudación y Esc detienen el micrófono", async
   await dialog.waitFor()
   await dialog.evaluate(async (element) => { await Promise.all(element.getAnimations().map((animation) => animation.finished)) })
   assert.equal(await dialog.getByRole("heading", { name: "Álgebra" }).count(), 1)
-  assert.equal(await dialog.locator("[data-subject-voice-canvas]").innerText(), "")
+  assert.equal(await dialog.locator("[data-voice-search]").inputValue(), "")
   assert.deepEqual(await dialog.boundingBox(), { x: 0, y: 0, width: 975, height: 429 })
   assert.equal(await dialog.evaluate((element) => getComputedStyle(element).backgroundColor), "rgb(255, 255, 255)")
   await page.evaluate(() => {
     const recognition = window.recognitions.at(-1)
     recognition.onresult({ results: [{ isFinal: false, 0: { transcript: "repasar" } }] })
   })
-  await page.getByText("repasar", { exact: true }).waitFor()
+  await page.waitForFunction(() => document.querySelector("[data-voice-search]")?.value === "repasar")
   await page.evaluate(() => {
     const recognition = window.recognitions.at(-1)
     const event = { results: [{ isFinal: true, 0: { transcript: "repasar matrices" } }] }
@@ -129,19 +129,32 @@ test("dictado temporal, pausa, reanudación y Esc detienen el micrófono", async
     recognition.onresult(event)
     window.lateResult = recognition.onresult
   })
-  await page.getByText("repasar matrices", { exact: true }).waitFor()
+  await page.waitForFunction(() => document.querySelector("[data-voice-search]")?.value === "repasar matrices")
+  const search = dialog.locator('[data-voice-search]')
+  await search.fill('repasar matrices 7')
+  await page.evaluate(() => window.recognitions.at(-1).onresult({ results: [
+    {isFinal:true,0:{transcript:'repasar matrices'}}, {isFinal:false,0:{transcript:'inversas'}},
+  ] }))
+  await page.waitForFunction(() => document.querySelector('[data-voice-search]')?.value === 'repasar matrices 7 inversas')
+  await search.fill('repasar matrices 7 inversa')
+  await page.evaluate(() => window.recognitions.at(-1).onresult({ results: [
+    {isFinal:true,0:{transcript:'repasar matrices'}}, {isFinal:true,0:{transcript:'inversas'}},
+  ] }))
+  assert.equal(await search.inputValue(), 'repasar matrices 7 inversa')
+  assert.equal(await dialog.locator('[data-subject-voice-canvas]').count(), 0)
   await dialog.getByRole("button", { name: "Pausar micrófono" }).click()
   assert.equal(await page.evaluate(() => window.recognitions.at(-1).aborted), true)
   await page.evaluate(() => window.lateResult({ results: [{ isFinal: true, 0: { transcript: "tardío" } }] }))
-  assert.equal(await dialog.locator("[data-subject-voice-canvas]").innerText(), "repasar matrices")
+  assert.equal(await dialog.locator("[data-voice-search]").inputValue(), "repasar matrices 7 inversa")
   await dialog.getByRole("button", { name: "Activar micrófono" }).click()
   assert.equal(await page.evaluate(() => window.recognitions.length), 2)
+  await page.keyboard.press("Escape")
   await page.keyboard.press("Escape")
   await dialog.waitFor({ state: "hidden" })
   assert.equal(await page.evaluate(() => window.recognitions.at(-1).aborted), true)
   await page.getByRole("button", { name: "Abrir materia" }).click()
   await dialog.waitFor()
-  assert.equal(await dialog.locator("[data-subject-voice-canvas]").innerText(), "")
+  assert.equal(await dialog.locator("[data-voice-search]").inputValue(), "")
   assert.equal(await page.evaluate(() => window.voiceRequests.every((request) => request.method === "GET")), true)
 })
 

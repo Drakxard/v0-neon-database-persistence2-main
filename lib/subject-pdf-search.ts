@@ -44,6 +44,23 @@ export function pdfTextMatches(text: string, query: string) {
   return terms.length > 0 && terms.every((term) => variants(term).some((form) => tokens.includes(form)))
 }
 
+// Continuing a completed search narrows its accepted results, without another
+// document scan or relevance evaluation. Keep the broad set for Backspace.
+export function continuesPdfQuery(base: string, query: string) {
+  const broad = normalizePdfQuery(base), next = normalizePdfQuery(query)
+  return Boolean(broad && next && next.startsWith(broad))
+}
+export function filterPdfResults(results: PdfSearchResult[], query: string) {
+  const terms = normalizePdfQuery(query).split(" ").filter(Boolean)
+  return results.filter(result => {
+    const accepted = new Set([...result.decision.blockIds, ...result.decision.partialIds])
+    const text = [result.title, ...result.candidate.blocks.filter(block => accepted.has(block.id)).map(block => block.text)].join(" ")
+    const tokens = normalizePdfQuery(text).split(" ").flatMap(variants)
+    return terms.every((term, index) => variants(term).some(form => tokens.some(token =>
+      token === form || /^\d/.test(form) && token.startsWith(form + ".") || index === terms.length - 1 && token.startsWith(form))))
+  })
+}
+
 export function htmlToPdfText(html: string) {
   return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<\/?(?:p|div|h[1-6]|br|li|tr)\b[^>]*>/gi, " ").replace(/<[^>]+>/g, "")

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { buildPdfCandidates, completePdfQuery, chosenClefOption, htmlToPdfText, normalizePdfQuery, normalizedPdfRegion, parsePdfExtraction, pdfEvaluationCacheKey, pdfResultTitle, pdfTextMatches, type PdfCandidate } from "../lib/subject-pdf-search.ts"
+import { buildPdfCandidates, completePdfQuery, continuesPdfQuery, filterPdfResults, chosenClefOption, htmlToPdfText, normalizePdfQuery, normalizedPdfRegion, parsePdfExtraction, pdfEvaluationCacheKey, pdfResultTitle, pdfTextMatches, type PdfCandidate, type PdfSearchResult } from "../lib/subject-pdf-search.ts"
 import { evaluatePdfCandidate } from "../lib/server/subject-pdf-clef.ts"
 import { evaluatePdfWordUnits } from "../lib/server/subject-pdf-words.ts"
 import { pollDatalabFragments, signDatalabJob, submitDatalabFragments, verifyDatalabJob } from "../lib/server/datalab-fragments.ts"
@@ -25,6 +25,23 @@ function payload() {
     ] },
   ] }, markdown: "# Apuntes", metadata: { failed_pages: [1] } }
 }
+
+test("filtra resultados aceptados al continuar, incluyendo numeración y palabras incompletas", () => {
+  const candidates = buildPdfCandidates(parsePdfExtraction(payload(), [1, 2]).blocks, "teorema")
+  const results: PdfSearchResult[] = candidates.slice(0, 2).map(candidate => ({
+    id:candidate.id,title:candidate.title,fileName:"apuntes.pdf",fileId:"file",hash:"hash",week:1,query:"teorema",candidate,
+    decision:{id:candidate.id,accepted:true,blockIds:candidate.blocks.map(block => block.id),partialIds:[]},
+  }))
+  assert.equal(continuesPdfQuery("Teo", "teorema 7"), true)
+  assert.equal(continuesPdfQuery("teorema", "derivada"), false)
+  assert.equal(continuesPdfQuery("teorema 7", "teorema"), false)
+  assert.equal(filterPdfResults(results, "teorema 7").length, 2)
+  assert.equal(filterPdfResults(results, "teorema 7.2.1").length, 1)
+  assert.equal(filterPdfResults(results, "teorema 8").length, 0)
+  assert.equal(filterPdfResults(results, "teorema deriv")[0], results[1])
+  assert.equal(filterPdfResults(results, "teoremas inversas")[0], results[0])
+  assert.equal(results.length, 2)
+})
 test("normaliza consultas genéricas y no confunde una subcadena con una palabra", () => {
   assert.equal(normalizePdfQuery("  DEFINICIÓN  Teo "), "definicion teorema")
   assert.equal(normalizePdfQuery("def"), "definicion")

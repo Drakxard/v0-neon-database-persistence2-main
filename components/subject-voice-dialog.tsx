@@ -39,7 +39,7 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
   const [serviceError, setServiceError] = useState("")
   const [pdfViewing, setPdfViewing] = useState(false)
   const imagesRef = useRef<VoiceImagesHandle>(null)
-  const voice = useSubjectVoice(subject?.id ?? null, !paused, attempt)
+  const voice = useSubjectVoice(subject?.id ?? null, !paused, attempt, (final, interim) => imagesRef.current?.dictate(final, interim))
 
   useEffect(() => { setPaused(false) }, [subject?.id])
 
@@ -94,14 +94,6 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
           Dictado para {subject?.name}. Escribí para buscar imágenes y fragmentos de PDF de teoría. Escape o Backspace vuelven un nivel; desde el inicio cierran la materia.
         </DialogDescription>
         {subject && <SubjectVoiceImages key={`${subject.id}:${weekNumber ?? "current"}`} subjectId={subject.id} weekNumber={weekNumber} ref={imagesRef} onPdfViewing={setPdfViewing} />}
-        <div className={pdfViewing ? "hidden" : "max-h-[20vh] shrink-0 overflow-y-auto"} data-subject-voice-canvas>
-          {(voice.transcript || voice.interim) && (
-            <p className="max-w-4xl text-lg leading-relaxed whitespace-pre-wrap sm:text-xl">
-              {voice.transcript}{voice.transcript && voice.interim ? " " : ""}
-              <span className="text-neutral-400">{voice.interim}</span>
-            </p>
-          )}
-        </div>
         <p className="sr-only" role="status" aria-live="polite">
           {paused ? "Micrófono pausado" : voice.status === "listening" ? "Escuchando" : voice.status === "starting" ? "Activando micrófono" : "Micrófono detenido"}
         </p>

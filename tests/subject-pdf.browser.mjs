@@ -186,38 +186,82 @@ async function setup(t, { holdPoll = false } = {}) {
 }
 
 async function waitForPdfFrame(page) {
-  await page.locator('[data-voice-pdf-frame]').waitFor();
-  await page.waitForFunction(() => {
-    const app=document.querySelector('[data-voice-pdf-frame]')?.contentWindow?.PDFViewerApplication;
-    return app?.pdfDocument && app.pdfViewer.getPageView(0)?.renderingState === 3;
-  });
+  await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll][data-pdf-ready="true"]').waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-voice-pdf-fragment] img')].every(image => image.complete && image.naturalWidth > 0));
 }
 
-test("los globos abren un iframe ya renderizado y ubicado, y lo reutilizan al volver", async t => {
+test("prepara diez resultados y continuar el término filtra sin consultar el PDF", async t => {
+  const page = await setup(t)
+  await page.evaluate(() => {
+    window.fixturePayload.json.children = [window.fixturePayload.json.children[0]]
+    window.fixturePayload.json.children[0].children = Array.from({length:10}, (_, i) => [{
+      id:`/page/0/SectionHeader/${i}`, block_type:'SectionHeader',
+      html:`<h2>TEOREMA ${i < 6 ? 7 : 8}.2.${i + 1} Transformada</h2>`,
+      bbox:[40,40+i*50,360,65+i*50],children:[],
+    }, {id:`/page/0/Text/${i}`,block_type:'Text',html:'<p>Enunciado y demostración.</p>',bbox:[40,66+i*50,360,85+i*50],children:[]}]).flat()
+  })
+  // Invalidate the extraction produced by the initial preparation.
+  await page.evaluate(() => {
+    window.materials[0].updated_at='ten-results'
+    for (const key of [...window.workspaceFiles.keys()]) if (/extraction\.json(?:\.|$)/.test(key)) window.workspaceFiles.delete(key)
+    window.dispatchEvent(new Event('focus'))
+  })
+  await page.evaluate(() => window.changePdfSubject('fisica'))
+  await page.waitForFunction(() => document.querySelector('[data-voice-search]')?.value === '')
+  await page.evaluate(() => window.changePdfSubject('algebra'))
+  await page.locator('[data-voice-search]').fill('teorema')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===10)
+  await page.waitForFunction(() => document.querySelectorAll('[data-pdf-preloaded] [data-pdf-ready="true"]').length===10)
+  const calls = await page.evaluate(() => window.pdfRequests.length)
+  await page.locator('[data-voice-search]').fill('teorema 7')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===6)
+  assert.equal(await page.evaluate(() => window.pdfRequests.length), calls)
+  await page.locator('[data-voice-search]').fill('teorema 7.2.1')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===1)
+  await page.locator('[data-voice-search]').fill('teorema')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===10)
+  assert.equal(await page.evaluate(() => window.pdfRequests.length), calls)
+})
+
+test("continuar mientras Clef responde conserva la búsqueda en curso", async t => {
+  const page = await setup(t)
+  await page.evaluate(() => { window.holdClef = true })
+  await page.locator('[data-voice-search]').fill('derivada')
+  await page.waitForFunction(() => Boolean(window.releaseClef))
+  await page.locator('[data-voice-search]').fill('derivada ejemplo')
+  await page.evaluate(() => { window.holdClef = false; window.releaseClef() })
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===1)
+  assert.match(await page.locator('[data-voice-pdf-id]').innerText(), /Ejemplo/)
+  await page.locator('[data-voice-search]').fill('derivada')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===2)
+  assert.equal(await page.evaluate(() => window.pdfRequests.filter(request => request.url.endsWith('pdf-evaluate')).length), 2)
+})
+
+test("los globos abren imágenes ya preparadas y ubicadas, y las reutilizan al volver", async t => {
   const page=await setup(t)
   const search=page.locator('[data-voice-search]')
   await search.fill('derivada')
   await page.waitForFunction(()=>document.querySelectorAll('[data-voice-pdf-id]').length===2)
-  await page.waitForFunction(()=>document.querySelectorAll('[data-pdf-preloaded] iframe[data-pdf-ready="true"]').length===2)
+  await page.waitForFunction(()=>document.querySelectorAll('[data-pdf-preloaded] [data-pdf-image-scroll][data-pdf-ready="true"]').length===2)
   await page.evaluate(()=>{
     const id=document.querySelector('[data-voice-pdf-id]').getAttribute('data-voice-pdf-id')
-    window.preparedFrame=[...document.querySelectorAll('[data-pdf-preloaded]')].find(node=>node.getAttribute('data-pdf-preloaded')===id).querySelector('iframe')
+    window.preparedFrame=[...document.querySelectorAll('[data-pdf-preloaded]')].find(node=>node.getAttribute('data-pdf-preloaded')===id).querySelector('[data-pdf-image-scroll]')
     window.subsetLoads=0
     const load=window.PDFLib.PDFDocument.load
     window.PDFLib.PDFDocument.load=(...args)=>{window.subsetLoads++;return load(...args)}
   })
   await page.locator('[data-voice-pdf-id]').first().click()
-  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-frame]')===window.preparedFrame),true)
-  assert.equal(await page.locator('[data-voice-pdf-frame]').getAttribute('data-pdf-ready'),'true')
+  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-fragment] [data-pdf-image-scroll]')===window.preparedFrame),true)
+  assert.equal(await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').getAttribute('data-pdf-ready'),'true')
   assert.equal(await page.getByText('Abriendo páginas…',{exact:true}).count(),0)
-  await page.frameLocator('[data-voice-pdf-frame]').locator('body').evaluate(()=>{window.PDFViewerApplication.pdfViewer.container.scrollTop=300})
-  await page.frameLocator('[data-voice-pdf-frame]').locator('body').press('Backspace')
+  await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').evaluate(node=>{node.scrollTop=300})
+  await page.keyboard.press('Backspace')
   await search.waitFor()
   await page.waitForFunction(()=>window.preparedFrame.getAttribute('data-pdf-ready')==='true')
   await page.locator('[data-voice-pdf-id]').first().click()
-  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-frame]')===window.preparedFrame),true)
+  assert.equal(await page.evaluate(()=>document.querySelector('[data-voice-pdf-fragment] [data-pdf-image-scroll]')===window.preparedFrame),true)
   assert.equal(await page.evaluate(()=>window.subsetLoads),0)
-  const scroll=await page.frameLocator('[data-voice-pdf-frame]').locator('body').evaluate(()=>window.PDFViewerApplication.pdfViewer.container.scrollTop)
+  const scroll=await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').evaluate(node=>node.scrollTop)
   assert.ok(scroll<150,`Se conservó el scroll manual de ${scroll}px`)
 })
 
@@ -255,7 +299,7 @@ test("DEFINICI encuentra el término completo y el historial anterior se adapta 
   assert.equal(await page.locator('[data-voice-search]').inputValue(),'DEFINICI')
 })
 
-test("PDF a todo el ancho y alto con solo el micrófono superpuesto en escritorio y móvil", async t => {
+test("imágenes a todo el ancho y alto con micrófono y acceso al original en escritorio y móvil", async t => {
   const css=await postcss([tailwind()]).process(await readFile('app/globals.css','utf8'),{from:'app/globals.css'})
   for (const viewport of [{width:1366,height:768},{width:390,height:844}]) {
     const page=await setup(t)
@@ -266,15 +310,15 @@ test("PDF a todo el ancho y alto con solo el micrófono superpuesto en escritori
     await page.locator('[data-voice-pdf-id]').click()
     await waitForPdfFrame(page)
     await page.getByText('Abriendo páginas…',{exact:true}).waitFor({state:'hidden'})
-    const bounds=await page.locator('[data-voice-pdf-frame]').boundingBox()
+    const bounds=await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').boundingBox()
     assert.ok(Math.abs(bounds.x)<1 && Math.abs(bounds.y)<1,JSON.stringify(bounds))
     assert.ok(Math.abs(bounds.width-viewport.width)<1 && Math.abs(bounds.height-viewport.height)<1,JSON.stringify(bounds))
     assert.ok((await page.getByRole('heading',{name:'Álgebra'}).boundingBox()).width<=1)
-    assert.ok((await page.getByRole('link',{name:'Abrir PDF original'}).boundingBox()).width<=1)
+    assert.equal(await page.getByRole('link',{name:'Abrir PDF original'}).isVisible(),true)
     const mic=page.getByRole('button',{name:/micrófono/})
     await mic.waitFor()
     assert.equal(await mic.isVisible(),true)
-    await page.frameLocator('[data-voice-pdf-frame]').locator('body').press('Escape')
+    await page.keyboard.press('Escape')
     await page.locator('[data-voice-search]').waitFor()
     assert.equal(await page.getByRole('heading',{name:'Álgebra'}).isVisible(),true)
   }
@@ -300,23 +344,19 @@ test("el visor no repite el título y abre el enunciado exacto después de otro 
   await waitForPdfFrame(page)
   await page.getByText('Abriendo páginas…',{exact:true}).waitFor({state:'hidden'})
   assert.equal(await page.locator('[data-voice-pdf-fragment] h2').count(),0)
-  const frame=page.frameLocator('[data-voice-pdf-frame]')
-  const location=await frame.locator('body').evaluate(() => {
-    const app=window.PDFViewerApplication
-    const region=JSON.parse(new URLSearchParams(location.search).get('fragmentRegion'))
-    const view=app.pdfViewer.getPageView(0)
-    const top=view.div.getBoundingClientRect().top + region.y1*view.viewport.height - app.pdfViewer.container.getBoundingClientRect().top
-    return {page:region.page,y:region.y1,top,scroll:app.pdfViewer.container.scrollTop}
+  const location=await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').evaluate(container => {
+    const image=container.querySelector('img')
+    return {page:Number(image.dataset.pdfImagePage),top:image.getBoundingClientRect().top + .65*image.clientHeight-container.getBoundingClientRect().top,scroll:container.scrollTop}
   })
-  assert.equal(location.page,1);assert.equal(location.y,0.65)
+  assert.equal(location.page,2)
   assert.ok(location.scroll>0)
   assert.ok(location.top>=0 && location.top<100, `Enunciado a ${location.top}px del borde`)
-  await frame.locator('body').press('Backspace')
-  await page.locator('[data-voice-pdf-frame]').waitFor({state:'hidden'})
+  await page.keyboard.press('Backspace')
+  await page.locator('[data-voice-pdf-fragment] [data-pdf-image-scroll]').waitFor({state:'hidden'})
   await page.locator('[data-voice-pdf-id]').waitFor()
 })
 
-test("páginas relacionadas deduplicadas, selección y atajos desde el iframe", async t => {
+test("páginas relacionadas deduplicadas, rotación y atajos en la vista de imágenes", async t => {
   const page = await setup(t)
   const data = await page.evaluate(async () => {
     const result = (await window.searchTheory(await window.prepareTheory(), 'teorema')).results[0]
@@ -335,11 +375,10 @@ test("páginas relacionadas deduplicadas, selección y atajos desde el iframe", 
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===1)
   await page.locator('[data-voice-pdf-id]').click()
   await waitForPdfFrame(page)
-  const frame = page.frameLocator('[data-voice-pdf-frame]')
-  await frame.locator('body').press('Control+z')
+  await page.keyboard.press('Control+z')
   await page.waitForFunction(async () => (await window.loadDiscards()).every(entry=>entry.undone))
-  await frame.locator('body').press('Escape')
-  await page.waitForFunction(() => !document.querySelector('[data-voice-pdf-frame]'))
+  await page.keyboard.press('Escape')
+  await page.waitForFunction(() => !document.querySelector('[data-voice-pdf-fragment] [data-pdf-image-scroll]'))
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===2)
 })
 
@@ -458,15 +497,13 @@ test("prepara solo la última teoría y abre páginas completas incluso con rota
   await page.locator("[data-voice-pdf-id]").waitFor()
   assert.equal(await page.locator("[data-voice-pdf-id]").count(), 1)
   assert.match(await page.locator("[data-voice-pdf-id]").innerText(), /TEOREMA 7\.2\.2/)
-  assert.match(await page.locator("[data-voice-bubbles]").innerText(), /Semana 7/)
+  assert.doesNotMatch(await page.locator("[data-voice-bubbles]").innerText(), /Teor\u00eda.*Semana/)
   assert.equal(await page.evaluate(() => window.pdfRequests.filter((r) => r.method === "POST" && r.url.endsWith("pdf-extraction")).length), 1)
   await page.locator("[data-voice-pdf-id]").click()
   await waitForPdfFrame(page)
-  const frame = page.frameLocator('[data-voice-pdf-frame]');
-  assert.equal(await frame.locator('.page').count(), 1);
-  assert.equal(await frame.locator('#toolbarContainer').isVisible(), false);
-  assert.equal(await frame.locator('#sidebarContainer').isVisible(), false);
-  assert.equal(await frame.locator('.textLayer').first().evaluate(node => Boolean(node.textContent)), true);
+  assert.equal(await page.locator('[data-voice-pdf-fragment] img').count(), 1);
+  assert.equal(await page.locator('[data-voice-pdf-fragment] iframe').count(), 0);
+  assert.equal(await page.locator('[data-voice-pdf-fragment] img').evaluate(image => image.naturalWidth > 0), true);
   assert.equal(await page.locator('[data-pdf-crop]').count(), 0);
   assert.equal(await page.evaluate(() => [...window.workspaceFiles.keys()].filter(key => key.endsWith('.png')).length), 0);
   assert.equal(await page.evaluate(() => window.pdfEscape()), true)

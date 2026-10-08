@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 type SpeechResult = { isFinal: boolean; 0: { transcript: string } }
 type SpeechEvent = { resultIndex: number; results: ArrayLike<SpeechResult> }
@@ -21,7 +21,9 @@ type SpeechWindow = Window & {
   webkitSpeechRecognition?: new () => Recognition
 }
 
-export function useSubjectVoice(subjectId: string | null, listening: boolean, attempt = 0) {
+export function useSubjectVoice(subjectId: string | null, listening: boolean, attempt = 0, onText?: (final: string, interim: string) => void) {
+  const textListener = useRef(onText)
+  textListener.current = onText
   const [transcript, setTranscript] = useState("")
   const [interim, setInterim] = useState("")
   const [status, setStatus] = useState<"off" | "starting" | "listening" | "error">("off")
@@ -37,6 +39,7 @@ export function useSubjectVoice(subjectId: string | null, listening: boolean, at
     if (!subjectId || !listening) {
       setStatus("off")
       setInterim("")
+      textListener.current?.("", "")
       setError("")
       return
     }
@@ -63,6 +66,7 @@ export function useSubjectVoice(subjectId: string | null, listening: boolean, at
       try { recognition.abort() } catch { /* The browser may have already stopped it. */ }
       recognition = null
       setInterim("")
+      textListener.current?.("", "")
     }
     const start = () => {
       if (disposed || blocked || recognition || document.visibilityState !== "visible") return
@@ -90,6 +94,7 @@ export function useSubjectVoice(subjectId: string | null, listening: boolean, at
         }
         if (finalParts.length) setTranscript((previous) => [previous, ...finalParts].filter(Boolean).join(" "))
         setInterim(interimParts.join(" "))
+        textListener.current?.(finalParts.join(" "), interimParts.join(" "))
       }
       current.onerror = (event) => {
         if (disposed || event.error === "no-speech" || event.error === "aborted") return
@@ -106,6 +111,7 @@ export function useSubjectVoice(subjectId: string | null, listening: boolean, at
         if (disposed || recognition !== current) return
         recognition = null
         setInterim("")
+        textListener.current?.("", "")
         if (!blocked) {
           setStatus("starting")
           restartTimer = window.setTimeout(start, 350)
