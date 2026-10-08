@@ -74,7 +74,7 @@ export function SubjectVoiceDialog({ subject, onClose, weekNumber }: {
         }}
         className="subject-voice-handwriting inset-0 top-0 left-0 flex h-dvh max-h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-white p-0 text-black shadow-none sm:max-w-none"
       >
-        <div className="pointer-events-none absolute inset-x-5 top-5 z-30 flex items-start justify-between gap-5 sm:inset-x-8 sm:top-8">
+        <div className={cn("pointer-events-none absolute inset-x-5 top-5 z-30 flex items-start justify-between gap-5 sm:inset-x-8 sm:top-8", pdfViewing && "justify-end")}>
           <DialogTitle className={pdfViewing ? "sr-only" : "max-w-[calc(100%_-_5rem)] rounded bg-white/95 px-1 py-1 text-2xl leading-tight font-normal sm:text-[32px]"}>
             {subject?.name}
           </DialogTitle>
