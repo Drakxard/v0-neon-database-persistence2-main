@@ -86,6 +86,7 @@ function clone<T>(value: T): T {
 
 export function plainText(node: TiptapJSON | undefined): string {
   if (!node) return ""
+  if (node.type === "synthesisMath" && typeof node.attrs?.latex === "string") return node.attrs.latex
   if (typeof node.text === "string") return node.text
   return (node.content ?? []).map(plainText).join("").trim()
 }

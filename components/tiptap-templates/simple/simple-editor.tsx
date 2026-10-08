@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
 import { EditorContent, EditorContext, useEditor } from "@tiptap/react"
 import type { Content } from "@tiptap/core"
+import { SynthesisMath } from "@/components/synthesis/math-extension"
+import { normalizeSynthesisMath } from "@/lib/synthesis-math"
 
 // --- Tiptap Core Extensions ---
 import { StarterKit } from "@tiptap/starter-kit"
@@ -269,6 +271,7 @@ export function SimpleEditor({
       LocalImage,
       LocalImagePaste.configure({ onError: (message) => onError?.(message) }),
       CleanReferencePaste,
+      SynthesisMath,
       StructuralId,
       Typography,
       Superscript,
@@ -286,8 +289,11 @@ export function SimpleEditor({
         onError: (error) => onError?.(error.message),
       }),
     ],
-    content: content as Content,
+    content: normalizeSynthesisMath(content) as Content,
     editable,
+    onCreate: ({ editor }) => {
+      if (editable && JSON.stringify(normalizeSynthesisMath(content)) !== JSON.stringify(content)) onChange?.(editor.getJSON() as TiptapJSON)
+    },
     onUpdate: ({ editor }) => onChange?.(editor.getJSON() as TiptapJSON),
   })
 

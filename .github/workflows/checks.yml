@@ -28,4 +28,5 @@ jobs:
       - run: npm test
       - run: npm run test:pdf-search
       - run: npm run test:voice
+      - run: npm run test:synthesis-paste
       - run: npm run build
