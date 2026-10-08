@@ -2,7 +2,7 @@
 
 import { useEffect, useImperativeHandle, useMemo, useRef, useState, type DragEvent, type Ref } from "react"
 import { HandDrawnBubble } from "@/components/hand-drawn-bubble"
-import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, removeVoicePdfFragment, saveVoiceImages, validateVoiceImageFiles, voiceGroupItemCount, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
+import { loadVoiceImageGroups, readVoiceImage, regroupVoiceImages, saveVoiceImages, validateVoiceImageFiles, VOICE_IMAGE_COLORS, type VoiceImage, type VoiceImageWorkspace } from "@/lib/subject-voice-images"
 import { isManualTopicsQuery, searchVoiceImages, voiceGroupDiameter, voiceImageName } from "@/lib/subject-voice-search"
 import { getCurrentWeekNumber } from "@/lib/subject-utils"
 import { SubjectWeekTopics, type WeekTopicsHandle } from "@/components/subject-week-topics"
@@ -10,6 +10,9 @@ import { useSubjectPdfSearch } from "@/hooks/use-subject-pdf-search"
 import { SubjectPdfFragment } from "@/components/subject-pdf-fragment"
 import { SubjectPdfBubble } from "@/components/subject-pdf-bubble"
 import type { PdfSearchResult } from "@/lib/subject-pdf-search"
+import { SubjectImageBubble } from "@/components/subject-image-bubble"
+import { discardItem, undoDiscard, loadDiscardHistory, isDiscarded, queryDiscardScope, pdfDiscardId, type DiscardEntry } from "@/lib/client/subject-discard-history"
+import { normalizePdfQuery } from "@/lib/subject-pdf-search"
 import { LoaderCircle } from "lucide-react"
 
 export type VoiceImagesHandle = { escape: () => boolean }
@@ -27,6 +30,10 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
   const topicsRef = useRef<WeekTopicsHandle>(null)
   const [topicsViewing, setTopicsViewing] = useState(false)
   const pdf = useSubjectPdfSearch(subjectId, query)
+  const [history, setHistory] = useState<DiscardEntry[]>([])
+  const [historyReady, setHistoryReady] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const historyRevision = useRef(0)
   const [pdfViewer, setPdfViewer] = useState<PdfSearchResult | null>(null)
   const [name, setName] = useState("")
   const [color, setColor] = useState<string>(VOICE_IMAGE_COLORS[0])
@@ -43,8 +50,60 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
   const mounted = useRef(true)
   const group = workspace?.groups.find((item) => item.id === groupId)
   const searching = Boolean(query.trim())
-  const matches = useMemo(() => searchVoiceImages(workspace?.groups ?? [], query), [workspace, query])
+  const scope = manualTopics ? `topics:${weekNumber}` : searching ? queryDiscardScope(query) : `group:${groupId}`
+  const matches = useMemo(() => searchVoiceImages(workspace?.groups ?? [], query).filter(({ image }) =>
+    !isDiscarded(history, scope, "image", image.id)), [workspace, query, history, scope])
+  const visiblePdfs = pdf.results.filter(result => !isDiscarded(history, queryDiscardScope(result.query), "pdf", pdfDiscardId(result)))
+  const undoScopes = searching && !manualTopics ? [...new Set([scope, ...history.filter(entry => entry.kind === "pdf" && entry.scope.startsWith("query:") &&
+    entry.result?.query.startsWith(normalizePdfQuery(query))).map(entry => entry.scope)])] : [scope]
+  const canUndo = historyReady && history.some(entry => !entry.undone && undoScopes.includes(entry.scope))
+  const visibleGroupCount = (item: NonNullable<VoiceImageWorkspace["groups"]>[number]) =>
+    item.images.filter(image => !isDiscarded(history, `group:${item.id}`, "image", image.id)).length +
+    (item.pdfs ?? []).filter(result => !isDiscarded(history, `group:${item.id}`, "pdf", pdfDiscardId(result))).length
   const formOpen = pending !== null || selection !== null
+
+  useEffect(() => {
+    let disposed = false
+    const revision = historyRevision.current
+    void loadDiscardHistory(subjectId).then(entries => {
+      if (!disposed && revision === historyRevision.current) { setHistory(entries); setHistoryReady(true) }
+    }).catch(failure => { if (!disposed) setError(message(failure)) })
+    return () => { disposed = true }
+  }, [subjectId, pdf.preparing, pdf.searching, pdf.results])
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), 5000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+  async function removeItem(item: Omit<DiscardEntry, "id" | "undone">) {
+    if (locked.current || !historyReady) return
+    locked.current = true; setBusy(true); setError(""); historyRevision.current++
+    try {
+      const entries = await discardItem(subjectId, item)
+      if (mounted.current) { setHistory(entries); setNotice(entries.findLast(entry => !entry.undone && entry.scope === item.scope && entry.itemId === item.itemId)?.id ?? null) }
+    } finally { locked.current = false; if (mounted.current) setBusy(false) }
+  }
+  async function undo(entryId?: string) {
+    if (locked.current || !historyReady) return
+    locked.current = true; setBusy(true); setError(""); historyRevision.current++
+    try {
+      const entries = await undoDiscard(subjectId, undoScopes, entryId)
+      if (mounted.current) {
+        if (entries.some(entry => entry.legacy && entry.undone && history.some(previous => previous.id === entry.id && !previous.undone))) pdf.retry()
+        setHistory(entries); setNotice(null)
+      }
+    } catch (failure) { if (mounted.current) setError(message(failure)) }
+    finally { locked.current = false; if (mounted.current) setBusy(false) }
+  }
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.shiftKey || event.altKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z" || formOpen) return
+      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]") && event.target !== searchInput.current) return
+      event.preventDefault(); void undo()
+    }
+    window.addEventListener("keydown", key)
+    return () => window.removeEventListener("keydown", key)
+  })
 
   function focusCanvas() { canvas.current?.focus() }
   function cancelForm() { setPending(null); setSelection(null); setRetry(null); setError(""); focusCanvas() }
@@ -142,8 +201,8 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
     if (locked.current || formOpen || viewer || pdfViewer) return
     if (manualTopics) { if (!topicsRef.current?.blocksInput()) topicsRef.current?.choose(); return }
     if (!searching) { choose(null); return }
-    if (!matches.length && !pdf.results.length) return
-    setSelection({ images: matches.map((match) => match.image), pdfs: structuredClone(pdf.results), destinationId: crypto.randomUUID() })
+    if (!matches.length && !visiblePdfs.length) return
+    setSelection({ images: matches.map((match) => match.image), pdfs: structuredClone(visiblePdfs), destinationId: crypto.randomUUID() })
     setName(query.trim())
     setColor(VOICE_IMAGE_COLORS[0])
     setRetry(null)
@@ -222,42 +281,37 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       <img src={viewer.url} alt={viewer.image.name} className="min-h-0 w-full flex-1 object-contain" onError={() => { setError(`No se pudo mostrar ${viewer.image.name}. Volvé al conjunto e intentá abrirla otra vez.`) }} />
     </div>}
 
-    {workspace && !formOpen && pdfViewer && <SubjectPdfFragment result={pdfViewer} />}
+    {workspace && !formOpen && pdfViewer && <SubjectPdfFragment key={pdfViewer.id} result={pdfViewer} subjectId={subjectId}
+      onBack={() => { setPdfViewer(null); focusCanvas() }} onUndo={() => void undo()}
+      onSearchAgain={() => { setPdfViewer(null); pdf.retry(); focusCanvas() }} />}
 
     {workspace && !formOpen && !viewer && !pdfViewer && <>
       {manualTopics ? <SubjectWeekTopics key={`${subjectId}:${weekNumber}`} subjectId={subjectId} weekNumber={weekNumber}
-        ref={topicsRef} onBusy={setBusy} onViewing={setTopicsViewing} /> : <>
+        ref={topicsRef} onBusy={setBusy} onViewing={setTopicsViewing} history={history} historyReady={historyReady}
+        remove={image => removeItem({ scope: `topics:${weekNumber}`, kind: "topic", itemId: image.id })} /> : <>
       {workspace.groups.length === 0 && !searching ? <button type="button" disabled={busy} onClick={() => choose(null)} className="flex min-h-48 flex-1 flex-col items-center justify-center gap-2 px-2 py-10 text-center text-xl leading-relaxed sm:text-2xl">
         <span>Arrastrá imágenes con su nombre y extensión</span><span>Elegí un nombre y un color para el conjunto</span><span>O tocá aquí para seleccionarlas</span>
       </button> : <div className="min-h-0 flex-1 overflow-y-auto py-5" data-voice-bubbles>
-        {searching && matches.length === 0 && pdf.results.length === 0 && !pdf.searching && !pdf.preparing && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
+        {searching && matches.length === 0 && visiblePdfs.length === 0 && !pdf.searching && !pdf.preparing && !pdf.errors.length && <p role="status" className="py-10 text-center text-xl">Sin coincidencias</p>}
         {searching && pdf.week != null && <p className="mb-3 text-center text-sm text-neutral-500">Teoría · Semana {pdf.week}</p>}
         <div className={searching || group ? "grid grid-cols-1 items-start gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3" : "flex flex-wrap items-center justify-center gap-10"}>
-          {searching ? matches.map(({ image, group: source }) => <HandDrawnBubble key={image.id} seed={image.id} color={source.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
-            : group ? group.images.map((image) => <HandDrawnBubble key={image.id} seed={image.id} color={group.color} disabled={busy} data-voice-image-id={image.id} onClick={() => void openImage(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)
+          {searching ? matches.map(({ image, group: source }) => <SubjectImageBubble key={image.id} image={image} color={source.color} disabled={busy || !historyReady}
+            open={() => void openImage(image)} remove={() => removeItem({ scope, kind: "image", itemId: image.id })} failed={failure => setError(message(failure))} />)
+            : group ? group.images.filter(image => !isDiscarded(history, scope, "image", image.id)).map(image => <SubjectImageBubble key={image.id} image={image} color={group.color} disabled={busy || !historyReady}
+              open={() => void openImage(image)} remove={() => removeItem({ scope, kind: "image", itemId: image.id })} failed={failure => setError(message(failure))} />)
             : workspace.groups.map((item) => <HandDrawnBubble key={item.id} seed={item.id} color={item.color} disabled={busy}
               className="aspect-square min-h-0 max-w-full shrink-0 px-5 py-5"
-              style={{ width: voiceGroupDiameter(voiceGroupItemCount(item)), fontSize: Math.min(28, voiceGroupDiameter(voiceGroupItemCount(item)) / 8) }}
-              onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${voiceGroupItemCount(item)} ${item.pdfs?.length ? "elementos" : "imágenes"}`}>
-              <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{voiceGroupItemCount(item)}</span>
+              style={{ width: voiceGroupDiameter(visibleGroupCount(item)), fontSize: Math.min(28, voiceGroupDiameter(visibleGroupCount(item)) / 8) }}
+              onClick={() => setGroupId(item.id)} onDrop={(event) => drop(event, item.id)} aria-label={`${item.name}, ${visibleGroupCount(item)} ${item.pdfs?.length ? "elementos" : "imágenes"}`}>
+              <span className="block">{item.name}</span><span className="mt-3 block text-5xl sm:text-6xl">{visibleGroupCount(item)}</span>
             </HandDrawnBubble>)}
-          {searching && pdf.results.map((result) => <SubjectPdfBubble key={result.id} result={result}
-            disabled={busy}
-            open={() => { setPdfViewer(result); focusCanvas() }} removed={() => pdf.dismiss(result.id, result.query)}
-            failed={pdf.correctionFailed} />)}
-          {!searching && group?.pdfs?.map((result) => <SubjectPdfBubble key={result.id} result={result} disabled={busy} color={group.color}
+          {searching && historyReady && visiblePdfs.map(result => <SubjectPdfBubble key={result.id} result={result}
+            disabled={busy} open={() => { setPdfViewer(result); focusCanvas() }} removed={() => {}}
+            remove={() => removeItem({ scope: queryDiscardScope(result.query), kind: "pdf", itemId: pdfDiscardId(result), result })}
+            failed={failure => setError(message(failure))} />)}
+          {!searching && historyReady && group?.pdfs?.filter(result => !isDiscarded(history, scope, "pdf", pdfDiscardId(result))).map(result => <SubjectPdfBubble key={result.id} result={result} disabled={busy} color={group.color}
             open={() => { setPdfViewer(result); focusCanvas() }} removed={() => {}}
-            remove={async () => {
-              if (locked.current) return
-              locked.current = true; setBusy(true); setError("")
-              try {
-                const next = await removeVoicePdfFragment(subjectId, group.id, result.id)
-                if (mounted.current) {
-                  setWorkspace(next)
-                  if (!next.groups.some((item) => item.id === group.id)) setGroupId(null)
-                }
-              } finally { locked.current = false; if (mounted.current) setBusy(false) }
-            }} failed={(failure) => setError(message(failure))} />)}
+            remove={() => removeItem({ scope, kind: "pdf", itemId: pdfDiscardId(result), result })} failed={failure => setError(message(failure))} />)}
         </div>
       </div>}
       </>}
@@ -266,7 +320,7 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
         <span aria-hidden="true" />
         <input ref={searchInput} type="text" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Buscar imágenes y PDF" data-voice-search
           autoComplete="off" spellCheck={false} disabled={busy} className="min-w-0 border-0 bg-transparent px-1 py-2 text-center text-2xl outline-none focus-visible:underline focus-visible:decoration-neutral-300 focus-visible:underline-offset-8" />
-        <button type="button" onClick={newGroup} disabled={busy || (!manualTopics && searching && (pdf.searching || pdf.preparing || matches.length + pdf.results.length === 0))} aria-label={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"} title={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"}
+        <button type="button" onClick={newGroup} disabled={busy || (!manualTopics && searching && (pdf.searching || pdf.preparing || matches.length + visiblePdfs.length === 0))} aria-label={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"} title={manualTopics ? "Subir imágenes de temas" : "Nuevo conjunto"}
           className="flex h-12 w-12 items-center justify-center rounded-full border-[3px] border-dotted border-[#f08c00] text-3xl text-[#f08c00] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#f08c00] disabled:opacity-30">+</button>
       </div>}
     </>}
@@ -283,8 +337,13 @@ export function SubjectVoiceImages({ subjectId, weekNumber = getCurrentWeekNumbe
       </div>}
     </>}
     {!manualTopics && busy && <p role="status" className="shrink-0 py-2 text-center">Procesando imágenes…</p>}
-    {!manualTopics && error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
+    {!formOpen && canUndo && <button type="button" className="shrink-0 self-end rounded-lg border px-3 py-1 text-sm" disabled={busy} onClick={() => void undo()}>Deshacer</button>}
+    {notice && <div role="status" className="absolute bottom-16 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-lg bg-neutral-900 px-4 py-3 text-white" data-discard-notice>
+      <span>Borrado</span><button type="button" disabled={busy} className="underline" onClick={() => void undo(notice)}>Deshacer</button>
+    </div>}
+    {error && <div className="max-h-36 shrink-0 overflow-y-auto py-3 text-base">
       <p role="alert" className="whitespace-pre-wrap">{error}</p>
+      {!historyReady && <button className={control} onClick={() => void loadDiscardHistory(subjectId).then(entries => { setHistory(entries); setHistoryReady(true); setError("") }).catch(failure => setError(message(failure)))}>Reintentar historial</button>}
       {!workspace && <button className={control} onClick={() => void refresh()}>Reintentar carga</button>}
       {retry && <button className={control} disabled={busy} onClick={() => void runSave(retry.files, retry.target)}>Reintentar guardado</button>}
       {selection && <button className={control} disabled={busy} onClick={() => void runRegroup()}>Reintentar guardado</button>}

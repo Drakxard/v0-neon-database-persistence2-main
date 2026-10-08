@@ -1,14 +1,14 @@
 "use client"
 
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react"
-import { HandDrawnBubble } from "./hand-drawn-bubble"
+import { SubjectImageBubble } from "./subject-image-bubble"
+import { isDiscarded, type DiscardEntry } from "@/lib/client/subject-discard-history"
 import { loadWeekTopics, saveWeekTopics, readWeekTopicImage, type WeekTopics } from "@/lib/client/subject-week-topics"
-import { voiceImageName } from "@/lib/subject-voice-search"
 import type { VoiceImage } from "@/lib/subject-voice-images"
 
 export type WeekTopicsHandle = { receive: (files: File[]) => Promise<void>; choose: () => void; escape: () => boolean; blocksInput: () => boolean }
-export function SubjectWeekTopics({ subjectId, weekNumber, ref, onBusy, onViewing }: {
-  subjectId: string; weekNumber: number; ref?: Ref<WeekTopicsHandle>; onBusy: (busy: boolean) => void; onViewing: (viewing: boolean) => void
+export function SubjectWeekTopics({ subjectId, weekNumber, ref, onBusy, onViewing, history, historyReady, remove }: {
+  subjectId: string; weekNumber: number; ref?: Ref<WeekTopicsHandle>; onBusy: (busy: boolean) => void; onViewing: (viewing: boolean) => void; history: DiscardEntry[]; historyReady: boolean; remove: (image: VoiceImage) => Promise<void>
 }) {
   const [workspace,setWorkspace] = useState<WeekTopics | null>(null)
   const [error,setError] = useState("")
@@ -71,8 +71,8 @@ export function SubjectWeekTopics({ subjectId, weekNumber, ref, onBusy, onViewin
       </button>}
       {!workspace && !error && <p role="status">Cargando temas…</p>}
       <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
-        {workspace?.images.map(image=><HandDrawnBubble key={image.id} seed={image.id} color="#ffec99" disabled={busy} data-topic-image-id={image.id}
-          onClick={()=>void open(image)}>{voiceImageName(image.name)}</HandDrawnBubble>)}
+        {historyReady && workspace?.images.filter(image => !isDiscarded(history, `topics:${weekNumber}`, "topic", image.id)).map(image => <SubjectImageBubble key={image.id} image={image} topic color="#ffec99" disabled={busy}
+          open={() => void open(image)} remove={() => remove(image)} failed={failure => setError(message(failure))} />)}
       </div>
     </>}
     {busy && <p role="status">Procesando imágenes…</p>}

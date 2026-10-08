@@ -1,56 +1,70 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { renderPdfFragment } from "@/lib/client/subject-pdf-crops"
-import { correctPdfFragment } from "@/lib/client/subject-pdf-corrections"
+import { useEffect, useRef, useState } from "react"
+import { createRelatedPdf, PdfSourceError, relatedPdfPages, resolvePdfSource } from "@/lib/client/subject-pdf-pages"
 import { pdfFragmentViewerHref } from "@/lib/client/subject-pdf-viewer"
-import { usePdfLongPress } from "@/hooks/use-pdf-long-press"
-import type { PdfRegion, PdfSearchResult } from "@/lib/subject-pdf-search"
+import type { PdfSearchResult } from "@/lib/subject-pdf-search"
+import { getReadyWorkspaceHandle, loadWorkspaceHandle, requestWorkspacePermission } from "@/lib/local-workspace-client"
 
-type Crop = { page: number; url: string; region: PdfRegion; id: string }
-function PdfCrop({ image, result, removed, failed }: {
-  image: Crop; result: PdfSearchResult; removed: () => void; failed: (error: unknown) => void
+export function SubjectPdfFragment({ result, subjectId, onBack, onUndo, onSearchAgain }: {
+  result: PdfSearchResult; subjectId: string; onBack: () => void; onUndo: () => void; onSearchAgain: () => void
 }) {
-  const press = usePdfLongPress(async () => { await correctPdfFragment(result, image.region); removed() }, failed)
-  return <figure {...press} className="mx-auto max-w-full select-none" data-pdf-crop={image.id}
-    title="Mantené presionado un segundo para quitar este recorte">
-    {/* eslint-disable-next-line @next/next/no-img-element */}
-    <img src={image.url} alt={`${result.title}, página ${image.page}`} draggable={false} className="max-w-full" />
-    <a href={pdfFragmentViewerHref(result, image.region)} target="_blank" rel="noopener noreferrer"
-      onPointerDown={(event) => event.stopPropagation()} className="block text-xs text-neutral-500 underline">Ver en PDF</a>
-  </figure>
-}
-
-export function SubjectPdfFragment({ result }: { result: PdfSearchResult }) {
-  const [images, setImages] = useState<Crop[]>([])
-  const [progress, setProgress] = useState("Abriendo fragmento…")
-  const [error, setError] = useState("")
-  const [warnings, setWarnings] = useState<string[]>([])
+  const [source, setSource] = useState<{ url: string; originalUrl: string; fileId: string | null } | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  const [loading, setLoading] = useState(true)
   const [attempt, setAttempt] = useState(0)
+  const [selected, setSelected] = useState<File | undefined>()
+  const iframe = useRef<HTMLIFrameElement>(null), input = useRef<HTMLInputElement>(null)
+  async function authorize() {
+    try {
+      const root = getReadyWorkspaceHandle() ?? await loadWorkspaceHandle()
+      if (root && await requestWorkspacePermission(root) === "granted") { setAttempt(n => n + 1); return }
+    } catch { /* Keep permission failures actionable inside the viewer. */ }
+    setError(new PdfSourceError("permission", "No se autorizó la carpeta. Volvé a seleccionarla desde la aplicación."))
+  }
   useEffect(() => {
-    const controller = new AbortController()
-    let urls: string[] = []
-    setImages([]); setError(""); setWarnings([]); setProgress("Abriendo fragmento…")
-    void renderPdfFragment(result, controller.signal, (text) => { if (!controller.signal.aborted) setProgress(text) })
-      .then((next) => {
-        urls = next.images.map((image) => image.url)
-        if (controller.signal.aborted) { urls.forEach((url) => URL.revokeObjectURL(url)); return }
-        setImages(next.images); setWarnings(next.warnings); setProgress("")
-      }).catch((failure) => { if (!controller.signal.aborted) { setError(failure instanceof Error ? failure.message : "No se pudo abrir el fragmento."); setProgress("") } })
-    return () => { controller.abort(); urls.forEach((url) => URL.revokeObjectURL(url)) }
-  }, [result, attempt])
-  return <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-4" data-voice-pdf-fragment>
-    <h2 className="text-xl">{result.title}</h2>
-    <a href={pdfFragmentViewerHref(result, images[0]?.region)} target="_blank" rel="noopener noreferrer"
-      className="self-start text-sm underline">Abrir PDF original ↗</a>
-    {progress && <p role="status">{progress}</p>}
-    {images.map((image) => <PdfCrop key={image.id} image={image} result={result}
-      removed={() => setImages((items) => items.filter((item) => item.id !== image.id))}
-      failed={(failure) => setError(failure instanceof Error ? failure.message : "No se pudo guardar la corrección.")} />)}
-    {warnings.map((warning, index) => <p key={index} role="status" className="text-sm text-neutral-600">{warning}</p>)}
-    {!progress && (error || warnings.length > 0) && <div>
-      {error && <p role="alert">{error}</p>}
-      <button type="button" className="mt-3 rounded-lg border px-4 py-2" onClick={() => setAttempt((n) => n + 1)}>Reintentar fragmento</button>
+    const controller = new AbortController(), urls: string[] = []
+    setSource(null); setError(null); setLoading(true)
+    void (async () => {
+      const original = await resolvePdfSource(result, subjectId, controller.signal, selected)
+      const subset = await createRelatedPdf(original.file, result, controller.signal)
+      controller.signal.throwIfAborted()
+      const url = URL.createObjectURL(subset.blob), originalUrl = URL.createObjectURL(original.file)
+      urls.push(url, originalUrl); setSource({ url, originalUrl, fileId: original.fileId })
+    })().catch(failure => {
+      if (controller.signal.aborted) return
+      setError(failure instanceof DOMException && ["NotAllowedError", "SecurityError"].includes(failure.name)
+        ? new PdfSourceError("permission", "Volvé a autorizar la carpeta local para abrir el PDF.")
+        : failure instanceof DOMException ? new Error("No se pudo leer el PDF en la carpeta local. Reintentá o seleccioná el original.")
+        : failure instanceof Error ? failure : new Error("No se pudo abrir el PDF."))
+      setLoading(false)
+    })
+    return () => { controller.abort(); urls.forEach(url => URL.revokeObjectURL(url)) }
+  }, [result, subjectId, attempt, selected])
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== iframe.current?.contentWindow || !event.data) return
+      if (event.data.type === "subjectPdfReady") setLoading(false)
+      if (event.data.type === "subjectPdfError") { setLoading(false); setError(new Error("No se pudo mostrar el PDF. Reintentá o comprobá el archivo original.")) }
+      if (event.data.type === "subjectPdfKey") { if (event.data.key === "undo") onUndo(); else if (event.data.key === "back") onBack() }
+    }
+    window.addEventListener("message", receive)
+    return () => window.removeEventListener("message", receive)
+  }, [onBack, onUndo])
+  const params = source ? new URLSearchParams({ file: "", embeddedReadOnly: "1", embeddedFile: source.url }) : null
+  return <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden pt-4" data-voice-pdf-fragment>
+    <h2 className="shrink-0 text-xl">{result.title}</h2>
+    <a href={source?.fileId ? pdfFragmentViewerHref({ ...result, fileId: source.fileId }) : source ? `${source.originalUrl}#page=${relatedPdfPages(result)[0] ?? 1}` : pdfFragmentViewerHref(result)}
+      target="_blank" rel="noopener noreferrer" className="shrink-0 self-start text-sm underline">Abrir PDF original ↗</a>
+    {loading && <p role="status" className="shrink-0">Abriendo páginas…</p>}
+    {error && <div className="shrink-0"><p role="alert">{error.message}</p>
+      <button type="button" className="mt-2 rounded-lg border px-4 py-2" onClick={() => setAttempt(n => n + 1)}>Reintentar PDF</button>
+      {((error instanceof PdfSourceError && error.code === "missing") || selected) && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => input.current?.click()}>Seleccionar PDF original</button>}
+      {error instanceof PdfSourceError && error.code === "permission" && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={() => void authorize()}>Autorizar carpeta</button>}
+      {error instanceof PdfSourceError && ["changed", "invalid"].includes(error.code) && <button type="button" className="ml-2 rounded-lg border px-4 py-2" onClick={onSearchAgain}>Volver a buscar</button>}
     </div>}
+    <input ref={input} type="file" accept="application/pdf,.pdf" className="hidden" aria-label="Seleccionar PDF original" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) setSelected(file) }} />
+    {params && !error && <iframe key={source!.url} ref={iframe} title={`Páginas de ${result.title}`} data-voice-pdf-frame
+      src={`/pdfjs/web/viewer.html?${params}#zoom=page-width`} className="min-h-0 w-full flex-1 border-0" />}
   </div>
 }

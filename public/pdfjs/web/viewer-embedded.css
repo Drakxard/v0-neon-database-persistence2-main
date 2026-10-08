@@ -1,0 +1,11 @@
+html.pdfjs-embedded-readonly .toolbar,
+html.pdfjs-embedded-readonly #sidebarContainer,
+html.pdfjs-embedded-readonly #secondaryToolbar,
+html.pdfjs-embedded-readonly #editorUndoBar,
+html.pdfjs-embedded-readonly .editorParamsToolbar { display: none !important; }
+html.pdfjs-embedded-readonly #viewerContainer { inset: 0 !important; }
+html.pdfjs-embedded-readonly #mainContainer { margin: 0 !important; }
+html.pdfjs-embedded-readonly { --toolbar-height: 0px; --sidebar-width: 0px; }
+html.pdfjs-embedded-readonly body,
+html.pdfjs-embedded-readonly #viewerContainer { background: white; }
+html.pdfjs-embedded-readonly .pdfViewer .page { border: 0; margin: 0 auto 12px; }

@@ -11,7 +11,7 @@ async function correctionPath(result: PdfSearchResult) {
   return `manifests/subject-voice/pdf/corrections-v1/${result.hash}/${key}.json`
 }
 export async function readPdfCorrection(result: PdfSearchResult): Promise<Correction> {
-  return await readPdfCache<Correction>(await pdfWorkspaceRoot(), await correctionPath(result)) ?? { removedRegions: [] }
+  return await readPdfCache<Correction>(await pdfWorkspaceRoot(), await correctionPath(result), { valid: value => Array.isArray(value.removedRegions) && value.removedRegions.every(id => typeof id === "string") && (value.hidden === undefined || typeof value.hidden === "boolean") }) ?? { removedRegions: [] }
 }
 export async function correctPdfFragment(result: PdfSearchResult, region?: PdfRegion) {
   const root = await pdfWorkspaceRoot(), path = await correctionPath(result)

@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createRequire } from "node:module"
 import { build } from "esbuild"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { chromium } from "@playwright/test"
 
 const require = createRequire(import.meta.url)
@@ -23,6 +25,10 @@ const bundle = await build({
     import { setReadyWorkspaceHandle } from './lib/local-workspace-client';
     import { prepareTheoryPdfs, searchTheoryPdfs } from './lib/client/subject-pdf-search';
     import { renderPdfFragment } from './lib/client/subject-pdf-crops';
+    import { createRelatedPdf, relatedPdfPages, resolvePdfSource } from './lib/client/subject-pdf-pages';
+    import { loadDiscardHistory, discardItem, undoDiscard, queryDiscardScope, pdfDiscardId } from './lib/client/subject-discard-history';
+    import { correctPdfFragment } from './lib/client/subject-pdf-corrections';
+    import { readPdfCache, writePdfCache } from './lib/client/subject-pdf-cache';
     import { splitPdfBatches } from './lib/client/subject-pdf-files';
     import { loadSavedPdfSearches, findSavedPdfSearch } from './lib/client/subject-pdf-history';
     import { saveVoiceImages, loadVoiceImageGroups, regroupVoiceImages } from './lib/subject-voice-images';
@@ -33,6 +39,15 @@ const bundle = await build({
       return prepareTheoryPdfs(id, signal, value => window.preparationProgress.push(value));
     };
     window.searchTheory = async (theory, query) => searchTheoryPdfs(theory, query, new AbortController().signal, () => {});
+    window.createPages = async result => createRelatedPdf(window.pdfFiles.get(result.fileId), result, new AbortController().signal);
+    window.resolveSource = (result, selected) => resolvePdfSource(result, 'algebra', new AbortController().signal, selected);
+    window.relatedPages = relatedPdfPages;
+    window.loadDiscards = () => loadDiscardHistory('algebra');
+    window.discardItem = discardItem; window.undoDiscard = undoDiscard;
+    window.queryScope = queryDiscardScope; window.pdfDiscardId = pdfDiscardId;
+    window.correctPdfFragment = correctPdfFragment;
+    window.readCache = (path, options) => readPdfCache(window.workspaceRoot, path, options);
+    window.writeCache = (path, value) => writePdfCache(window.workspaceRoot, path, value);
     window.renderFragment = async result => renderPdfFragment(result, new AbortController().signal, () => {});
     window.savedSearch = async (theory, query) => findSavedPdfSearch(await loadSavedPdfSearches(theory, new AbortController().signal), query);
     window.findSaved = findSavedPdfSearch;
@@ -56,7 +71,7 @@ const bundle = await build({
       export async function listLocalSubjectMaterialContainers() { return [{id:1,kind:'theory'}, {id:2,kind:'practice'}, {id:3,kind:'custom'}]; }
       export async function listLocalSubjectWeekNumbersWithContent() { return [8,7,6]; }
       export async function listLocalSubjectDayMaterials({subjectId,weekNumber}) { return window.materials.filter(m => m.subject_id===subjectId && m.week_number===weekNumber); }
-      export async function getWorkspaceFile(id) { if (!window.pdfFiles.has(id)) throw new Error('PDF retirado'); return window.pdfFiles.get(id); }
+      export async function getWorkspaceFile(id) { if (window.denyPdfPermission) throw new DOMException('Denied','NotAllowedError'); if (!window.pdfFiles.has(id)) throw new DOMException('PDF retirado','NotFoundError'); return window.pdfFiles.get(id); }
     ` }));
   } }],
 })
@@ -68,6 +83,12 @@ async function setup(t, { holdPoll = false } = {}) {
   await page.route("https://pdf.test/", (route) => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }))
   await page.route("https://pdf.test/vendor/pdf-lib.min.js", (route) => route.fulfill({ path: "public/vendor/pdf-lib.min.js", contentType: "text/javascript" }))
   await page.route("https://pdf.test/pdfjs/build/pdf.worker.min.mjs", (route) => route.fulfill({ path: "public/pdfjs/build/pdf.worker.min.mjs", contentType: "text/javascript" }))
+  await page.route("https://pdf.test/pdfjs/**", async route => {
+    const filename = path.join(process.cwd(), 'public', new URL(route.request().url()).pathname);
+    const ext = path.extname(filename);
+    try { await route.fulfill({body:await readFile(filename),contentType:({'.mjs':'text/javascript','.js':'text/javascript','.css':'text/css','.html':'text/html','.json':'application/json','.wasm':'application/wasm'})[ext] ?? 'application/octet-stream'}) }
+    catch { await route.fulfill({status:404,body:''}) }
+  });
   await page.goto("https://pdf.test/")
   await page.evaluate(({ bytes, holdPoll }) => {
     window.holdPoll = holdPoll
@@ -153,13 +174,156 @@ async function setup(t, { holdPoll = false } = {}) {
       return Response.json({})
     }
   }, { bytes: pdfBytes, holdPoll })
+  await page.addStyleTag({content:'html,body,#root{height:100%;margin:0} [data-subject-voice-images]{display:flex;flex-direction:column;height:100%} [data-voice-pdf-fragment]{display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden} [data-voice-pdf-frame]{flex:1;min-height:0;width:100%;border:0}'});
   await page.addScriptTag({ content: bundle.outputFiles[0].text })
   await page.waitForFunction(() => window.prepareTheory)
   await page.waitForFunction(() => window.workspaceFiles.size > 0)
   return page
 }
 
-test("prepara solo la última teoría, busca con globos y muestra recortes originales incluso con rotación", async (t) => {
+async function waitForPdfFrame(page) {
+  await page.locator('[data-voice-pdf-frame]').waitFor();
+  await page.waitForFunction(() => {
+    const app=document.querySelector('[data-voice-pdf-frame]')?.contentWindow?.PDFViewerApplication;
+    return app?.pdfDocument && app.pdfViewer.getPageView(0)?.renderingState === 3;
+  });
+}
+
+test("páginas relacionadas deduplicadas, selección y atajos desde el iframe", async t => {
+  const page = await setup(t)
+  const data = await page.evaluate(async () => {
+    const result = (await window.searchTheory(await window.prepareTheory(), 'teorema')).results[0]
+    const first = result.candidate.blocks[0]
+    result.candidate.blocks = [{...first,id:'a',page:2},{...first,id:'b',page:1},{...first,id:'c',page:2},{...first,id:'ignored',page:99}]
+    result.decision.blockIds=['a','b'];result.decision.partialIds=['c']
+    const subset = await window.createPages(result)
+    const lib = window.PDFLib
+    const pdf = await lib.PDFDocument.load(await subset.blob.arrayBuffer())
+    return {pages:subset.pages,count:pdf.getPageCount(),rotation:pdf.getPages()[1].getRotation().angle}
+  })
+  assert.deepEqual(data,{pages:[1,2],count:2,rotation:90})
+  await page.locator('[data-voice-search]').fill('derivada')
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===2)
+  await page.locator('[data-voice-pdf-id]').last().click({delay:1150})
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===1)
+  await page.locator('[data-voice-pdf-id]').click()
+  await waitForPdfFrame(page)
+  const frame = page.frameLocator('[data-voice-pdf-frame]')
+  await frame.locator('body').press('Control+z')
+  await page.waitForFunction(async () => (await window.loadDiscards()).every(entry=>entry.undone))
+  await frame.locator('body').press('Escape')
+  await page.waitForFunction(() => !document.querySelector('[data-voice-pdf-frame]'))
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length===2)
+})
+
+test("un archivo ausente se reasocia por hash y la selección se conserva", async t => {
+  const page=await setup(t)
+  const checks=await page.evaluate(async () => {
+    const result=(await window.searchTheory(await window.prepareTheory(),'teorema')).results[0]
+    const original=window.pdfFiles.get(result.fileId)
+    window.pdfFiles.delete(result.fileId)
+    window.pdfFiles.set('same-copy',original)
+    window.materials=[window.makeMaterial(9,6,1,'same-copy')]
+    const reassociated=await window.resolveSource(result)
+    window.materials=[]
+    let missing,wrong,permission,changed
+    try {await window.resolveSource(result)}catch(error){missing=error.code}
+    try {await window.resolveSource(result,new File(['different'],'otro.pdf'))}catch(error){wrong=error.code}
+    await window.resolveSource(result,original)
+    const restored=await window.resolveSource(result)
+    window.denyPdfPermission=true
+    try {await window.resolveSource(result)}catch(error){permission=error.code}
+    window.denyPdfPermission=false
+    window.pdfFiles.set(result.fileId,new File([original,'changed'],'apuntes.pdf'))
+    try {await window.resolveSource(result)}catch(error){changed=error.code}
+    return {reassociated:reassociated.fileId,missing,wrong,restoredSize:restored.file.size,originalSize:original.size,permission,changed}
+  })
+  assert.equal(checks.reassociated,'same-copy')
+  assert.equal(checks.missing,'missing');assert.equal(checks.wrong,'changed')
+  assert.equal(checks.restoredSize,checks.originalSize)
+  assert.equal(checks.permission,'permission');assert.equal(checks.changed,'changed')
+})
+
+test("recupera respaldos, conserva cachés dañadas y regenera extracción", async t => {
+  const page=await setup(t)
+  const checks=await page.evaluate(async () => {
+    await window.prepareTheory()
+    const path=[...window.workspaceFiles.keys()].find(path=>path.endsWith('extraction.json'))
+    window.workspaceFiles.set(path,new Blob(['{broken']))
+    const before=window.pdfRequests.length
+    const recovered=await window.prepareTheory()
+    const withBackup={files:recovered.files.length,calls:window.pdfRequests.length-before,damaged:[...window.workspaceFiles.keys()].some(key=>key.startsWith(path+'.damaged-'))}
+    window.workspaceFiles.set(path,new Blob(['broken-again']))
+    window.workspaceFiles.delete(path+'.backup')
+    const regenerated=await window.prepareTheory()
+    await window.writeCache('test/user.json',{value:1})
+    await window.writeCache('test/user.json',{value:2})
+    window.workspaceFiles.set('test/user.json',new Blob(['{invalid']))
+    const user=await window.readCache('test/user.json')
+    window.workspaceFiles.set('test/protected.json',new Blob(['invalid']))
+    let protectedError=false
+    try{await window.readCache('test/protected.json')}catch{protectedError=true}
+    return {withBackup,regenerated:regenerated.files.length,user,protectedError}
+  })
+  assert.deepEqual(checks.withBackup,{files:1,calls:0,damaged:true})
+  assert.equal(checks.regenerated,1);assert.deepEqual(checks.user,{value:1});assert.equal(checks.protectedError,true)
+})
+
+test("recupera globos descartados por las correcciones anteriores", async t => {
+  const page=await setup(t)
+  await page.evaluate(async () => {
+    const theory=await window.prepareTheory()
+    const result=(await window.searchTheory(theory,'teorema')).results[0]
+    await window.correctPdfFragment(result)
+    await window.searchTheory(theory,'teorema')
+  })
+  await page.evaluate(()=>window.changePdfSubject('fisica'))
+  await page.waitForFunction(()=>document.querySelector('[data-voice-search]')?.value==='')
+  await page.evaluate(()=>window.changePdfSubject('algebra'))
+  const search=page.locator('[data-voice-search]')
+  await search.fill('teorema')
+  await page.getByText('Sin coincidencias',{exact:true}).waitFor()
+  await page.getByRole('button',{name:'Deshacer',exact:true}).click()
+  await page.locator('[data-voice-pdf-id]').waitFor()
+  await page.locator('[data-voice-pdf-id]').click()
+  await waitForPdfFrame(page)
+})
+
+test("borrado fallido conserva el globo y el cartel vence sin perder Deshacer", async t => {
+  const page=await setup(t)
+  await page.locator('[data-voice-search]').fill('teorema')
+  const bubble=page.locator('[data-voice-pdf-id]')
+  await bubble.waitFor()
+  await page.evaluate(()=>{window.failWrites=true})
+  await bubble.click({delay:1150})
+  await page.getByRole('alert').filter({hasText:'Disco lleno'}).waitFor()
+  assert.equal(await bubble.count(),1)
+  assert.equal(await page.locator('[data-discard-notice]').count(),0)
+  await page.evaluate(()=>{window.failWrites=false})
+  await bubble.click({delay:1150})
+  await page.getByText('Borrado',{exact:true}).waitFor()
+  await page.locator('[data-discard-notice]').waitFor({state:'hidden',timeout:8000})
+  await page.getByRole('button',{name:'Deshacer',exact:true}).click()
+  await bubble.waitFor()
+})
+
+test("el historial serializa operaciones y aísla términos, materias y semanas", async t => {
+  const page=await setup(t)
+  const checks=await page.evaluate(async () => {
+    await Promise.all(['a','b','c'].map(itemId=>window.discardItem('algebra',{scope:'query:uno',kind:'image',itemId})))
+    await window.discardItem('algebra',{scope:'query:dos',kind:'image',itemId:'a'})
+    await window.discardItem('algebra',{scope:'topics:7',kind:'topic',itemId:'topic'})
+    await window.discardItem('algebra',{scope:'topics:8',kind:'topic',itemId:'topic'})
+    await window.discardItem('fisica',{scope:'query:uno',kind:'image',itemId:'a'})
+    await window.undoDiscard('algebra',['query:uno'])
+    const entries=await window.loadDiscards()
+    return {total:entries.length,undone:entries.filter(entry=>entry.undone).map(entry=>entry.itemId),pending:entries.filter(entry=>!entry.undone).map(entry=>entry.scope)}
+  })
+  assert.equal(checks.total,6);assert.deepEqual(checks.undone,['c'])
+  assert.deepEqual(checks.pending,['query:uno','query:uno','query:dos','topics:7','topics:8'])
+})
+
+test("prepara solo la última teoría y abre páginas completas incluso con rotación", async (t) => {
   const page = await setup(t)
   await page.waitForFunction(() => [...window.workspaceFiles.keys()].some((path) => path.endsWith("extraction.json")))
   assert.equal(await page.locator("[data-voice-pdf-id]").count(), 0)
@@ -170,16 +334,21 @@ test("prepara solo la última teoría, busca con globos y muestra recortes origi
   assert.match(await page.locator("[data-voice-bubbles]").innerText(), /Semana 7/)
   assert.equal(await page.evaluate(() => window.pdfRequests.filter((r) => r.method === "POST" && r.url.endsWith("pdf-extraction")).length), 1)
   await page.locator("[data-voice-pdf-id]").click()
-  await page.locator("[data-voice-pdf-fragment] img").first().waitFor()
-  assert.equal(await page.locator("[data-voice-pdf-fragment] img").count(), 2)
-  assert.equal(await page.locator("[data-voice-pdf-fragment] img").first().evaluate((image) => image.naturalWidth < 800 && image.naturalHeight < 200), true)
+  await waitForPdfFrame(page)
+  const frame = page.frameLocator('[data-voice-pdf-frame]');
+  assert.equal(await frame.locator('.page').count(), 1);
+  assert.equal(await frame.locator('#toolbarContainer').isVisible(), false);
+  assert.equal(await frame.locator('#sidebarContainer').isVisible(), false);
+  assert.equal(await frame.locator('.textLayer').first().evaluate(node => Boolean(node.textContent)), true);
+  assert.equal(await page.locator('[data-pdf-crop]').count(), 0);
+  assert.equal(await page.evaluate(() => [...window.workspaceFiles.keys()].filter(key => key.endsWith('.png')).length), 0);
   assert.equal(await page.evaluate(() => window.pdfEscape()), true)
   await page.locator("[data-voice-search]").waitFor()
   assert.equal(await page.locator("[data-voice-search]").inputValue(), "teorema")
   await page.locator("[data-voice-search]").fill("derivada")
   await page.waitForFunction(() => document.querySelectorAll("[data-voice-pdf-id]").length === 2)
   await page.locator("[data-voice-pdf-id]").last().click()
-  await page.locator("[data-voice-pdf-fragment] img").first().waitFor()
+  await waitForPdfFrame(page)
   assert.doesNotMatch(await page.locator("[data-voice-pdf-fragment]").innerText(), /Página 2|apuntes\.pdf|Semana/)
   const original = await page.getByRole("link", {name:"Abrir PDF original"}).getAttribute("href")
   const target = new URL(original, "https://pdf.test")
@@ -257,35 +426,30 @@ test("repetir consulta no llama servicios; PDF agregado, reemplazado y retirado 
   assert.notEqual(replaced.results[0].hash, removed.results[0].hash)
 })
 
-test("mantener un segundo elimina recortes y globos y conserva la corrección al volver", async (t) => {
-  const page = await setup(t)
-  await page.locator("[data-voice-search]").fill("teorema")
-  const bubble = page.locator("[data-voice-pdf-id]")
-  await bubble.waitFor()
-  await bubble.click()
-  const crops = page.locator("[data-pdf-crop]")
-  await crops.first().waitFor()
-  assert.equal(await crops.count(), 2)
-  await crops.last().locator("img").click({ delay: 1150 })
-  await page.waitForFunction(() => document.querySelectorAll("[data-pdf-crop]").length === 1)
-  await page.evaluate(() => window.pdfEscape())
-  await bubble.click()
-  await crops.first().waitFor()
-  assert.equal(await crops.count(), 1)
-  await page.evaluate(() => window.pdfEscape())
-  await page.locator("[data-voice-search]").fill("te")
-  await bubble.click({ delay: 1150 })
-  await bubble.waitFor({ state: "hidden" })
-  assert.equal(await page.locator("[data-voice-pdf-fragment]").count(), 0)
-  await page.evaluate(() => window.changePdfSubject("fisica"))
-  await page.evaluate(() => window.changePdfSubject("algebra"))
-  await page.locator("[data-voice-search]").fill("teorema")
-  await page.getByText("Sin coincidencias", {exact:true}).waitFor()
-  const result = await page.evaluate(async () => window.searchTheory(await window.prepareTheory(), "TEOREMA"))
-  assert.equal(result.results.length, 0)
-})
+test("borrado temporal y Ctrl+Z persisten por término al volver", async t => {
+  const page = await setup(t);
+  const search = page.locator('[data-voice-search]');
+  await search.fill('derivada');
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 2);
+  await page.locator('[data-voice-pdf-id]').last().click({delay:1150});
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 1);
+  await page.getByText('Borrado',{exact:true}).waitFor();
+  await page.locator('[data-voice-pdf-id]').click({delay:1150});
+  await page.getByText('Sin coincidencias',{exact:true}).waitFor();
+  await page.evaluate(() => window.changePdfSubject('fisica'));
+  await page.waitForFunction(() => document.querySelector('[data-voice-search]')?.value === '');
+  await page.evaluate(() => window.changePdfSubject('algebra'));
+  await search.fill('derivada');
+  await page.getByText('Sin coincidencias',{exact:true}).waitFor();
+  await search.press('Control+z');
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 1);
+  await search.press('Control+z');
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 2);
+  assert.equal(await search.inputValue(),'derivada');
+  assert.equal((await page.evaluate(() => window.loadDiscards())).filter(entry=>!entry.undone).length,0);
+});
 
-test("recupera búsquedas y PNG desde la carpeta sin demora de búsqueda ni renderizar de nuevo", async (t) => {
+test("recupera búsquedas sin demora y abre páginas sin generar recortes", async (t) => {
   const page = await setup(t)
   const search = page.locator("[data-voice-search]")
   const bubble = page.locator("[data-voice-pdf-id]")
@@ -293,8 +457,8 @@ test("recupera búsquedas y PNG desde la carpeta sin demora de búsqueda ni rend
   await bubble.waitFor()
   await page.waitForFunction(() => [...window.workspaceFiles.keys()].some(path => path.endsWith("search-history-v2.json")))
   await bubble.click()
-  await page.locator("[data-pdf-crop]").first().waitFor()
-  assert.equal(await page.evaluate(() => [...window.workspaceFiles.keys()].filter(path => path.endsWith(".png")).length), 2)
+  await waitForPdfFrame(page)
+  assert.equal(await page.evaluate(() => [...window.workspaceFiles.keys()].filter(path => path.endsWith(".png")).length), 0)
   await page.evaluate(() => window.pdfEscape())
   // Re-mount to discard the hook's memory and reload history from the authorized folder.
   await page.evaluate(() => window.changePdfSubject("fisica"))
@@ -315,18 +479,13 @@ test("recupera búsquedas y PNG desde la carpeta sin demora de búsqueda ni rend
     await bubble.waitFor()
   }
   await bubble.click()
-  await page.locator("[data-pdf-crop]").first().waitFor()
+  await waitForPdfFrame(page)
   const cached = await page.evaluate(async () => {
-    const native = HTMLCanvasElement.prototype.getContext
-    HTMLCanvasElement.prototype.getContext = () => { throw new Error("No debe volver a dibujar el PDF") }
-    try {
-      const result = (await window.savedSearch(await window.prepareTheory(), "teo")).results[0]
-      const fragment = await window.renderFragment(result)
-      fragment.images.forEach(({url}) => URL.revokeObjectURL(url))
-      return {count:fragment.images.length,calls:window.pdfRequests.length,delayed:window.delayedSearches}
-    } finally { HTMLCanvasElement.prototype.getContext = native }
+    const result = (await window.savedSearch(await window.prepareTheory(), "teo")).results[0];
+    const subset = await window.createPages(result);
+    return {count:subset.pages.length,calls:window.pdfRequests.length,delayed:window.delayedSearches};
   })
-  assert.equal(cached.count, 2)
+  assert.equal(cached.count, 1)
   assert.equal(cached.calls, before)
   assert.equal(cached.delayed, 0)
 })
@@ -361,7 +520,7 @@ test("def y el inicio de una palabra recuperan la búsqueda completa anterior", 
   assert.equal(cached.unfinished.previewOnly,true)
 })
 
-test("+ guarda globos de PDF sin imágenes, conserva los recortes y permite quitarlos del conjunto", async (t) => {
+test("+ guarda globos PDF, abre páginas y permite descartarlos del conjunto", async (t) => {
   const page = await setup(t)
   await page.locator('[data-voice-search]').fill('derivada')
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 2)
@@ -375,7 +534,7 @@ test("+ guarda globos de PDF sin imágenes, conserva los recortes y permite quit
   assert.equal(saved.groups[0].pdfs.length,2)
   await group.click()
   await page.locator('[data-voice-pdf-id]').first().click()
-  await page.locator('[data-pdf-crop]').first().waitFor()
+  await waitForPdfFrame(page)
   await page.evaluate(() => window.pdfEscape())
   await page.evaluate(() => window.pdfEscape())
   // A fresh view reads the saved set from the workspace, without searching again.
@@ -387,7 +546,9 @@ test("+ guarda globos de PDF sin imágenes, conserva los recortes y permite quit
   assert.equal(await page.locator('[data-voice-pdf-id]').count(),2)
   await page.locator('[data-voice-pdf-id]').last().click({delay:1150})
   await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 1)
-  assert.equal((await page.evaluate(() => window.loadGroups())).groups[0].pdfs.length,1)
+  assert.equal((await page.evaluate(() => window.loadGroups())).groups[0].pdfs.length,2)
+  await page.getByRole('button',{name:'Deshacer',exact:true}).first().click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-voice-pdf-id]').length === 2)
 })
 
 test("+ guarda la vista mixta y un fallo al guardar permite reintentar sin duplicar", async (t) => {
@@ -630,6 +791,54 @@ test("respuestas tardías no mezclan consultas ni materias", async (t) => {
   await page.locator('[data-voice-search]').fill('teorema')
   await page.getByText('Sin coincidencias',{exact:true}).waitFor()
   assert.equal(await page.locator('[data-voice-pdf-id]').count(),0)
+})
+
+test("imágenes individuales se descartan por término y dentro del conjunto sin borrar archivos", async t => {
+  const page=await setup(t)
+  await page.evaluate(async () => {
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=10
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
+    await window.saveManualImages([new File([blob],'modelo.png',{type:'image/png'})],{name:'Conjunto',color:'#b2f2bb'})
+  })
+  await page.evaluate(()=>window.changePdfSubject('fisica'))
+  await page.waitForFunction(()=>document.querySelector('[data-voice-search]')?.value==='')
+  await page.evaluate(()=>window.changePdfSubject('algebra'))
+  const group=page.getByRole('button',{name:'Conjunto, 1 imágenes',exact:true})
+  await group.waitFor()
+  const search=page.locator('[data-voice-search]')
+  await search.fill('modelo')
+  await page.locator('[data-voice-image-id]').click({delay:1150})
+  await page.locator('[data-voice-image-id]').waitFor({state:'hidden'})
+  await search.fill('model')
+  await page.locator('[data-voice-image-id]').waitFor()
+  await search.fill('modelo')
+  assert.equal(await page.locator('[data-voice-image-id]').count(),0)
+  await search.press('Control+z')
+  await page.locator('[data-voice-image-id]').waitFor()
+  await search.fill('')
+  await group.click()
+  await page.locator('[data-voice-image-id]').click({delay:1150})
+  await page.locator('[data-voice-image-id]').waitFor({state:'hidden'})
+  assert.equal((await page.evaluate(()=>window.loadGroups())).groups[0].images.length,1)
+  await page.evaluate(()=>window.pdfEscape())
+  await page.getByRole('button',{name:'Conjunto, 0 imágenes',exact:true}).click()
+  await page.getByRole('button',{name:'Deshacer',exact:true}).first().click()
+  await page.locator('[data-voice-image-id]').waitFor()
+})
+
+test("Temas descarta y recupera un globo individual con historial semanal", async t => {
+  const page=await setup(t)
+  await page.evaluate(async () => {
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=10
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
+    await window.saveTopics('algebra',7,[new File([blob],'resumen.png',{type:'image/png'})])
+  })
+  await page.locator('[data-voice-search]').fill('temas')
+  await page.locator('[data-topic-image-id]').click({delay:1150})
+  await page.locator('[data-topic-image-id]').waitFor({state:'hidden'})
+  assert.equal((await page.evaluate(()=>window.loadTopics('algebra',7))).images.length,1)
+  await page.locator('[data-voice-search]').press('Control+z')
+  await page.locator('[data-topic-image-id]').waitFor()
 })
 
 test("divide documentos largos en lotes de diez páginas preservando las páginas originales", async (t) => {

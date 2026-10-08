@@ -9,9 +9,17 @@ import type { SubjectDayMaterial } from "../study-types"
 import { readPdfCorrection } from "./subject-pdf-corrections"
 import { savePdfSearch } from "./subject-pdf-history"
 import { isManualTopicsQuery } from "../subject-voice-search"
+import { importLegacyPdfDiscard } from "./subject-discard-history"
 
 type BatchState = { pages: number[]; token?: string; extraction?: PdfExtraction; error?: string }
 type ExtractionCache = { version: string; hash: string; complete: boolean; batches: BatchState[] }
+const validExtractionCache = (value: ExtractionCache, hash: string) => value.version === PDF_EXTRACTION_VERSION && value.hash === hash &&
+  typeof value.complete === "boolean" && Array.isArray(value.batches) && (!value.complete || value.batches.length > 0) && value.batches.every(batch =>
+    Boolean(batch) && Array.isArray(batch.pages) && batch.pages.every(page => Number.isSafeInteger(page) && page > 0) &&
+    (!batch.extraction || (Array.isArray(batch.extraction.blocks) && Array.isArray(batch.extraction.failedPages) && batch.extraction.blocks.every(block =>
+      Boolean(block) && typeof block.id === "string" && typeof block.text === "string" && Number.isSafeInteger(block.page) && batch.pages.includes(block.page)))))
+const validDecision = (value: PdfDecision) => Boolean(value) && typeof value.id === "string" && typeof value.accepted === "boolean" &&
+  Array.isArray(value.blockIds) && Array.isArray(value.partialIds) && [...value.blockIds, ...value.partialIds].every(id => typeof id === "string")
 export type PreparedPdf = { material: SubjectDayMaterial; hash: string; blocks: PdfBlock[] }
 export type PreparedTheory = { week: number | null; files: PreparedPdf[]; errors: string[]; signature: string }
 export function theoryScopeSignature(scope: { week: number | null; materials: SubjectDayMaterial[] }) {
@@ -77,7 +85,7 @@ export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, 
     signal.throwIfAborted()
     try {
       const file = await getWorkspaceFile(material.drive_file_id), hash = await pdfHash(file)
-      const saved = await readPdfCache<ExtractionCache>(root, extractionPath(hash))
+      const saved = await readPdfCache<ExtractionCache>(root, extractionPath(hash), { regenerable: true, valid: value => validExtractionCache(value, hash) })
       inputs.push({ material, file, hash })
       if (!saved?.complete) pendingHashes.add(hash)
     } catch (error) {
@@ -91,7 +99,7 @@ export async function prepareTheoryPdfs(subjectId: string, signal: AbortSignal, 
       const cache = await inPdfCacheQueue(root, hash, async () => {
         signal.throwIfAborted()
         const path = extractionPath(hash)
-        const saved = await readPdfCache<ExtractionCache>(root, path)
+        const saved = await readPdfCache<ExtractionCache>(root, path, { regenerable: true, valid: value => validExtractionCache(value, hash) })
         if (saved && (saved.version !== PDF_EXTRACTION_VERSION || saved.hash !== hash || !Array.isArray(saved.batches))) throw new Error("La caché de extracción no es válida.")
         const state: ExtractionCache = saved ?? { version: PDF_EXTRACTION_VERSION, hash, complete: false, batches: [] }
         if (state.complete) return state
@@ -157,7 +165,7 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
     const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${file.hash}/${PDF_FILTER_VERSION}/${queryHash}.json`
     await inPdfCacheQueue(root, path, async () => {
       signal.throwIfAborted()
-      const saved = await readPdfCache<EvaluationCache>(root, path)
+      const saved = await readPdfCache<EvaluationCache>(root, path, { regenerable: true, valid: value => value.version === PDF_FILTER_VERSION && value.hash === file.hash && value.query === normalized && Boolean(value.decisions) && typeof value.decisions === "object" && Object.values(value.decisions).every(validDecision) })
       if (saved && (saved.version !== PDF_FILTER_VERSION || saved.hash !== file.hash || saved.query !== normalized || !saved.decisions)) throw new Error("La caché de búsqueda no es válida.")
       const cache: EvaluationCache = saved ?? { version: PDF_FILTER_VERSION, hash: file.hash, query: normalized, decisions: {} }
       for (const candidate of candidates) {
@@ -165,7 +173,10 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
         try {
           // Partial extraction may later gain neighboring blocks: never reuse a decision for a changed window.
           const candidateKey = await pdfHash(new File([JSON.stringify(candidate)], "candidate.txt"))
-          let decision = cache.decisions[candidateKey]
+          let decision: PdfDecision | undefined = cache.decisions[candidateKey]
+          if (decision && (decision.id !== candidate.id || [...decision.blockIds, ...decision.partialIds].some(id => !candidate.blocks.some(block => block.id === id)))) {
+            delete cache.decisions[candidateKey]; decision = undefined
+          }
           if (!decision) {
             decision = await responseJson<PdfDecision>(await fetch("/api/subject-voice/pdf-evaluate", {
               method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: normalized, candidate }),
@@ -180,7 +191,7 @@ export async function searchTheoryPdfs(theory: PreparedTheory, query: string, si
           if (decision.accepted) {
             const result = { id: `${file.material.id}:${file.hash}:${candidate.id}`, title: pdfResultTitle(candidate, decision),
               fileId: file.material.drive_file_id, fileName: file.material.file_name, hash: file.hash, week: theory.week!, query: normalized, candidate, decision }
-            if ((await readPdfCorrection(result)).hidden) continue
+            if ((await readPdfCorrection(result)).hidden && await importLegacyPdfDiscard(file.material.subject_id, result)) continue
             results.push(result)
             publish([...results])
           }
@@ -205,7 +216,7 @@ export async function refinedPageWords(result: PdfSearchResult, page: number, si
   const path = `manifests/subject-voice/pdf/${PDF_EXTRACTION_VERSION}/${result.hash}/words-html-v2-${page}.json`
   return inPdfCacheQueue(root, path, async () => {
     signal.throwIfAborted()
-    let state = await readPdfCache<{ token?: string; payload?: Record<string, unknown> }>(root, path) ?? {}
+    let state = await readPdfCache<{ token?: string; payload?: Record<string, unknown> }>(root, path, { regenerable: true, valid: value => Boolean(value.payload) || typeof value.token === "string" }) ?? {}
     if (state.payload) return state.payload
     progress(`Delimitando el fragmento de la página ${page}…`)
     const file = await getWorkspaceFile(result.fileId)

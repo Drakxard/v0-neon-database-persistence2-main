@@ -5,8 +5,12 @@ import type { PreparedPdf, PreparedTheory } from "./subject-pdf-search"
 import { inPdfCacheQueue, pdfWorkspaceRoot, readPdfCache, writePdfCache } from "./subject-pdf-cache"
 import { pdfHash } from "./subject-pdf-files"
 import { readPdfCorrection } from "./subject-pdf-corrections"
+import { importLegacyPdfDiscard, loadDiscardHistory } from "./subject-discard-history"
 
 type History = { source: string; queries: Record<string, PdfSearchResult[]> }
+const validHistory = (value: History) => typeof value.source === "string" && Boolean(value.queries) && typeof value.queries === "object" &&
+  Object.values(value.queries).every(results => Array.isArray(results) && results.every(result => Boolean(result) && typeof result.query === "string" &&
+    Array.isArray(result.candidate?.blocks) && Array.isArray(result.candidate?.anchorIds) && Array.isArray(result.decision?.blockIds) && Array.isArray(result.decision?.partialIds)))
 export type SavedPdfSearch = { query: string; results: PdfSearchResult[]; complete: boolean }
 const pathFor = (file: PreparedPdf) => {
   const subject = encodeURIComponent(file.material.subject_id).replace(/\./g, "%2E")
@@ -17,7 +21,7 @@ const sourceFor = (file: PreparedPdf) => pdfHash(new File([JSON.stringify(file.b
 export async function savePdfSearch(file: PreparedPdf, query: string, results: PdfSearchResult[]) {
   const root = await pdfWorkspaceRoot(), path = pathFor(file), source = await sourceFor(file)
   await inPdfCacheQueue(root, path, async () => {
-    const previous = await readPdfCache<History>(root, path)
+    const previous = await readPdfCache<History>(root, path, { valid: validHistory })
     const history = previous?.source === source ? previous : { source, queries: {} }
     history.queries[query] = results
     await writePdfCache(root, path, history)
@@ -26,11 +30,19 @@ export async function savePdfSearch(file: PreparedPdf, query: string, results: P
 
 export async function loadSavedPdfSearches(theory: PreparedTheory, signal: AbortSignal): Promise<SavedPdfSearch[]> {
   const root = await pdfWorkspaceRoot(), queries = new Map<string, {results:PdfSearchResult[]; files:number}>()
+  const restored = (theory.files.length ? await loadDiscardHistory(theory.files[0].material.subject_id) : []).filter(entry => entry.legacy && entry.undone && entry.result)
   for (const file of theory.files) {
     signal.throwIfAborted()
-    const history = await readPdfCache<History>(root, pathFor(file))
-    if (!history || history.source !== await sourceFor(file)) continue
-    for (const [query, results] of Object.entries(history.queries)) {
+    const history = await readPdfCache<History>(root, pathFor(file), { valid: validHistory })
+    const previous = history?.source === await sourceFor(file) ? history.queries : {}
+    const current: Record<string, PdfSearchResult[]> = Object.fromEntries(Object.entries(previous).map(([query, results]) => [query, [...results]]))
+    for (const entry of restored) {
+      const result = entry.result!
+      if (result.hash !== file.hash || !result.candidate.anchorIds.every(id => file.blocks.some(block => block.id === id))) continue
+      const results = current[result.query] ??= []
+      if (!results.some(item => item.candidate.id === result.candidate.id)) results.push(result)
+    }
+    for (const [query, results] of Object.entries(current)) {
       const saved = queries.get(query) ?? {results:[],files:0}
       saved.files++
       for (const original of results) {
@@ -38,7 +50,7 @@ export async function loadSavedPdfSearches(theory: PreparedTheory, signal: Abort
         // Metadata and scope always come from the current selection, even for identical PDF bytes.
         const result = {...original, id:`${file.material.id}:${file.hash}:${original.candidate.id}`,
           fileId:file.material.drive_file_id, fileName:file.material.file_name, week:theory.week!}
-        if (!(await readPdfCorrection(result)).hidden) saved.results.push(result)
+        if (!(await readPdfCorrection(result)).hidden || !await importLegacyPdfDiscard(file.material.subject_id, result)) saved.results.push(result)
       }
       queries.set(query,saved)
     }

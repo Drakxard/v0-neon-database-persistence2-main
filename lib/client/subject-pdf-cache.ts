@@ -14,12 +14,30 @@ async function handle(root: FileSystemDirectoryHandle, path: string, create = fa
   for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part, { create })
   return directory.getFileHandle(parts.at(-1)!, { create })
 }
-export async function readPdfCache<T>(root: FileSystemDirectoryHandle, path: string): Promise<T | null> {
-  let file: FileSystemFileHandle
-  try { file = await handle(root, path) }
-  catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error }
-  try { return JSON.parse(await (await file.getFile()).text()) as T }
-  catch { throw new Error("La caché de PDF está dañada; no se reemplazó su contenido.") }
+export async function readPdfCache<T>(root: FileSystemDirectoryHandle, path: string,
+  options: { regenerable?: boolean; valid?: (value: T) => boolean } = {}): Promise<T | null> {
+  const read = async (target: string) => {
+    let content: string
+    try { content = await (await (await handle(root, target)).getFile()).text() }
+    catch (error) { if (error instanceof DOMException && error.name === "NotFoundError") return null; throw error }
+    try {
+      const value = JSON.parse(content) as T
+      if (!value || (options.valid && !options.valid(value))) throw new Error("Invalid cache")
+      return { value, content }
+    } catch { return { value: null, content } }
+  }
+  const current = await read(path)
+  if (current?.value) return current.value
+  const backup = await read(path + ".backup")
+  if (!current && !backup) return null
+  // Preserve damaged bytes before any subsequent writer replaces the main file.
+  if (current && !current.value) await writePdfCrop(root, path + ".damaged-" + crypto.randomUUID(), new Blob([current.content]))
+  if (backup?.value) {
+    await writePdfCrop(root, path, new Blob([backup.content]))
+    return backup.value
+  }
+  if (options.regenerable) return null
+  throw new Error("Los datos guardados de PDF están dañados y no hay un respaldo válido. Se conservó su contenido.")
 }
 export async function readPdfCrop(root: FileSystemDirectoryHandle, path: string): Promise<File | null> {
   try { return await (await handle(root, path)).getFile() }
@@ -35,7 +53,9 @@ export async function writePdfCache(root: FileSystemDirectoryHandle, path: strin
   const file = await handle(root, path, true)
   // Keep the previous valid contents available if a write is interrupted.
   const previous = await file.getFile().then((file) => file.text()).catch(() => "")
-  if (previous) {
+  let validPrevious = false
+  try { validPrevious = Boolean(previous && JSON.parse(previous)) } catch { /* Never replace a backup with damaged JSON. */ }
+  if (validPrevious) {
     const backup = await handle(root, path + ".backup", true)
     const writer = await backup.createWritable()
     try { await writer.write(previous); await writer.close() } catch (error) { await writer.abort().catch(() => {}); throw error }
