@@ -37,3 +37,27 @@ test("image responses identify Android formats even with generic or incorrect R2
     assert.throws(() => synthesisImageMimeType(bytes), InvalidSynthesisImageError)
   }
 })
+
+test("provider preserves v0 parent links and keeps formatted headings inside their owning node", () => {
+  const heading = (id: string, parentId?: string) => ({ type: "heading", attrs: { level: 1, synthesisId: id, ...(parentId ? { synthesisParentId: parentId } : {}) }, content: [{ type: "text", text: id }] })
+  const formatted = { type: "heading", attrs: { level: 2, synthesisId: "subtitle" }, content: [{ type: "text", text: "Subtítulo del texto" }] }
+  const paragraph = { type: "paragraph", content: [{ type: "text", text: "Inicio propio del nivel" }] }
+  const workspace = { ...createEmptySynthesisWorkspace(), document: { type: "doc", content: [
+    heading("root"), paragraph, formatted, paragraph,
+    heading("child", "root"), paragraph, heading("grandchild", "child"), paragraph,
+    heading("deep", "grandchild"), paragraph, heading("other"), paragraph,
+  ] } }
+  const saved = JSON.stringify(workspace)
+  const projected = synthesisWorkspaceForReader(workspace)
+  const blocks = projected.document.content!
+  assert.equal(blocks.filter(block => block.type === "heading").length, 5)
+  assert.deepEqual(blocks.find(block => block.type === "inscreenReaderContent")?.content, [formatted])
+  const links = blocks.filter(block => block.type === "paragraph" && block.content?.[0]?.text?.startsWith("[[INSCREEN-NODE-V1:"))
+    .map(block => JSON.parse(Buffer.from(block.content![0].text!.match(/:([^:]+)\]\]$/)![1], "base64url").toString("utf8")))
+  assert.deepEqual(links, [
+    { id: "root", parentId: null }, { id: "child", parentId: "root" },
+    { id: "grandchild", parentId: "child" }, { id: "deep", parentId: "grandchild" }, { id: "other", parentId: null },
+  ])
+  assert.equal(blocks.filter(block => block.content?.[0]?.text === "Inicio propio del nivel").length, 6)
+  assert.equal(JSON.stringify(workspace), saved)
+})

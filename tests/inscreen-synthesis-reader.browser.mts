@@ -17,7 +17,10 @@ test("provider → existing native text/image contract → offline-capable read-
   ]
   const workspace = { ...createEmptySynthesisWorkspace(), document: { type: "doc", content: [
     { type: "heading", attrs: { level: 1, synthesisId: "db" }, content: [{ type: "text", text: "Tema" }] },
+    { type: "paragraph", content: [{ type: "text", text: "Introducción propia del tema" }] },
+    { type: "heading", attrs: { level: 1, synthesisId: "sub", synthesisParentId: "db" }, content: [{ type: "text", text: "Subtema" }] },
     { type: "paragraph", content: formulas.map(attrs => ({ type: "synthesisMath", attrs })) },
+    { type: "heading", attrs: { level: 2, synthesisId: "subtitle" }, content: [{ type: "text", text: "Subtítulo interno" }] },
     { type: "image", attrs: { src: "synthesis-local-image:abc-123" } },
   ] } }
   const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
@@ -45,12 +48,15 @@ test("provider → existing native text/image contract → offline-capable read-
   const projected = (await response.json()).workspace
   const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;")
   // The installed APK turns text into escaped HTML and image IDs into this URL.
-  const mathHtml = projected.document.content[1].content.map((node: { text: string }) => `<strong>${escape(node.text)}</strong>`).join(" ")
-  const code = projected.document.content[1].content[0].text
-  const body = `<p>Texto ${mathHtml}</p><pre><code>${escape(code)}</code></pre><img src="https://synthesis.local/images/abc-123" alt="Gráfico"><img src="https://synthesis.local/images/missing" alt="Ausente"><table><tr><td>Tabla</td></tr></table>`
+  const mathBlock = projected.document.content.find((block: any) => block.content?.[0]?.text?.startsWith("[[INSCREEN-MATH-V1:"))
+  const mathHtml = mathBlock.content.map((node: { text: string }) => `<strong>${escape(node.text)}</strong>`).join(" ")
+  const code = mathBlock.content[0].text
+  const metadata = projected.document.content.filter((block: any) => block.content?.[0]?.text?.startsWith("[[INSCREEN-NODE-V1:"))
+    .map((block: any) => `<p>${escape(block.content[0].text)}</p>`)
+  const body = metadata[1]+`<p>Texto ${mathHtml}</p><h2>Subtítulo interno</h2><pre><code>${escape(code)}</code></pre><img src="https://synthesis.local/images/abc-123" alt="Gráfico"><img src="https://synthesis.local/images/missing" alt="Ausente"><table><tr><td>Tabla</td></tr></table>`
   const nodes = [
-    { index: 0, parent: null, name: "Tema", body: "<p>Introducción</p>", x: .5, y: .3, scale: 1 },
-    { index: 1, parent: 0, name: "Subtema", body, x: .5, y: .3, scale: 1 },
+    { index: 0, parent: null, name: "Tema", body: metadata[0]+"<p>Introducción propia del tema</p>", x: .5, y: .3, scale: 1 },
+    { index: 1, parent: null, name: "Subtema", body, x: .5, y: .3, scale: 1 },
   ]
   const reader = readFileSync(path.resolve(process.cwd(), "../InScreen/modules/sintesis/reader.html"), "utf8")
     .replace("__INSCREEN_SYNTHESIS_FONT_SIZE__", "16")
@@ -74,6 +80,7 @@ test("provider → existing native text/image contract → offline-capable read-
   await page.exposeFunction("reportViolation", (uri: string) => violations.push(uri))
   await page.addInitScript(() => document.addEventListener("securitypolicyviolation", event => { (window as any).reportViolation(event.blockedURI) }))
   await page.goto("https://synthesis.local/")
+  assert.equal(await page.getByRole("button", { name: "Abrir Subtema", exact: true }).count(), 0)
   await page.getByRole("button", { name: "Abrir Tema", exact: true }).click()
   await page.getByRole("button", { name: "Abrir Subtema", exact: true }).click()
   assert.equal(await page.locator(".synthesis-reader-math").count(), formulas.length)
@@ -81,6 +88,8 @@ test("provider → existing native text/image contract → offline-capable read-
   assert.equal(await page.locator(".katex-error").count(), 1)
   assert.equal(await page.locator(".synthesis-reader-math[data-display=true]").count(), 2)
   assert.equal(await page.locator("pre code").innerText(), code)
+  assert.equal(await page.locator("#sheet h2").innerText(), "Subtítulo interno")
+  assert.doesNotMatch(await page.locator("#sheet").innerText(), /INSCREEN-NODE-V1/)
   await page.waitForFunction(() => document.querySelector<HTMLImageElement>("#sheet img")?.naturalWidth === 1)
   await page.locator(".synthesis-image-error").waitFor()
   assert.match(await page.locator(".synthesis-image-error").innerText(), /Ausente/)
@@ -90,6 +99,21 @@ test("provider → existing native text/image contract → offline-capable read-
   assert.equal(await page.locator("#sheet img[src=x]").count(), 0)
   await page.evaluate(() => (window as any).readerBack())
   assert.equal(await page.getByRole("button", { name: "Abrir Subtema", exact: true }).count(), 1)
+  await page.getByRole("button", { name: "Leer", exact: true }).click()
+  assert.equal(await page.locator("#sheet section").count(), 2)
+  assert.match(await page.locator("#sheet").innerText(), /Introducción propia del tema/)
+  assert.equal(await page.locator("#sheet section h1").first().innerText(), "Tema")
+  await page.evaluate(() => {
+    const sheet=document.querySelector<HTMLElement>('#sheet')!,body=document.querySelector<HTMLElement>('#sheetBody')!;
+    sheet.style.setProperty('--sheet-zoom','2');body.style.width='900px';sheet.scrollLeft=150;sheet.scrollTop=200;
+    (window as any).readerBack();
+  })
+  await page.getByRole("button", { name: "Leer", exact: true }).click()
+  assert.deepEqual(await page.evaluate(() => {
+    const sheet=document.querySelector<HTMLElement>('#sheet')!,body=document.querySelector<HTMLElement>('#sheetBody')!;
+    return {top:sheet.scrollTop,left:sheet.scrollLeft,zoom:sheet.style.getPropertyValue('--sheet-zoom'),width:body.style.width};
+  }), {top:0,left:0,zoom:'1',width:''})
+  await page.evaluate(() => (window as any).readerBack())
   await page.evaluate(() => (window as any).readerBack())
   await page.getByRole("button", { name: "Leer", exact: true }).click()
   assert.equal(await page.locator("#sheet section").count(), 2)
