@@ -51,8 +51,8 @@ test("provider → existing native text/image contract → offline-capable read-
   const mathBlock = projected.document.content.find((block: any) => block.content?.[0]?.text?.startsWith("[[INSCREEN-MATH-V1:"))
   const mathHtml = mathBlock.content.map((node: { text: string }) => `<strong>${escape(node.text)}</strong>`).join(" ")
   const code = mathBlock.content[0].text
-  const metadata = projected.document.content.filter((block: any) => block.content?.[0]?.text?.startsWith("[[INSCREEN-NODE-V1:"))
-    .map((block: any) => `<p>${escape(block.content[0].text)}</p>`)
+  const metadata = projected.document.content.filter((block: any) => block.content?.[0]?.text === '\u2060')
+    .map((block: any) => `<p><a href="${escape(block.content[0].marks[0].attrs.href)}">${block.content[0].text}</a></p>`)
   const body = metadata[1]+`<p>Texto ${mathHtml}</p><h2>Subtítulo interno</h2><pre><code>${escape(code)}</code></pre><img src="https://synthesis.local/images/abc-123" alt="Gráfico"><img src="https://synthesis.local/images/missing" alt="Ausente"><table><tr><td>Tabla</td></tr></table>`
   const nodes = [
     { index: 0, parent: null, name: "Tema", body: metadata[0]+"<p>Introducción propia del tema</p>", x: .5, y: .3, scale: 1 },
@@ -61,6 +61,7 @@ test("provider → existing native text/image contract → offline-capable read-
   const reader = readFileSync(path.resolve(process.cwd(), "../InScreen/modules/sintesis/reader.html"), "utf8")
     .replace("__INSCREEN_SYNTHESIS_FONT_SIZE__", "16")
     .replace("__INSCREEN_SYNTHESIS_NODES__", JSON.stringify(nodes).replaceAll("<", "\\u003c"))
+  let servedReader=reader
   const browser = await chromium.launch({ headless: true })
   t.after(() => browser.close())
   const page = await browser.newPage({ viewport: { width: 400, height: 800 } })
@@ -69,7 +70,7 @@ test("provider → existing native text/image contract → offline-capable read-
   await page.route("**/*", async route => {
     const url = new URL(route.request().url())
     if (url.hostname !== "synthesis.local") { external.push(url.href); return route.abort() }
-    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: reader })
+    if (url.pathname === "/") return route.fulfill({ contentType: "text/html", body: servedReader })
     if (url.pathname.startsWith("/images/")) {
       const response = await imageGET(request("https://v0.test/api/inscreen/provider/synthesis-images?id=" + url.pathname.split("/").at(-1)))
       if (url.pathname.endsWith("abc-123")) assert.equal(response.headers.get("content-type"), "image/png")
@@ -118,6 +119,22 @@ test("provider → existing native text/image contract → offline-capable read-
   await page.getByRole("button", { name: "Leer", exact: true }).click()
   assert.equal(await page.locator("#sheet section").count(), 2)
   assert.equal(await page.locator(".synthesis-reader-math").count(), formulas.length)
+  const legacy = `[[INSCREEN-NODE-V1:${Buffer.from(JSON.stringify({id:'legacy',parentId:null})).toString('base64url')}]]`
+  await page.evaluate(marker => {
+    document.querySelector('#sheetBody')!.innerHTML='<p>Contenido conservado</p><p>'+marker+'</p><p>[[INSCREEN-NODE-V1:bm90LWpzb24]]</p><pre><code>'+marker+'</code></pre><p><code>'+marker+'</code></p>';
+    (window as any).renderSheetContent();
+  },legacy)
+  assert.equal(await page.locator('#sheetBody > p').count(),2)
+  assert.equal(await page.locator('#sheetBody > p').first().innerText(),'Contenido conservado')
+  assert.equal(await page.locator('#sheetBody > pre code').innerText(),legacy)
+  assert.equal(await page.locator('#sheetBody > p code').innerText(),legacy)
+  assert.doesNotMatch(await page.locator('#sheetBody').innerText(),/bm90LWpzb24/)
+  // A cached reader without hierarchy decoding must never print the new payload.
+  servedReader=reader.replace('restoreHierarchy();render();','render();').replace('takeNodeMetadata(sheetBody);','')
+  await page.reload()
+  await page.getByRole('button',{name:'Abrir Tema',exact:true}).dispatchEvent('click')
+  assert.match(await page.locator('#sheet').innerText(),/Introducción propia del tema/)
+  assert.doesNotMatch(await page.locator('#sheet').innerText(),/INSCREEN-NODE-V1|eyJpZCI/)
   assert.deepEqual(errors, [])
   assert.deepEqual(external, [])
   assert.deepEqual(violations, [])

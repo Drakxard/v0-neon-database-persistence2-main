@@ -27,7 +27,10 @@ export function synthesisWorkspaceForReader(workspace: SynthesisWorkspaceV2): Sy
         const payload = Buffer.from(JSON.stringify({ id: node.id, parentId: node.parentId }), "utf8").toString("base64url")
         // All native headings remain H1. The downloadable reader restores v0's
         // explicit parent links, including trees deeper than Android's H1–H3.
-        content.push({ type: "paragraph", content: [{ type: "text", text: `[[INSCREEN-NODE-V1:${payload}]]` }] })
+        // Keep metadata invisible even when Android briefly uses an older cached
+        // reader. Its renderer preserves HTTP link attributes and a zero-width
+        // label without ever displaying the payload as document text.
+        content.push({ type: "paragraph", content: [{ type: "text", text: "\u2060", marks: [{ type: "link", attrs: { href: `https://synthesis.local/#INSCREEN-NODE-V1:${payload}` } }] }] })
       }
     }
   }

@@ -52,12 +52,13 @@ test("provider preserves v0 parent links and keeps formatted headings inside the
   const blocks = projected.document.content!
   assert.equal(blocks.filter(block => block.type === "heading").length, 5)
   assert.deepEqual(blocks.find(block => block.type === "inscreenReaderContent")?.content, [formatted])
-  const links = blocks.filter(block => block.type === "paragraph" && block.content?.[0]?.text?.startsWith("[[INSCREEN-NODE-V1:"))
-    .map(block => JSON.parse(Buffer.from(block.content![0].text!.match(/:([^:]+)\]\]$/)![1], "base64url").toString("utf8")))
+  const links = blocks.filter(block => block.type === "paragraph" && block.content?.[0]?.text === "\u2060")
+    .map(block => JSON.parse(Buffer.from(String(block.content![0].marks![0].attrs!.href).split("#INSCREEN-NODE-V1:")[1], "base64url").toString("utf8")))
   assert.deepEqual(links, [
     { id: "root", parentId: null }, { id: "child", parentId: "root" },
     { id: "grandchild", parentId: "child" }, { id: "deep", parentId: "grandchild" }, { id: "other", parentId: null },
   ])
   assert.equal(blocks.filter(block => block.content?.[0]?.text === "Inicio propio del nivel").length, 6)
   assert.equal(JSON.stringify(workspace), saved)
+  assert.ok(!blocks.some(block => block.content?.some(child => child.text?.includes("INSCREEN-NODE-V1"))))
 })
