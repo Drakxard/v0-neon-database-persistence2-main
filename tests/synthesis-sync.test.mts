@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { synchronizeSynthesisFolder } from "../lib/client/synthesis-sync.ts"
-import { createEmptySynthesisWorkspace } from "../lib/synthesis-workspace.ts"
+import { createEmptySynthesisWorkspace, type SynthesisWorkspaceV2 } from "../lib/synthesis-workspace.ts"
 import { folderFixture } from "./helpers/synthesis-folder-fixture.mts"
 
 const context = { subjectId: "db", weekNumber: 23 }
@@ -73,4 +73,29 @@ test("edits saved during an upload are sent in the next pass", async () => {
   assert.deepEqual(state.workspace, latest)
   assert.deepEqual((await store.read(context))?.workspace, latest)
   assert.equal(state.writes, 2)
+})
+
+test("images publish before their document; failed images leave the document pending", async () => {
+  const { store } = folderFixture()
+  const workspace: SynthesisWorkspaceV2 = notes("Imágenes")
+  workspace.document.content!.push({ type: "image", attrs: { src: "synthesis-local-image:abc-123" } })
+  await store.save(context, workspace)
+  const calls: string[] = []
+  let failImage = true
+  const fetcher = (async (url: unknown, init?: RequestInit) => {
+    calls.push(String(url))
+    if (String(url).includes("synthesis-images")) {
+      assert.equal((init!.body as Blob).type, "image/png")
+      return new Response(null, { status: failImage ? 500 : 200 })
+    }
+    return Response.json({ etag: "uploaded" })
+  }) as typeof fetch
+  const image = new Blob([Uint8Array.from([137,80,78,71,13,10,26,10])], { type: "image/png" })
+  await assert.rejects(synchronizeSynthesisFolder(context, store, fetcher, async () => image), /subir una imagen/)
+  assert.equal(calls.length, 1)
+  failImage = false
+  calls.length = 0
+  await synchronizeSynthesisFolder(context, store, fetcher, async () => image)
+  assert.match(calls[0], /synthesis-images\?id=abc-123/)
+  assert.match(calls[1], /synthesis-tree/)
 })

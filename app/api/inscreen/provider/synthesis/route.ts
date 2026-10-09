@@ -3,6 +3,7 @@ import { InvalidSynthesisContextError, parseSynthesisContext } from "@/lib/synth
 import { readSynthesisWorkspace } from "@/lib/synthesis-tree-storage"
 import { synthesisWeeksFromObjects } from "@/lib/synthesis-weeks"
 import { listR2ObjectsByPrefix } from "@/lib/r2"
+import { synthesisWorkspaceForReader } from "@/lib/inscreen-synthesis-reader"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -18,7 +19,7 @@ export async function GET(request: Request) {
       if (params.has("weekNumber")) {
         const snapshot = await readSynthesisWorkspace(context)
         if (!snapshot.workspace) return response({ ok: false, error: "synthesis_unavailable" }, 404)
-        return response({ ok: true, ...snapshot })
+        return response({ ok: true, ...snapshot, workspace: synthesisWorkspaceForReader(snapshot.workspace) })
       }
       const objects = await listR2ObjectsByPrefix("manifests/inscreen/sintesis/by-subject/" + context.subjectId + "/")
       return response({ ok: true, weeks: synthesisWeeksFromObjects(context.subjectId, objects) })
