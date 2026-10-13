@@ -54,6 +54,8 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
   const returnTokenKey = buildSynthesisReturnTokenStorageKey(context)
   const [workspace, setWorkspace] = useState(createEmptySynthesisWorkspace)
   const workspaceRef = useRef(workspace)
+  const editorFlushRef = useRef<(() => void) | null>(null)
+  const onEditorFlushReady = useCallback((flush: (() => void) | null) => { editorFlushRef.current = flush }, [])
   const folderBaseRef = useRef<string | null>(null)
   const preservedEmergencyRef = useRef(false)
   const [message, setMessage] = useState("")
@@ -99,7 +101,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     if (status === "pending") stageEmergencyDraft()
     if (status === "error") setMessage(SAVE_ERROR_MESSAGE)
     else if (status === "saved") setMessage((current) => current === SAVE_ERROR_MESSAGE ? "" : current)
-  }), [pendingKey, storageKey])
+  }, () => editorFlushRef.current?.()), [pendingKey, storageKey])
   const [currentParentId, setCurrentParentId] = useState<string | null>(null)
   const [editorSession, setEditorSession] = useState<EditorSession | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
@@ -460,6 +462,7 @@ export function SynthesisClient({ context, legacyReturnToken }: { context: Synth
     </Dialog>
     {message ? <div className={styles.notice}>{message}<button onClick={() => setMessage("")} aria-label="Cerrar aviso">×</button></div> : null}
     <SimpleEditor key={editorSession.key} content={editorSession.document} onChange={updateEditorDocument} onError={setMessage}
+      onPendingChange={autosave.markDirty} onFlushReady={onEditorFlushReady}
       toolbarAction={<button type="button" className={styles.exportSvgButton} onClick={() => { void downloadSvg() }} disabled={exportingSvg} aria-busy={exportingSvg} aria-label={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"} title={exportingSvg ? "Exportando página como SVG…" : "Exportar página como SVG"}>{exportingSvg ? <LoaderCircle className={styles.spinner} aria-hidden="true" /> : <Download aria-hidden="true" />}</button>}
       fontSize={workspace.editorFontSize} onFontSizeChange={(editorFontSize) => {
         void acceptWorkspace({ ...workspaceRef.current, editorFontSize }).catch(() => setMessage(SAVE_ERROR_MESSAGE))

@@ -14,6 +14,7 @@ export interface CursorVisibilityOptions {
    * Reference to the toolbar element that may obscure the cursor
    */
   overlayHeight?: number
+  enabled?: boolean
 }
 
 /**
@@ -27,17 +28,18 @@ export interface CursorVisibilityOptions {
 export function useCursorVisibility({
   editor,
   overlayHeight = 0,
+  enabled = true,
 }: CursorVisibilityOptions) {
   const { height: windowHeight } = useWindowSize()
   const rect = useBodyRect({
-    enabled: true,
+    enabled,
     throttleMs: 100,
     useResizeObserver: true,
   })
 
   useEffect(() => {
     const ensureCursorVisibility = () => {
-      if (!editor) return
+      if (!enabled || !editor) return
 
       const { state, view } = editor
       if (!view.hasFocus()) return
@@ -65,7 +67,7 @@ export function useCursorVisibility({
     }
 
     ensureCursorVisibility()
-  }, [editor, overlayHeight, windowHeight, rect.height])
+  }, [editor, enabled, overlayHeight, windowHeight, rect.height])
 
   return rect
 }

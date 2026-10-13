@@ -1,0 +1,35 @@
+{
+  "title": "Reinserción continua — explicación visual",
+  "steps": [
+    {
+      "title": "1. Estado inicial (sí, lo explico visual)",
+      "text": "Mostramos la tabla con m = 10 buckets (índices 0–9). Destacamos con color y puntero las claves presentes: 1, 13, 4, 24. Aquí '<<undef>>' = casilla vacía; <b>...</b> indica clave ocupante.",
+      "items": [
+        "Buckets 0..9: ver filas con 1 en bucket 1, 13 en 3, 4 en 4, 24 en 5.",
+        "Marca visual: color azul para ocupados, gris para <<undef>>.",
+        "Puntero deslizante señala secuencialmente: primero bucket 1 → 3 → 4 → 5."
+      ],
+      "result": "Estado claro: tabla con m=10 y claves {1,13,4,24}. (Esto respeta los datos de la página.)"
+    },
+    {
+      "title": "2. Borrado y búsqueda de reinserción",
+      "text": "Al borrar una clave (ej. eliminar 24 en bucket 5) la reinserción continua desplaza y reevalúa entradas posteriores para no romper cadenas de sondeo. Usamos h(k)=k mod 10 para explicar posiciones — símbolo: h(k) significa 'función hash de k'.",
+      "items": [
+        "Eliminar 24 en bucket 5 → bucket 5 queda marcado deleted temporalmente (color naranja).",
+        "Recorremos hacia adelante comprobando claves siguientes (p. ej. desde índice 6 a 9 y luego 0→4) con puntero que rebota y resalta cada casilla.",
+        "Si una clave k tiene h(k) ≤ posición_actual o su intervalo original incluye la casilla borrada, la movemos hacia atrás (→) para cerrar el hueco."
+      ],
+      "result": "Objetivo: después del barrido, ninguna clave queda inaccesible por romper la cadena; el slot 'deleted' se sustituye o queda como <<undef>> según la reubicación."
+    },
+    {
+      "title": "3. Resultado final y comprobación",
+      "text": "Mostramos la tabla final con pop-in de casillas actualizadas y sutil elevación/escala de las claves movidas. Verificamos que para cada clave k, h(k)=k mod 10 aún permite encontrarla con sondeo lineal.",
+      "items": [
+        "Reinsertamos 24 si corresponde a otra posición válida; las claves que se movieron aparecen con breve escala y sombra.",
+        "Comprobación paso a paso: aplicar h(k) y sondear linealmente; puntero indica la secuencia de comparación hasta encontrar la clave.",
+        "Color verde para posiciones correctas; ninguna casilla marcada 'deleted' permanece si la reinserción fue completa."
+      ],
+      "result": "Conclusión: Sí, se puede explicar visualmente. La animación mostrará punteros deslizantes, resaltado semántico por color y pop-in de resultados para ilustrar cómo la reinserción continua elimina marcas 'deleted' y preserva la búsqueda. Nota: asumimos m=10 y h(k)=k mod 10 según los datos visibles; si el servidor usa otra h o m, necesitaría esa información para ajustar la animación exactamente."
+    }
+  ]
+}

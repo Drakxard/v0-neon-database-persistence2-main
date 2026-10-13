@@ -13,6 +13,29 @@ const lesson = { title: "Costo de búsqueda", steps: [
 ] }
 
 const reportedLesson = JSON.parse(readFileSync(new URL("./fixtures/pdf-explanation-string-steps.json", import.meta.url), "utf8"))
+const azureLongLesson = JSON.parse(readFileSync(new URL("./fixtures/pdf-explanation-azure-long-steps.json", import.meta.url), "utf8"))
+
+test("the reported Azure page 6 response renders all longer items and conclusions without another model call", async () => {
+  const model = modelFor("", JSON.stringify(azureLongLesson))
+  const response = explanationStream(model, "lo explicas visual?", "Reinserción continua", { provider: "azure", reasoning: "low" })
+  const chunks = await parts(response)
+  const output = chunks.find(part => part.type === "tool-output-available")
+  assert.ok(output)
+  assert.equal(chunks.some(part => part.type === "error"), false)
+  const data = JSON.parse(output.output.html.match(/const lesson=(.*?);let index/)[1])
+  assert.deepEqual(data, azureLongLesson)
+  assert.equal(model.doStreamCalls.length, 1)
+})
+
+test("invalid lesson fields report their path instead of blaming Azure or missing HTML", async () => {
+  const invalid = structuredClone(azureLongLesson)
+  invalid.steps[1].items[0] = "x".repeat(2001)
+  const model = modelFor("", JSON.stringify(invalid))
+  const chunks = await parts(explanationStream(model, "Explicalo", "Reinserción continua", { provider: "azure" }))
+  const failure = chunks.find(part => part.type === "error")
+  assert.match(failure.errorText, /steps\[1\]\.items\[0\]/)
+  assert.ok(!failure.errorText.includes("Azure"))
+})
 
 test("the reported Gateway response with JSON-string steps renders through the real SDK UI reader", async () => {
   const model = modelFor("", JSON.stringify(reportedLesson))

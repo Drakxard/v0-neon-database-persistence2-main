@@ -1,5 +1,6 @@
 /** Marks a save complete only after the directory write and verification finish. */
-export function createAsyncLocalAutosave(write: () => Promise<void>, onStatus: (status: "pending" | "saved" | "error") => void) {
+export function createAsyncLocalAutosave(write: () => Promise<void>, onStatus: (status: "pending" | "saved" | "error") => void,
+  prepare?: () => void) {
   let version = 0
   let savedVersion = 0
   let running: Promise<boolean> | null = null
@@ -7,11 +8,14 @@ export function createAsyncLocalAutosave(write: () => Promise<void>, onStatus: (
   let maxTimer: ReturnType<typeof setTimeout> | undefined
   const clearTimers = () => { clearTimeout(pauseTimer); clearTimeout(maxTimer); pauseTimer = undefined; maxTimer = undefined }
   const flush = (): Promise<boolean> => {
+    prepare?.()
     clearTimers()
     if (running) return running
     const task = (async () => {
       try {
         while (savedVersion !== version) {
+          // Edits can arrive while an earlier directory write is in flight.
+          prepare?.()
           const target = version
           await write()
           savedVersion = target

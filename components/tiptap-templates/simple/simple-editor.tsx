@@ -1,10 +1,11 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { EditorContent, EditorContext, useEditor } from "@tiptap/react"
 import type { Content } from "@tiptap/core"
 import { SynthesisMath } from "@/components/synthesis/math-extension"
 import { normalizeSynthesisMath } from "@/lib/synthesis-math"
+import { createDeferredEditorChange } from "@/lib/client/deferred-editor-change"
 
 // --- Tiptap Core Extensions ---
 import { StarterKit } from "@tiptap/starter-kit"
@@ -220,6 +221,8 @@ export function SimpleEditor({
   content,
   editable = true,
   onChange,
+  onPendingChange,
+  onFlushReady,
   onError,
   fontSize,
   onFontSizeChange,
@@ -228,6 +231,8 @@ export function SimpleEditor({
   content: TiptapJSON
   editable?: boolean
   onChange?: (document: TiptapJSON) => void
+  onPendingChange?: () => void
+  onFlushReady?: (flush: (() => void) | null) => void
   onError?: (message: string) => void
   fontSize?: number
   onFontSizeChange?: (size: number) => void
@@ -241,9 +246,19 @@ export function SimpleEditor({
   const [isSearchAndReplaceOpen, setIsSearchAndReplaceOpen] = useState(false)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const searchAndReplaceButtonRef = useRef<HTMLButtonElement>(null)
+  const initialContent = useMemo(() => normalizeSynthesisMath(content), [content])
+  const editorRef = useRef<ReturnType<typeof useEditor>>(null)
+  const callbacks = useRef({ onChange, onPendingChange })
+  callbacks.current = { onChange, onPendingChange }
+  const changes = useMemo(() => createDeferredEditorChange(
+    () => editorRef.current!.getJSON() as TiptapJSON,
+    document => callbacks.current.onChange?.(document),
+    () => callbacks.current.onPendingChange?.(),
+  ), [])
 
   const editor = useEditor({
     immediatelyRender: false,
+    shouldRerenderOnTransaction: false,
     editorProps: {
       attributes: {
         autocomplete: "off",
@@ -289,16 +304,34 @@ export function SimpleEditor({
         onError: (error) => onError?.(error.message),
       }),
     ],
-    content: normalizeSynthesisMath(content) as Content,
+    content: initialContent as Content,
     editable,
     onCreate: ({ editor }) => {
-      if (editable && JSON.stringify(normalizeSynthesisMath(content)) !== JSON.stringify(content)) onChange?.(editor.getJSON() as TiptapJSON)
+      if (editable && JSON.stringify(initialContent) !== JSON.stringify(content)) onChange?.(editor.getJSON() as TiptapJSON)
     },
-    onUpdate: ({ editor }) => onChange?.(editor.getJSON() as TiptapJSON),
+    onUpdate: () => changes.markDirty(),
   })
+  editorRef.current = editor
+
+  useEffect(() => {
+    onFlushReady?.(changes.flush)
+    const flush = () => changes.flush()
+    const visibility = () => { if (document.visibilityState === "hidden") flush() }
+    window.addEventListener("pagehide", flush, true)
+    window.addEventListener("beforeunload", flush, true)
+    document.addEventListener("visibilitychange", visibility, true)
+    return () => {
+      flush()
+      onFlushReady?.(null)
+      window.removeEventListener("pagehide", flush, true)
+      window.removeEventListener("beforeunload", flush, true)
+      document.removeEventListener("visibilitychange", visibility, true)
+    }
+  }, [changes, onFlushReady])
 
   const rect = useCursorVisibility({
     editor,
+    enabled: isMobile,
     overlayHeight: toolbarRef.current?.getBoundingClientRect().height ?? 0,
   })
 

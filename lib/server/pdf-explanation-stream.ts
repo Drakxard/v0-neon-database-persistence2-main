@@ -1,12 +1,18 @@
 import { createUIMessageStream, createUIMessageStreamResponse, jsonSchema, streamText, tool, toUIMessageStream, type LanguageModel } from "ai"
 import { explanationHtml, explanationPrompt } from "../pdf-explanation.ts"
 import { explanationFailure } from "../pdf-explanation-errors.ts"
-import { explanationLessonSchema, lessonHtml, lessonFromText, type ExplanationLesson } from "../pdf-explanation-lesson.ts"
+import { explanationLessonSchema, lessonHtml, lessonFromText, ExplanationLessonValidationError, type ExplanationLesson } from "../pdf-explanation-lesson.ts"
 
 export function explanationStream(model: LanguageModel, question: string, transcription: string,
   options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; supportsTools?: boolean; reasoning?: "none" | "low"; provider?: "azure" | "gateway" } = {}) {
   let failureDiagnostics: ReturnType<typeof explanationFailure>["diagnostics"] | undefined
+  let validationError: string | undefined
   const reportError = (error: unknown) => {
+    let cause = error as { cause?: unknown } | undefined
+    for (let depth = 0; cause && depth < 6; depth++) {
+      if (cause instanceof ExplanationLessonValidationError) { validationError = cause.message; return cause.message }
+      cause = cause.cause as typeof cause
+    }
     const failure = explanationFailure(error, options.provider)
     failureDiagnostics = failure.diagnostics
     console.error("[PDF explicación] AI Gateway", failure.diagnostics)
@@ -131,9 +137,9 @@ export function explanationStream(model: LanguageModel, question: string, transc
             writer.write({ type: "data-explanation", data: { html: explanationHtml(document) } })
           } else {
             console.error("[PDF explicación] Sin HTML", { finishReason: reason, textLength: text.length, toolError: Boolean(toolError) })
-            writer.write({ type: "error", errorText: reason === "length"
+            writer.write({ type: "error", errorText: validationError || (reason === "length"
               ? "El modelo agotó su límite antes de completar el HTML. Presioná Enter para reintentar; la página ya está transcrita."
-              : "El modelo terminó sin entregar HTML completo. Presioná Enter para reintentar; la página ya está transcrita." })
+              : "El modelo terminó sin entregar HTML completo. Presioná Enter para reintentar; la página ya está transcrita.") })
             return
           }
         }
