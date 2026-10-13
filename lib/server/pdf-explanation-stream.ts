@@ -5,8 +5,10 @@ import { explanationLessonSchema, lessonHtml, lessonFromText, type ExplanationLe
 
 export function explanationStream(model: LanguageModel, question: string, transcription: string,
   options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; supportsTools?: boolean } = {}) {
+  let failureDiagnostics: ReturnType<typeof explanationFailure>["diagnostics"] | undefined
   const reportError = (error: unknown) => {
     const failure = explanationFailure(error)
+    failureDiagnostics = failure.diagnostics
     console.error("[PDF explicación] AI Gateway", failure.diagnostics)
     return failure.message
   }
@@ -75,7 +77,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
               writer.write({ type: "error", errorText: "AI Gateway interrumpió la generación. Elegí otro modelo para reintentar." })
               continue
             }
-            if (value.type === "error") { failed = true; diagnostic("error-gateway", { error: value.errorText }) }
+            if (value.type === "error") { failed = true; diagnostic("error-gateway", { error: value.errorText, diagnostics: failureDiagnostics }) }
             writer.write(value)
           }
         } finally {
@@ -113,7 +115,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
                   writer.write({ type: "error", errorText: reportError({ name: "TimeoutError" }) })
                   continue
                 }
-                if (value.type === "error") { failed = true; diagnostic("error-modelo-recuperacion", { error: value.errorText }) }
+                if (value.type === "error") { failed = true; diagnostic("error-modelo-recuperacion", { error: value.errorText, diagnostics: failureDiagnostics }) }
                 writer.write(value)
               }
             } finally { recoveryReader.releaseLock() }

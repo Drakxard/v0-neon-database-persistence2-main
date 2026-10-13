@@ -126,6 +126,16 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await initialize()
     await note.waitFor()
     assert.equal(await note.count(), 1)
+    // The saved FreeText must not also be painted into the page canvas below
+    // its interactive editor. Counting editors alone misses that duplicate.
+    await page.waitForFunction(() => window.PDFViewerApplication.pdfViewer.getPageView(0).renderingState === 3)
+    assert.equal(await page.evaluate(() => {
+      const canvas = document.querySelector('.page .canvasWrapper canvas')
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+      let purple = 0
+      for (let i = 0; i < data.length; i += 4) if (data[i] > 70 && data[i] < 220 && data[i + 1] < 160 && data[i + 2] > 130) purple++
+      return purple
+    }), 0)
     await note.click()
     await page.locator(".pdf-explanation-result iframe").waitFor()
     assert.equal(generations, 1)
@@ -141,6 +151,56 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await page.locator(".pdf-explanation-result iframe").waitFor()
     assert.equal(generations, 2)
     assert.equal(transcriptions, 0)
+    await page.getByRole("button", { name: "Cerrar · Esc" }).click()
+    const lastNote = page.locator(".pdf-explanation-text").last()
+    const lastBox = await lastNote.boundingBox()
+    await page.mouse.move(lastBox.x + 20, lastBox.y + 8)
+    await page.mouse.down()
+    await page.mouse.move(lastBox.x + 80, lastBox.y + 48, { steps: 6 })
+    await page.mouse.up()
+    await lastNote.locator('.editToolbar').waitFor({ state: 'visible' })
+    assert.ok((await lastNote.getAttribute('class')).includes('selectedEditor'))
+    await page.keyboard.press('Delete')
+    await page.waitForFunction(() => document.querySelectorAll('.pdf-explanation-text').length === 1)
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction(() => document.querySelectorAll('.pdf-explanation-text').length === 2)
+    const undoBox = await lastNote.boundingBox()
+    await page.mouse.move(undoBox.x + 20, undoBox.y + 8)
+    await page.mouse.down()
+    await page.mouse.move(undoBox.x + 50, undoBox.y + 28, { steps: 6 })
+    await page.mouse.up()
+    await lastNote.locator('.deleteButton').click()
+    await page.waitForFunction(() => document.querySelectorAll('.pdf-explanation-text').length === 1)
+    // Deleting a restored note must also remove its saved PDF annotation.
+    await note.click()
+    await page.getByRole("button", { name: "Cerrar · Esc" }).click()
+    const remainingBox = await note.boundingBox()
+    await page.mouse.move(remainingBox.x + 20, remainingBox.y + 8)
+    await page.mouse.down()
+    await page.mouse.move(remainingBox.x + 60, remainingBox.y + 28, { steps: 6 })
+    await page.mouse.up()
+    await page.keyboard.press('Delete')
+    await note.waitFor({ state: 'detached' })
+    await page.waitForFunction(async () => {
+      const dir = await (await (await navigator.storage.getDirectory()).getDirectoryHandle('manifests')).getDirectoryHandle('pdf-explanations')
+      for await (const child of dir.values()) {
+        const saved = JSON.parse(await (await (await child.getFileHandle('explanations.json')).getFile()).text())
+        if (saved.entries.length === 2 && saved.entries.every(entry => entry.deleted)) return true
+      }
+      return false
+    })
+    // Reload the old PDF before autosave: the local deletion must suppress its
+    // original annotation too, rather than resurrecting the interactive note.
+    await page.reload()
+    await initialize()
+    await page.waitForFunction(() => [...(window.PDFViewerApplication.pdfDocument.annotationStorage.serializable.map?.values() || [])].some(annotation => annotation.deleted))
+    await note.waitFor({ state: 'detached' })
+    assert.equal(await note.count(), 0)
+    bytes = Uint8Array.from(await page.evaluate(async () => Array.from(await window.PDFViewerApplication.pdfDocument.saveDocument())))
+    await page.reload()
+    await initialize()
+    assert.equal(await note.count(), 0)
+    assert.equal(await page.evaluate(async () => (await (await window.PDFViewerApplication.pdfDocument.getPage(1)).getAnnotations()).filter(a => a.subtype === 'FreeText').length), 0)
     assert.deepEqual(errors, [])
   } finally { await browser.close() }
 })

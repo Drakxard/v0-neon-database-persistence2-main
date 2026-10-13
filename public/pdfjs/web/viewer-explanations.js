@@ -50,7 +50,9 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       const key = await hash(new TextEncoder().encode(identity));
       const root = query.localWorkspace ? await ensureWorkspaceRootHandle() : null;
       const path = `manifests/pdf-explanations/${key}/explanations.json`;
-      const saved = root ? await read(root, path) : JSON.parse(localStorage.getItem(`pdf-explanations:${key}`) || "null");
+      const local = JSON.parse(localStorage.getItem(`pdf-explanations:${key}`) || "null");
+      const stored = root ? await read(root, path) : null;
+      const saved = stored && (!local || (stored.updatedAt || 0) >= (local.updatedAt || 0)) ? stored : local;
       if (saved && (saved.version !== 1 || !Array.isArray(saved.entries) || !saved.transcriptions)) {
         throw new Error("El archivo de explicaciones guardadas no es válido.");
       }
@@ -80,8 +82,13 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     try { return await loading; } finally { loading = null; }
   }
   function persist(state) {
-    const json = JSON.stringify(state.data);
+    // Keep the latest action immediately, including a reload while a queued
+    // workspace write is still pending. The manifest remains available to sync.
+    state.data.updatedAt = Math.max(Date.now(), (state.data.updatedAt || 0) + 1);
+    try { localStorage.setItem(`pdf-explanations:${state.key}`, JSON.stringify(state.data)); }
+    catch (error) { if (!state.root) return Promise.reject(error); }
     const next = saving.catch(() => {}).then(async () => {
+      const json = JSON.stringify(state.data);
       if (!state.root) { localStorage.setItem(`pdf-explanations:${state.key}`, json); return; }
       const previous = await read(state.root, state.path);
       if (previous) await write(state.root, state.path + ".backup", JSON.stringify(previous));
@@ -193,6 +200,30 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const div = editor.div;
     if (!div || div.dataset.explanationId) return;
     div.dataset.explanationId = entry.id;
+    // Keep existing notes in PDF.js' modified annotation set even when their
+    // text/position is unchanged. Otherwise the canvas paints the saved note
+    // underneath this interactive FreeText editor after reopening the PDF.
+    const serialize = editor.serialize.bind(editor);
+    editor.serialize = (isForCopying = false) => {
+      const value = serialize(isForCopying);
+      if (value || isForCopying || !editor.annotationElementId) return value;
+      const copy = serialize(true);
+      if (!copy) return null;
+      const { isCopy, ...annotation } = copy;
+      return { ...annotation, id: editor.annotationElementId };
+    };
+    const state = documentState;
+    const remove = editor.remove.bind(editor), rebuild = editor.rebuild.bind(editor);
+    editor.remove = () => {
+      if (!entry.deleted) { entry.deleted = true; persist(state).catch(report); }
+      remove();
+      state.pdf.annotationStorage.resetModifiedIds();
+    };
+    editor.rebuild = () => {
+      // PDF.js restores the same editor when undoing a deletion.
+      if (entry.deleted) { entry.deleted = false; persist(state).catch(report); }
+      rebuild();
+    };
     div.classList.add("pdf-explanation-text");
     div.title = "Clic para ver la explicación; arrastrá para ubicarla";
     let drag = null;
@@ -223,14 +254,20 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         editor.commit();
         entry.annotation = editor.serialize() || entry.annotation;
         entry.position = { x: editor.x, y: editor.y };
-        persist(documentState).catch(report);
+        persist(state).catch(report);
+        editor.parent?.setSelected(editor);
+        div.focus({ preventScroll: true });
       } else if (event.type !== "pointercancel") openHtml(entry);
     };
     div.addEventListener("pointerup", finish);
     div.addEventListener("pointercancel", finish);
-    div.addEventListener("click", event => { event.preventDefault(); event.stopImmediatePropagation(); }, true);
+    div.addEventListener("click", event => {
+      if (event.target.closest(".editToolbar, .resizers")) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+    }, true);
     div.addEventListener("dblclick", event => { event.preventDefault(); event.stopImmediatePropagation(); }, true);
     div.addEventListener("keydown", event => {
+      if (event.target.closest(".editToolbar, .resizers")) return;
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopImmediatePropagation(); openHtml(entry); }
     }, true);
   }
@@ -238,12 +275,17 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     if (!documentState || restoring || documentState.pdf !== app.pdfDocument) return;
     restoring = true;
     try {
+      const redraw = new Set();
       const usedAnnotations = new Set([...editors.values()].map(editor => editor.annotationElementId).filter(Boolean));
       for (const entry of documentState.data.entries) {
         const layer = app.pdfViewer.getPageView(entry.annotation.pageIndex)?.annotationEditorLayer?.annotationEditorLayer;
         if (!layer) continue;
         const bound = editors.get(entry.id);
         if (bound) {
+          if (entry.deleted) {
+            if (bound.annotationElementId) layer.getEditableAnnotation(bound.annotationElementId)?.hide();
+            continue;
+          }
           if (bound.parent !== layer || !bound.isAttachedToDOM) layer.addOrRebuild(bound);
           layer.div.hidden = false;
           bound.show();
@@ -254,7 +296,9 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         const annotations = await (await app.pdfDocument.getPage(entry.annotation.pageIndex + 1)).getAnnotations();
         const existing = annotations.find(a => !usedAnnotations.has(a.id) && a.subtype === "FreeText" && (a.textContent?.join("\n") || a.contentsObj?.str || "").trim() === entry.annotation.value.trim());
         const native = existing && layer.getEditableAnnotation(existing.id);
-        const editor = await layer.deserialize(native || { ...entry.annotation, isCopy: true });
+        if (entry.deleted && !native) continue;
+        const editor = (native && documentState.pdf.annotationStorage.getEditor(existing.id))
+          || await layer.deserialize(native || { ...entry.annotation, isCopy: true });
         if (!editor) continue;
         const position = entry.position || { x: editor.x, y: editor.y };
         layer.addOrRebuild(editor);
@@ -265,6 +309,14 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         if (native) usedAnnotations.add(existing.id);
         layer.div.hidden = false;
         bindEditor(entry, editor);
+        if (entry.deleted) editor.remove();
+        if (native) redraw.add(app.pdfViewer.getPageView(entry.annotation.pageIndex));
+      }
+      if (redraw.size) {
+        documentState.pdf.annotationStorage.resetModifiedIds();
+        for (const page of redraw) page.reset({ keepAnnotationLayer: true, keepAnnotationEditorLayer: true,
+          keepXfaLayer: true, keepTextLayer: true, keepCanvasWrapper: true });
+        app.pdfViewer.update();
       }
     } catch (error) { report(error); } finally { restoring = false; }
   }

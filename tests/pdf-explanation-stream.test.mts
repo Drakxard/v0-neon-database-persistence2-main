@@ -166,6 +166,21 @@ test("Gateway rate-limit failures remain actionable and do not trigger HTML reco
   assert.ok(!chunks.some(part => part.type === "finish"))
 })
 
+test("download diagnostics preserve Gateway permission and provider status without raw credentials", async () => {
+  for (const statusCode of [403, 503]) {
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [
+      { type: "stream-start", warnings: [] },
+      { type: "error", error: Object.assign(new Error("secret-key"), { statusCode, name: "APICallError", responseBody: "secret-key", generationId: "generation-test" }) },
+    ] as LanguageModelV4StreamPart[] }) }) })
+    const chunks = await parts(explanationStream(model, "Duda", "Página"))
+    const debug = chunks.find(part => part.type === "data-explanation-debug" && part.data.stage === "error-gateway")
+    assert.equal(debug.data.diagnostics.status, statusCode)
+    assert.equal(debug.data.diagnostics.name, "APICallError")
+    assert.equal(debug.data.diagnostics.generationId, "generation-test")
+    assert.ok(!JSON.stringify(chunks).includes("secret-key"))
+  }
+})
+
 test("invalid tool output automatically recovers through another verified free model and the real UI reader", async () => {
   const recovery = textModel("<html><head></head><body>Segundo modelo</body></html>")
   const response = explanationStream(modelFor("<div>Incompleto</div>"), "Duda", "Página", { recoveryModel: recovery })
