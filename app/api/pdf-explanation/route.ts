@@ -31,7 +31,8 @@ export async function POST(request: Request) {
       gateway(models[0].id),
       input.question,
       input.transcription,
-      { fallbackModels: models.slice(1).map(model => model.id), maxOutputTokens: Math.min(...models.map(model => model.maxOutputTokens)) },
+      { fallbackModels: models.slice(1).map(model => model.id), recoveryModel: models[1] ? gateway(models[1].id) : undefined,
+        maxOutputTokens: Math.min(...models.map(model => model.maxOutputTokens)) },
     )
   } catch (error) {
     if (error instanceof FreeExplanationModelsError) return Response.json({ error: error.message }, { status: 503 })

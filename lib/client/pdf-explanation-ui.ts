@@ -18,11 +18,22 @@ export async function requestPdfExplanation(question: string, transcription: str
     messageId: undefined,
     messages: [{ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: question }] }],
     body: { question, transcription },
-    abortSignal: AbortSignal.timeout(120_000),
+    abortSignal: AbortSignal.timeout(75_000),
   })
   let html: string | undefined
   for await (const message of readUIMessageStream({ stream, terminateOnError: true })) {
     for (const part of message.parts) {
+      if (part.type === "data-explanation-status") {
+        const status = part.data as { text?: unknown } | undefined
+        if (typeof status?.text === "string") onProgress(status.text)
+        continue
+      }
+      if (part.type === "text") onProgress("Generando las pantallas y animaciones…")
+      if (part.type === "data-explanation") {
+        const output = part.data as { html?: unknown } | undefined
+        if (typeof output?.html === "string") html = output.html
+        continue
+      }
       if (part.type !== "tool-renderExplanation") continue
       if (part.state === "input-streaming") onProgress("Diseñando las pantallas y animaciones…")
       if (part.state === "input-available") onProgress("Preparando la explicación para mostrarla…")

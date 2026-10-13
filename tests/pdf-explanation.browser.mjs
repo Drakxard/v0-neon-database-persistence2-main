@@ -28,9 +28,13 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
       const html = '<html><head></head><body><h1>Explicación</h1><button onclick="this.textContent=\'Paso 2\'">Siguiente</button></body></html>'
       const response = createUIMessageStreamResponse({ stream: createUIMessageStream({ execute: ({ writer }) => {
         writer.write({ type: "start", messageId: "explanation" })
-        writer.write({ type: "tool-input-start", toolCallId: "render", toolName: "renderExplanation" })
-        writer.write({ type: "tool-input-available", toolCallId: "render", toolName: "renderExplanation", input: { html } })
-        writer.write({ type: "tool-output-available", toolCallId: "render", output: { html } })
+        if (generations === 2) {
+          writer.write({ type: "data-explanation", data: { html } })
+        } else {
+          writer.write({ type: "tool-input-start", toolCallId: "render", toolName: "renderExplanation" })
+          writer.write({ type: "tool-input-available", toolCallId: "render", toolName: "renderExplanation", input: { html } })
+          writer.write({ type: "tool-output-available", toolCallId: "render", output: { html } })
+        }
         writer.write({ type: "finish", finishReason: "tool-calls" })
       } }) })
       return route.fulfill({ body: await response.text(), headers: Object.fromEntries(response.headers) })

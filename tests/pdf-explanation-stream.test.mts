@@ -3,6 +3,21 @@ import test from "node:test"
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test"
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { explanationStream } from "../lib/server/pdf-explanation-stream.ts"
+import { DefaultChatTransport, readUIMessageStream } from "ai"
+
+function textModel(text: string, reason: "stop" | "length" = "stop") {
+  const chunks: LanguageModelV4StreamPart[] = [
+    { type: "stream-start", warnings: [] },
+    { type: "text-start", id: "text-1" },
+    { type: "text-delta", id: "text-1", delta: text },
+    { type: "text-end", id: "text-1" },
+    { type: "finish", finishReason: { unified: reason, raw: undefined }, usage: {
+      inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 20, text: 20, reasoning: undefined },
+    } },
+  ]
+  return new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks }) }) })
+}
 
 function modelFor(html: string) {
   const chunks: LanguageModelV4StreamPart[] = [
@@ -29,15 +44,17 @@ test("request instructs the Gateway model to return UI through renderExplanation
   assert.ok(output.output.html.includes("connect-src 'none'"))
   assert.ok(output.output.html.includes("Pasos"))
   const request = model.doStreamCalls[0]
-  assert.deepEqual(request.toolChoice, { type: "tool", toolName: "renderExplanation" })
+  assert.deepEqual(request.toolChoice, { type: "auto" })
   assert.equal(request.tools?.[0].name, "renderExplanation")
+  assert.equal(request.reasoning, "none")
+  assert.equal(request.maxOutputTokens, 6000)
   assert.ok(JSON.stringify(request.prompt).includes("Vercel AI SDK UI"))
   assert.ok(JSON.stringify(request.prompt).includes("¿Por qué cambia el signo?"))
 })
 
 test("incomplete model HTML produces a tool error instead of a renderable artifact", async () => {
   const chunks = await parts(explanationStream(modelFor("<div>Incompleto</div>"), "Duda", "Página"))
-  assert.ok(chunks.some(part => part.type === "tool-output-error"))
+  assert.ok(chunks.some(part => part.type === "error" && part.errorText.includes("sin entregar HTML completo")))
   assert.ok(!chunks.some(part => part.type === "tool-output-available"))
 })
 
@@ -46,5 +63,52 @@ test("the UI stream forwards only the verified free fallbacks supplied by the se
   const fallbackModels = ["inclusionai/ling-3.1-flash-free"]
   await parts(explanationStream(model, "Explicalo", "Página", { fallbackModels, maxOutputTokens: 8192 }))
   assert.deepEqual(model.doStreamCalls[0].providerOptions?.gateway, { models: fallbackModels })
-  assert.equal(model.doStreamCalls[0].maxOutputTokens, 8192)
+  assert.equal(model.doStreamCalls[0].maxOutputTokens, 6000)
+})
+
+test("a free model returning text instead of tools still delivers validated HTML through SDK UI", async () => {
+  const html = "<html><head></head><body>Respuesta como texto</body></html>"
+  const chunks = await parts(explanationStream(textModel(`Aquí está:\n\`\`\`html\n${html}\n\`\`\``), "Duda", "Página"))
+  const artifact = chunks.find(part => part.type === "data-explanation")
+  assert.ok(artifact.data.html.includes("Respuesta como texto"))
+  assert.ok(artifact.data.html.includes("connect-src 'none'"))
+  assert.equal(chunks.at(-1).type, "finish")
+  assert.ok(!chunks.some(part => part.type === "error"))
+})
+
+test("empty or truncated output reports the cause rather than a successful empty stream", async () => {
+  for (const [text, reason] of [["", "stop"], ["<html><body>Incompleto", "length"]] as const) {
+    const chunks = await parts(explanationStream(textModel(text, reason), "Duda", "Página"))
+    const error = chunks.find(part => part.type === "error")
+    assert.ok(error.errorText.includes(reason === "length" ? "agotó su límite" : "sin entregar HTML completo"))
+    assert.ok(!chunks.some(part => part.type === "finish" || part.type === "data-explanation"))
+  }
+})
+
+test("Gateway rate-limit failures remain actionable and do not trigger HTML recovery", async () => {
+  const recovery = textModel("<html><body>Unused</body></html>")
+  const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [
+    { type: "stream-start", warnings: [] },
+    { type: "error", error: { statusCode: 429, name: "APICallError" } },
+  ] as LanguageModelV4StreamPart[] }) }) })
+  const chunks = await parts(explanationStream(model, "Duda", "Página", { recoveryModel: recovery }))
+  assert.ok(chunks.some(part => part.type === "error" && part.errorText.includes("429")))
+  assert.equal(recovery.doStreamCalls.length, 0)
+  assert.ok(!chunks.some(part => part.type === "finish"))
+})
+
+test("invalid tool output automatically recovers through another verified free model and the real UI reader", async () => {
+  const recovery = textModel("<html><head></head><body>Segundo modelo</body></html>")
+  const response = explanationStream(modelFor("<div>Incompleto</div>"), "Duda", "Página", { recoveryModel: recovery })
+  const transport = new DefaultChatTransport({ fetch: async () => response })
+  const stream = await transport.sendMessages({ trigger: "submit-message", chatId: "test", messageId: undefined, messages: [] })
+  let html = ""
+  for await (const message of readUIMessageStream({ stream, terminateOnError: true })) {
+    for (const part of message.parts) if (part.type === "data-explanation") html = (part.data as { html: string }).html
+  }
+  assert.ok(html.includes("Segundo modelo"))
+  assert.equal(recovery.doStreamCalls.length, 1)
+  assert.equal(recovery.doStreamCalls[0].tools, undefined)
+  assert.equal(recovery.doStreamCalls[0].reasoning, "none")
+  assert.ok(JSON.stringify(recovery.doStreamCalls[0].prompt).includes("directamente como texto"))
 })
