@@ -26,6 +26,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Modo de voz por materia
 
+En el visor PDF.js, `★ → Verlo` permite escribir una duda sobre la página actual y generar una explicación HTML animada. Un clic sobre el texto de la duda vuelve a abrirla; arrastrarlo guarda su posición. `Esc` cierra la explicación. `Procedimiento` queda reservado para una próxima implementación.
+
+El servidor usa AI SDK con AI Gateway: configurar `gatewayia` o `AI_GATEWAY_API_KEY`; `PDF_EXPLANATION_MODEL` permite elegir el modelo (por defecto `anthropic/claude-sonnet-4.5`). Se reutilizan los bloques de Datalab guardados por Conjuntos; si faltan, se transcribe solamente la página actual con `datalab`/`MARKER_API` o la configuración de `User.Services`. Los HTML, transcripciones y posiciones se guardan en `manifests/pdf-explanations` de la carpeta local; en modo remoto se conservan en el almacenamiento del navegador.
+
+La solicitud exige la herramienta `renderExplanation`, que entrega el HTML al flujo Generative UI de Vercel AI SDK UI. El servidor usa `streamText` y `toUIMessageStream`; PDF.js consume el resultado con `DefaultChatTransport` y `readUIMessageStream`. Se muestra el HTML cuando la herramienta termina y se valida, manteniendo su reapertura local sin llamadas a la IA. El SDK funciona en la aplicación anfitriona; el HTML generado no importa paquetes ni contiene claves. `npm run build:pdf-explanation-ui` compila el cliente del SDK para el visor y también se ejecuta antes de `dev` y `build`.
+
 El botón de micrófono de la esquina superior derecha activa el modo de voz. En ese modo, tocar una esfera abre un lienzo blanco con el nombre de la materia y dictado en español. El micrófono del modal permite pausar o reintentar; `Esc` cierra el modal y detiene la captura. El texto es temporal y se limpia al cerrar. Con el modo apagado, las esferas conservan su apertura habitual.
 
 En el servidor, configurar `cloudflareapi` con un token con permisos de Workers AI y `CLOUDFLARE_ACCOUNT_ID` con el identificador de la cuenta. `/api/subject-voice` informa si están configuradas esas variables sin exponer el token. Clef Flash filtra las coincidencias de PDF mediante decisiones estructuradas; el dictado sigue siendo temporal y se realiza mediante el reconocimiento de voz del navegador, sin enviarlo a Clef.

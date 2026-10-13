@@ -18,6 +18,7 @@ export function proxy(request: NextRequest) {
 
     if (
       (request.nextUrl.pathname === "/api/pdf-translate" && request.method.toUpperCase() === "POST") ||
+      (request.nextUrl.pathname === "/api/pdf-explanation" && request.method.toUpperCase() === "POST") ||
       (request.nextUrl.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") ||
       isSubjectVoiceServerRequest(request.nextUrl.pathname, request.method) ||
       request.nextUrl.pathname.startsWith("/api/inscreen/")

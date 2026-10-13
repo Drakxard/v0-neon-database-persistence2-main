@@ -4607,6 +4607,7 @@
     await app.initializedPromise;
     state.app = app;
     state.query = parseQuery();
+    window.initPdfExplanations?.({ app, query: state.query, ensureWorkspaceRootHandle, inscreenApiFetch, showToast });
     state.presentationPhase = isPresentationMode() ? "source" : "idle";
     ensureUi();
     bindDocumentActionButtons();

@@ -1,3 +1,40 @@
+.pdf-explanation-star::before {
+  content: "★" !important;
+  mask-image: none !important;
+  background: none !important;
+  color: var(--toolbar-icon-bg-color, currentColor);
+  font: 20px/20px system-ui;
+}
+.pdf-explanation-menu {
+  position: fixed;
+  z-index: 11000;
+  min-width: 155px;
+  padding: 5px;
+  border: 1px solid var(--doorhanger-border-color, #888);
+  border-radius: 6px;
+  background: var(--toolbar-bg-color, #f9f9fa);
+  color: var(--main-color, #222);
+  box-shadow: 0 4px 14px #0003;
+}
+.pdf-explanation-menu[hidden] { display: none; }
+.pdf-explanation-menu button { display: block; width: 100%; padding: 9px 12px; text-align: left; border: 0; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; }
+.pdf-explanation-menu button:hover:not(:disabled) { background: var(--button-hover-color, #ddd); }
+.pdf-explanation-menu button:disabled { opacity: .45; cursor: default; }
+.pdf-explanation-overlay { position: fixed; inset: 0; z-index: 12000; display: grid; place-items: center; background: #0008; font: 14px/1.5 system-ui; }
+.pdf-explanation-panel { width: min(520px, 94vw); max-height: 94vh; overflow: auto; background: var(--toolbar-bg-color, #fff); color: var(--main-color, #222); border-radius: 10px; box-shadow: 0 20px 80px #0005; }
+.pdf-explanation-panel header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #8885; }
+.pdf-explanation-panel header strong { overflow-wrap: anywhere; }
+.pdf-explanation-panel button { cursor: pointer; padding: 7px 12px; border: 1px solid #8885; border-radius: 5px; background: var(--button-hover-color, #eee); color: inherit; }
+.pdf-explanation-panel form { padding: 20px; }
+.pdf-explanation-panel label { display: block; margin-bottom: 12px; }
+.pdf-explanation-panel textarea { box-sizing: border-box; width: 100%; padding: 12px; font: inherit; border: 1px solid #888; border-radius: 5px; background: var(--field-bg-color, #fff); color: inherit; }
+.pdf-explanation-panel p { min-height: 22px; margin: 12px 0; }
+.pdf-explanation-panel button:disabled { cursor: wait; opacity: .6; }
+.pdf-explanation-result { width: 96vw; height: 94vh; display: flex; flex-direction: column; }
+.pdf-explanation-result iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: white; }
+.annotationEditorLayer .pdf-explanation-text { pointer-events: auto !important; cursor: grab !important; touch-action: none; }
+.annotationEditorLayer .pdf-explanation-text:active { cursor: grabbing !important; }
+.annotationEditorLayer .pdf-explanation-text .internal { pointer-events: none !important; }
 .pdfjs-custom-toast-stack {
   position: fixed;
   right: 20px;

@@ -1,6 +1,6 @@
 import { requireAuthSession } from "@/lib/authz"
 import { convertPdfPageWithDatalabMarker, DatalabMarkerError } from "@/lib/datalab-marker"
-import { withInscreenUserConfig } from "@/lib/inscreen-user-config"
+import { INSCREEN_CONFIG_TOKEN_HEADER, withInscreenUserConfig } from "@/lib/inscreen-user-config"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
@@ -32,5 +32,8 @@ async function transcribe(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (process.env.datalab?.trim() || process.env.MARKER_API?.trim() || process.env.marker_api?.trim() || !request.headers.get(INSCREEN_CONFIG_TOKEN_HEADER)) {
+    return transcribe(request)
+  }
   return withInscreenUserConfig(request, () => transcribe(request))
 }
