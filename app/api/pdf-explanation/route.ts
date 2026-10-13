@@ -4,6 +4,7 @@ import { explanationInput } from "@/lib/pdf-explanation"
 import { explanationStream } from "@/lib/server/pdf-explanation-stream"
 import { explanationFailure } from "@/lib/pdf-explanation-errors"
 import { freeExplanationModels, FreeExplanationModelsError } from "@/lib/server/pdf-explanation-models"
+import { azureExplanationConfig, azureExplanationModel } from "@/lib/server/pdf-explanation-azure"
 
 export const runtime = "nodejs"
 export const maxDuration = 300
@@ -12,8 +13,11 @@ export async function GET() {
   const auth = await requireAuthSession()
   if (auth.response) return auth.response
   try {
+    const azure = azureExplanationConfig()
+    if (azure) return Response.json({ provider: "azure", models: [{ id: azure.deployment, name: "GPT-5 mini · Azure" }] }, { headers: { "Cache-Control": "no-store" } })
     return Response.json({ models: await freeExplanationModels(process.env.PDF_EXPLANATION_MODEL) }, { headers: { "Cache-Control": "no-store" } })
   } catch (error) {
+    if (process.env.gpt5mini || process.env.AZURE_OPENAI_API_KEY) return Response.json({ error: error instanceof Error ? error.message : "Revisá la configuración de Azure." }, { status: 503 })
     return Response.json({ error: error instanceof FreeExplanationModelsError ? error.message : "No se pudo cargar la lista de modelos gratuitos." }, { status: 503 })
   }
 }
@@ -33,6 +37,15 @@ export async function POST(request: Request) {
     requestedModel = body.model?.trim()
   } catch {
     return Response.json({ error: "Ingresá una duda y una transcripción de página válidas.", stage: "validacion-solicitud" }, { status: 400 })
+  }
+  try {
+    const azure = azureExplanationConfig()
+    if (azure) return explanationStream(azureExplanationModel(azure), input.question, input.transcription,
+      { maxOutputTokens: 12_000, reasoning: "low", provider: "azure" })
+  } catch (error) {
+    const failure = explanationFailure(error, "azure")
+    return Response.json({ error: error instanceof Error && !failure.diagnostics.status ? error.message : failure.message,
+      stage: "configuracion-azure", diagnostics: failure.diagnostics }, { status: 503 })
   }
   const apiKey = process.env.gatewayia?.trim() || process.env.AI_GATEWAY_API_KEY?.trim()
   if (!apiKey && !process.env.VERCEL_OIDC_TOKEN) {

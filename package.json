@@ -21,6 +21,7 @@
     "quality": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@ai-sdk/azure": "^4.0.100",
     "@ai-sdk/gateway": "^4.0.111",
     "@aws-sdk/client-s3": "^3.1010.0",
     "@aws-sdk/s3-request-presigner": "^3.1010.0",

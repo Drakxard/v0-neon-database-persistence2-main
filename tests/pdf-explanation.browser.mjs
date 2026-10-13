@@ -20,9 +20,9 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
   await page.route("https://explanation.test/**", async route => {
     const url = new URL(route.request().url())
     if (url.pathname === "/api/pdf-explanation") {
-      if (route.request().method() === "GET") return route.fulfill({ json: { models: [{ id: "free/a" }, { id: "free/b" }] } })
+      if (route.request().method() === "GET") return route.fulfill({ json: { provider: "azure", models: [{ id: "gpt-5-mini", name: "GPT-5 mini · Azure" }] } })
       const body = route.request().postDataJSON()
-      assert.equal(body.model, "free/b")
+      assert.equal(body.model, "gpt-5-mini")
       assert.equal(body.transcription, "Una derivada mide el cambio de la función.")
       assert.equal(body.question, generations === 0 ? "¿Qué representa la derivada?" : "Explicalo")
       generations++
@@ -74,7 +74,8 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await page.locator("#pdfExplanationButton").click()
     assert.equal(await page.getByRole("menuitem", { name: "Procedimiento" }).isDisabled(), true)
     await page.getByRole("menuitem", { name: "Verlo", exact: true }).click()
-    await page.locator("#pdf-explanation-model").selectOption("free/b")
+    await page.locator(".pdf-explanation-model-status").filter({ hasText: "GPT-5 mini · Azure" }).waitFor()
+    assert.equal(await page.locator(".pdf-explanation-model-row").isVisible(), false)
     await page.getByText("Página lista · Enter para explicar", { exact: true }).waitFor()
     await page.locator("#pdf-explanation-question").fill("¿Qué representa la derivada?")
     await page.locator("#pdf-explanation-question").press("Shift+Enter")
@@ -87,6 +88,18 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     const downloadedHtml = await readFile(await file.path(), "utf8")
     assert.ok(downloadedHtml.includes("<h1>Explicación</h1>"))
     assert.ok(downloadedHtml.includes("mostrar-explicacion"))
+    const assertFullpage = async () => {
+      const viewport = page.viewportSize()
+      const box = await page.locator('.pdf-explanation-result iframe').boundingBox()
+      assert.equal(box.x, 0)
+      assert.equal(box.y, 0)
+      assert.equal(box.width, viewport.width)
+      assert.equal(box.height, viewport.height)
+    }
+    await assertFullpage()
+    await page.setViewportSize({ width: 375, height: 667 })
+    await assertFullpage()
+    await page.setViewportSize({ width: 1280, height: 720 })
     await page.frameLocator(".pdf-explanation-result iframe").getByRole("button", { name: "Siguiente" }).click()
     await page.keyboard.press("Escape")
     await page.locator(".pdf-explanation-overlay").waitFor({ state: "detached" })

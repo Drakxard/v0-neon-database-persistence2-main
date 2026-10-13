@@ -183,6 +183,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
   }
   function openHtml(entry) {
     const view = overlay(entry.question);
+    view.node.classList.add("pdf-explanation-fullpage");
     view.panel.classList.add("pdf-explanation-result");
     const iframe = document.createElement("iframe");
     iframe.title = entry.question;
@@ -336,22 +337,25 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     let generating = false;
     async function loadModels() {
       modelSelect.disabled = true; refresh.disabled = true;
-      modelStatus.textContent = "Consultando modelos con entrada y salida a precio cero…";
+      modelStatus.textContent = "Consultando el modelo de explicación…";
       try {
         const response = await fetch("/api/pdf-explanation", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "No se pudo cargar la lista de modelos.");
-        if (!Array.isArray(payload.models) || !payload.models.length) throw new Error("No hay modelos gratuitos disponibles.");
+        if (!Array.isArray(payload.models) || !payload.models.length) throw new Error("No hay modelos disponibles.");
+        const fixedAzure = payload.provider === "azure";
+        form.querySelector('label[for="pdf-explanation-model"]').textContent = fixedAzure ? "Modelo de explicación" : "Modelo gratuito de AI Gateway";
+        form.querySelector(".pdf-explanation-model-row").hidden = fixedAzure;
         let remembered = modelSelect.value;
         if (!remembered) { try { remembered = localStorage.getItem("pdf-explanation-model") || ""; } catch {} }
         modelSelect.replaceChildren();
         for (const model of payload.models) {
           const option = document.createElement("option");
-          option.value = model.id; option.textContent = model.id;
+          option.value = model.id; option.textContent = model.name || model.id;
           modelSelect.append(option);
         }
         if (payload.models.some(model => model.id === remembered)) modelSelect.value = remembered;
-        modelStatus.textContent = `${payload.models.length} modelos gratuitos · se usará el que elijas`;
+        modelStatus.textContent = fixedAzure ? "GPT-5 mini · Azure" : `${payload.models.length} modelos gratuitos · se usará el que elijas`;
       } catch (error) {
         modelSelect.replaceChildren(new Option("No se pudo cargar la lista", ""));
         modelStatus.textContent = error.message;
@@ -392,7 +396,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       try {
         await modelsReady;
         const selectedModel = modelSelect.value;
-        if (!selectedModel) throw new Error("Elegí un modelo gratuito antes de generar.");
+        if (!selectedModel) throw new Error("Esperá a que se cargue el modelo antes de generar.");
         debug.model = selectedModel;
         status.textContent = "Preparando la transcripción de la página…";
         const { state, text } = await preparePage(pdf, page);

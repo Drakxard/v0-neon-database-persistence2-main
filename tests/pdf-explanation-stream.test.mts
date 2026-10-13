@@ -61,6 +61,14 @@ async function parts(response: Response) {
   return (await response.text()).split("\n").filter(line => line.startsWith("data: ") && line !== "data: [DONE]").map(line => JSON.parse(line.slice(6)))
 }
 
+test("Azure uses low reasoning with custom deployment names and keeps room for reasoning tokens", async () => {
+  const model = modelFor("<html><head></head><body>Pasos</body></html>")
+  const chunks = await parts(explanationStream(model, "Explicalo", "Costo de búsqueda", { provider: "azure", reasoning: "low", maxOutputTokens: 12_000 }))
+  assert.ok(chunks.some(part => part.type === "tool-output-available"))
+  assert.equal(model.doStreamCalls[0].maxOutputTokens, 12_000)
+  assert.deepEqual(model.doStreamCalls[0].providerOptions?.openai, { forceReasoning: true, reasoningEffort: "low", reasoningSummary: null })
+})
+
 test("request instructs the Gateway model to return UI through renderExplanation and streams validated HTML", async () => {
   const model = modelFor("<html><head></head><body>Pasos</body></html>")
   const response = explanationStream(model, "¿Por qué cambia el signo?", "La derivada es -2x.")

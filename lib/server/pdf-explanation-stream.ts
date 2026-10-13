@@ -4,10 +4,10 @@ import { explanationFailure } from "../pdf-explanation-errors.ts"
 import { explanationLessonSchema, lessonHtml, lessonFromText, type ExplanationLesson } from "../pdf-explanation-lesson.ts"
 
 export function explanationStream(model: LanguageModel, question: string, transcription: string,
-  options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; supportsTools?: boolean } = {}) {
+  options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; supportsTools?: boolean; reasoning?: "none" | "low"; provider?: "azure" | "gateway" } = {}) {
   let failureDiagnostics: ReturnType<typeof explanationFailure>["diagnostics"] | undefined
   const reportError = (error: unknown) => {
-    const failure = explanationFailure(error)
+    const failure = explanationFailure(error, options.provider)
     failureDiagnostics = failure.diagnostics
     console.error("[PDF explicación] AI Gateway", failure.diagnostics)
     return failure.message
@@ -30,9 +30,11 @@ export function explanationStream(model: LanguageModel, question: string, transc
     // AI SDK reject that otherwise usable response before it reaches the UI.
     toolChoice: "auto",
     } as const),
-    reasoning: "none",
-    maxOutputTokens: Math.min(options.maxOutputTokens ?? 1_800, 1_800),
-    ...(options.fallbackModels?.length ? { providerOptions: { gateway: { models: options.fallbackModels } } } : {}),
+    reasoning: options.reasoning ?? "none",
+    maxOutputTokens: options.provider === "azure" ? (options.maxOutputTokens ?? 12_000) : Math.min(options.maxOutputTokens ?? 1_800, 1_800),
+    ...(options.provider === "azure"
+      ? { providerOptions: { openai: { forceReasoning: true, reasoningEffort: "low", reasoningSummary: null } } }
+      : options.fallbackModels?.length ? { providerOptions: { gateway: { models: options.fallbackModels } } } : {}),
     maxRetries: 0,
     onError: ({ error }) => { reportError(error) },
   })
@@ -74,7 +76,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
             if (value.type === "abort") {
               failed = true
               diagnostic("solicitud-interrumpida")
-              writer.write({ type: "error", errorText: "AI Gateway interrumpió la generación. Elegí otro modelo para reintentar." })
+              writer.write({ type: "error", errorText: options.provider === "azure" ? "Azure interrumpió la generación. Presioná Enter para reintentar." : "AI Gateway interrumpió la generación. Elegí otro modelo para reintentar." })
               continue
             }
             if (value.type === "error") { failed = true; diagnostic("error-gateway", { error: value.errorText, diagnostics: failureDiagnostics }) }
@@ -131,7 +133,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
             console.error("[PDF explicación] Sin HTML", { finishReason: reason, textLength: text.length, toolError: Boolean(toolError) })
             writer.write({ type: "error", errorText: reason === "length"
               ? "El modelo agotó su límite antes de completar el HTML. Presioná Enter para reintentar; la página ya está transcrita."
-              : "El modelo gratuito terminó sin entregar HTML completo. Presioná Enter para reintentar; la página ya está transcrita." })
+              : "El modelo terminó sin entregar HTML completo. Presioná Enter para reintentar; la página ya está transcrita." })
             return
           }
         }

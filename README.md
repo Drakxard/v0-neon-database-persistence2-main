@@ -1,5 +1,9 @@
 # Cursado 2026
 
+Para usar GPT-5 mini en ★, configurar en el servidor `gpt5mini` (clave de Azure) y `conexiongpt5mini` (punto de conexión del proyecto o recurso, por ejemplo `https://RECURSO.services.ai.azure.com/api/projects/PROYECTO`). El código agrega `/openai/v1` y usa el proveedor Azure de Vercel AI SDK con Responses. `AZURE_OPENAI_DEPLOYMENT` debe contener el nombre exacto de la implementación de Foundry; si se omite, se usa `gpt-5-mini`. El endpoint y la clave por sí solos no crean una implementación. Tras cambiar estas variables en Vercel hay que volver a desplegar. Las claves permanecen en el servidor.
+
+Con Azure configurado, Verlo usa ese despliegue fijo, razonamiento bajo y hasta 12 000 tokens de salida, incluidos los de razonamiento. No aplica el límite de los modelos gratuitos de Gateway; conserva el límite de ejecución de la plataforma. Sin clave de Azure se mantiene el selector de Gateway descrito abajo. La explicación HTML ocupa toda la vista del PDF; `Esc` o el botón de cierre permiten volver, también desde dentro del HTML.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [v0](https://v0.app).
 
 ## Built with v0
