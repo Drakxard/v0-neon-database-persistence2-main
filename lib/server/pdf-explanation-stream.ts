@@ -2,7 +2,8 @@ import { createUIMessageStreamResponse, jsonSchema, streamText, tool, toUIMessag
 import { explanationHtml, explanationPrompt } from "../pdf-explanation.ts"
 import { explanationFailure } from "../pdf-explanation-errors.ts"
 
-export function explanationStream(model: LanguageModel, question: string, transcription: string) {
+export function explanationStream(model: LanguageModel, question: string, transcription: string,
+  options: { fallbackModels?: string[]; maxOutputTokens?: number } = {}) {
   const result = streamText({
     model,
     prompt: explanationPrompt(question, transcription),
@@ -19,7 +20,8 @@ export function explanationStream(model: LanguageModel, question: string, transc
       }),
     },
     toolChoice: { type: "tool", toolName: "renderExplanation" },
-    maxOutputTokens: 16_000,
+    maxOutputTokens: options.maxOutputTokens ?? 16_000,
+    ...(options.fallbackModels?.length ? { providerOptions: { gateway: { models: options.fallbackModels } } } : {}),
     maxRetries: 1,
     abortSignal: AbortSignal.timeout(110_000),
   })

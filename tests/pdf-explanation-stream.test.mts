@@ -40,3 +40,11 @@ test("incomplete model HTML produces a tool error instead of a renderable artifa
   assert.ok(chunks.some(part => part.type === "tool-output-error"))
   assert.ok(!chunks.some(part => part.type === "tool-output-available"))
 })
+
+test("the UI stream forwards only the verified free fallbacks supplied by the selector", async () => {
+  const model = modelFor("<html><head></head><body>Pasos</body></html>")
+  const fallbackModels = ["inclusionai/ling-3.1-flash-free"]
+  await parts(explanationStream(model, "Explicalo", "Página", { fallbackModels, maxOutputTokens: 8192 }))
+  assert.deepEqual(model.doStreamCalls[0].providerOptions?.gateway, { models: fallbackModels })
+  assert.equal(model.doStreamCalls[0].maxOutputTokens, 8192)
+})

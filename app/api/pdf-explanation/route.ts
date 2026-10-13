@@ -3,6 +3,7 @@ import { requireAuthSession } from "@/lib/authz"
 import { explanationInput } from "@/lib/pdf-explanation"
 import { explanationStream } from "@/lib/server/pdf-explanation-stream"
 import { explanationFailure } from "@/lib/pdf-explanation-errors"
+import { freeExplanationModels, FreeExplanationModelsError } from "@/lib/server/pdf-explanation-models"
 
 export const runtime = "nodejs"
 export const maxDuration = 120
@@ -25,12 +26,15 @@ export async function POST(request: Request) {
   }
   try {
     const gateway = createGateway({ ...(apiKey ? { apiKey } : {}) })
+    const models = await freeExplanationModels(process.env.PDF_EXPLANATION_MODEL)
     return explanationStream(
-      gateway(process.env.PDF_EXPLANATION_MODEL || "anthropic/claude-sonnet-4.5"),
+      gateway(models[0].id),
       input.question,
       input.transcription,
+      { fallbackModels: models.slice(1).map(model => model.id), maxOutputTokens: Math.min(...models.map(model => model.maxOutputTokens)) },
     )
   } catch (error) {
+    if (error instanceof FreeExplanationModelsError) return Response.json({ error: error.message }, { status: 503 })
     const failure = explanationFailure(error)
     console.error("[PDF explicación] AI Gateway", failure.diagnostics)
     return Response.json({ error: failure.message }, { status: 502 })
