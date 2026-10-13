@@ -24,6 +24,19 @@ async function parts(response: Response) {
 }
 const html = "<!doctype html><html><head></head><body><svg><circle r='20'/></svg><script>let state=0</script></body></html>"
 
+test("selected region reaches the model alongside the prompt and transcription", async () => {
+  const model = textModel(html)
+  const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+  await parts(explanationStream(model, "Explicá este gráfico", "Texto de la página", { provider: "azure", image }))
+  const content = model.doStreamCalls[0].prompt[0].content
+  assert.equal(content[0].type, "text")
+  assert.equal(content[0].text, "Explicá este gráfico\n\nTexto de la página")
+  assert.equal(content[1].type, "file")
+  assert.equal(content[1].mediaType, "image/png")
+  assert.equal(content[1].data.type, "data")
+  assert.equal(content[1].data.data, image.split(",")[1])
+})
+
 test("the model receives only the user's request and transcription, without tools or design instructions", async () => {
   const model = textModel(html)
   const question = "Hacé un HTML minimalista con un gráfico"

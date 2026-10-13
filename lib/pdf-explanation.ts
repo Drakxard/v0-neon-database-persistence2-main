@@ -5,7 +5,11 @@ export function explanationInput(body: unknown) {
   if (!question || question.length > 2000 || !transcription || transcription.length > 180_000) {
     throw new Error("Ingresá una duda y una transcripción de página válidas.")
   }
-  return { question, transcription }
+  const image = data?.image
+  if (image !== undefined && (typeof image !== "string" || image.length > 4_000_000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(image))) {
+    throw new Error("La región adjunta no es una imagen válida.")
+  }
+  return { question, transcription, ...(typeof image === "string" ? { image } : {}) }
 }
 
 export function explanationPrompt(question: string, transcription: string) {

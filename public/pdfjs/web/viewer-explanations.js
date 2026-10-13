@@ -12,7 +12,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
   star.type = "button";
   star.title = "Explicaciones";
   star.setAttribute("aria-label", "Explicaciones");
-  star.setAttribute("aria-haspopup", "menu");
+  star.setAttribute("aria-haspopup", "dialog");
   star.setAttribute("aria-expanded", "false");
   toolbar.prepend(star);
   const menu = document.createElement("div");
@@ -150,6 +150,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
   function close() {
     if (!modal) return;
     const previousFocus = modal.previousFocus;
+    modal.cleanup?.();
     modal.node.remove();
     modal = null;
     previousFocus?.focus();
@@ -327,6 +328,9 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const page = app.pdfViewer.currentPageNumber;
     const pdf = app.pdfDocument;
     const view = overlay(`Verlo · página ${page}`);
+    view.node.classList.add("pdf-explanation-composer");
+    view.node.setAttribute("aria-modal", "false");
+    star.setAttribute("aria-expanded", "true");
     const form = document.createElement("form");
     form.innerHTML = '<label for="pdf-explanation-model">Modelo gratuito de AI Gateway</label><div class="pdf-explanation-model-row"><select id="pdf-explanation-model" disabled><option value="">Cargando modelos…</option></select><button type="button" class="pdf-explanation-refresh" title="Actualizar modelos gratuitos" aria-label="Actualizar modelos gratuitos">↻</button></div><p class="pdf-explanation-model-status" role="status"></p><label for="pdf-explanation-question">¿Qué querés entender? Podés dejarlo vacío.</label><textarea id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><div class="pdf-explanation-loading" hidden><span class="pdf-explanation-spinner" aria-hidden="true"></span><span class="pdf-explanation-elapsed">Cargando…</span></div><p class="pdf-explanation-progress" role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
     view.panel.append(form);
@@ -335,6 +339,106 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const loadingIndicator = form.querySelector(".pdf-explanation-loading"), elapsed = form.querySelector(".pdf-explanation-elapsed");
     input.focus();
     let generating = false;
+    let region = null, drag = null;
+    const attachment = document.createElement("div");
+    attachment.className = "pdf-explanation-attachment";
+    const attachmentStatus = document.createElement("span");
+    attachmentStatus.textContent = "Arrastrá sobre la página para adjuntar una región (opcional).";
+    const removeRegion = document.createElement("button");
+    removeRegion.type = "button"; removeRegion.textContent = "Quitar región"; removeRegion.hidden = true;
+    attachment.append(attachmentStatus, removeRegion);
+    input.before(attachment);
+    const rectangle = document.createElement("div");
+    rectangle.className = "pdf-explanation-region"; rectangle.hidden = true;
+    document.body.append(rectangle);
+    const canvasForPage = () => app.pdfViewer.getPageView(page - 1)?.div.querySelector(".canvasWrapper canvas");
+    const point = event => {
+      const bounds = canvasForPage()?.getBoundingClientRect();
+      if (!bounds?.width || !bounds.height) return null;
+      return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width)),
+        y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height)) };
+    };
+    const paint = () => {
+      const bounds = canvasForPage()?.getBoundingClientRect();
+      rectangle.hidden = !region || !bounds;
+      if (!region || !bounds) return;
+      Object.assign(rectangle.style, { left: `${bounds.left + region.x * bounds.width}px`,
+        top: `${bounds.top + region.y * bounds.height}px`, width: `${region.width * bounds.width}px`,
+        height: `${region.height * bounds.height}px` });
+    };
+    removeRegion.addEventListener("click", () => {
+      region = null; paint(); removeRegion.hidden = true;
+      attachmentStatus.textContent = "Sin región adjunta · se enviará la transcripción.";
+      input.focus();
+    });
+    const down = event => {
+      if (generating || event.button !== 0 || view.node.contains(event.target)) return;
+      const canvas = canvasForPage();
+      const bounds = canvas?.getBoundingClientRect();
+      if (!bounds || !event.target.closest(".page") || event.target.closest(".page") !== canvas.closest(".page") ||
+        event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      drag = { ...point(event), pointer: event.pointerId };
+      region = null; paint();
+    };
+    const move = event => {
+      if (!drag || drag.pointer !== event.pointerId) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      const end = point(event);
+      if (!end) return;
+      region = { x: Math.min(drag.x, end.x), y: Math.min(drag.y, end.y),
+        width: Math.abs(drag.x - end.x), height: Math.abs(drag.y - end.y) };
+      paint();
+    };
+    const up = event => {
+      if (!drag || drag.pointer !== event.pointerId) return;
+      move(event); drag = null;
+      const bounds = canvasForPage()?.getBoundingClientRect();
+      if (event.type === "pointercancel" || !bounds || !region || region.width * bounds.width < 5 || region.height * bounds.height < 5) region = null;
+      paint(); removeRegion.hidden = !region;
+      attachmentStatus.textContent = region ? "Región adjunta · podés seleccionar otra o escribir tu prompt." : "Sin región adjunta · se enviará la transcripción.";
+      input.focus({ preventScroll: true });
+    };
+    const keyboard = event => {
+      if (modal !== view || generating || event.isComposing || event.ctrlKey || event.metaKey || event.altKey ||
+        view.node.contains(event.target) || event.key === "Escape" || event.key === "Tab") return;
+      if (event.key === "Enter") { event.preventDefault(); event.stopImmediatePropagation(); form.requestSubmit(); }
+      else if (event.key.length === 1) {
+        event.preventDefault(); event.stopImmediatePropagation(); input.focus({ preventScroll: true });
+        input.setRangeText(event.key, input.selectionStart, input.selectionEnd, "end");
+      }
+    };
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", up, true);
+    document.addEventListener("pointercancel", up, true);
+    document.addEventListener("keydown", keyboard, true);
+    window.addEventListener("scroll", paint, true); window.addEventListener("resize", paint);
+    const pageChanged = () => { if (modal === view && app.pdfViewer.currentPageNumber !== page) close(); };
+    app.eventBus.on("pagechanging", pageChanged);
+    view.cleanup = () => {
+      rectangle.remove(); star.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", down, true); document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", up, true); document.removeEventListener("pointercancel", up, true);
+      document.removeEventListener("keydown", keyboard, true);
+      window.removeEventListener("scroll", paint, true); window.removeEventListener("resize", paint);
+      app.eventBus.off("pagechanging", pageChanged);
+    };
+    async function captureRegion() {
+      if (!region) return undefined;
+      const selected = { ...region };
+      const pdfPage = await pdf.getPage(page);
+      const rotation = app.pdfViewer.getPageView(page - 1).viewport.rotation;
+      const base = pdfPage.getViewport({ scale: 1, rotation });
+      const viewport = pdfPage.getViewport({ scale: Math.min(3, 1800 / Math.max(base.width, base.height)), rotation });
+      const source = document.createElement("canvas"); source.width = Math.ceil(viewport.width); source.height = Math.ceil(viewport.height);
+      await pdfPage.render({ canvasContext: source.getContext("2d"), viewport, background: "rgb(255,255,255)" }).promise;
+      const crop = document.createElement("canvas");
+      crop.width = Math.max(1, Math.round(selected.width * source.width)); crop.height = Math.max(1, Math.round(selected.height * source.height));
+      crop.getContext("2d").drawImage(source, selected.x * source.width, selected.y * source.height,
+        selected.width * source.width, selected.height * source.height, 0, 0, crop.width, crop.height);
+      return crop.toDataURL("image/jpeg", 0.9);
+    }
     async function loadModels() {
       modelSelect.disabled = true; refresh.disabled = true;
       modelStatus.textContent = "Consultando el modelo de explicación…";
@@ -385,7 +489,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       if (submit.disabled) return;
       generating = true;
       submit.disabled = true;
-      input.disabled = true;
+      input.disabled = true; removeRegion.disabled = true;
       modelSelect.disabled = true; refresh.disabled = true;
       form.setAttribute("aria-busy", "true"); loadingIndicator.hidden = false;
       const started = Date.now();
@@ -402,7 +506,9 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         const { state, text } = await preparePage(pdf, page);
         status.textContent = "Generando la explicación visual…";
         debug.transcription = text;
-        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = `${selectedModel} · ${message}`; }, debug, selectedModel);
+        const image = await captureRegion();
+        if (image) debug.region = { ...region };
+        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = `${selectedModel} · ${message}`; }, debug, selectedModel, image);
         debug.html = html;
         debug.stage = "guardar-html-y-nota";
         const pdfPage = await state.pdf.getPage(page);
@@ -425,22 +531,15 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         clearInterval(ticker); loadingIndicator.hidden = true; form.removeAttribute("aria-busy");
         debug.finishedAt = new Date().toISOString();
         try { window.downloadPdfExplanationAttempt(debug); } catch (error) { console.error("[Verlo] Descarga de diagnóstico", error); }
-        generating = false; submit.disabled = false; input.disabled = false;
+        generating = false; submit.disabled = false; input.disabled = false; removeRegion.disabled = false;
         modelSelect.disabled = !modelSelect.value; refresh.disabled = false;
         if (modal === view) input.focus();
       }
     });
   }
   star.addEventListener("click", () => {
-    menu.hidden = !menu.hidden;
-    star.setAttribute("aria-expanded", String(!menu.hidden));
-    const rect = star.getBoundingClientRect();
-    menu.style.top = `${rect.bottom + 4}px`;
-    menu.style.right = `${Math.max(8, innerWidth - rect.right)}px`;
-    if (!menu.hidden) {
-      preparePage(app.pdfDocument, app.pdfViewer.currentPageNumber).catch(() => {});
-      menu.querySelector("button").focus();
-    }
+    if (modal?.node.classList.contains("pdf-explanation-composer")) close();
+    else ask().catch(report);
   });
   menu.querySelector("button").addEventListener("click", ask);
   document.addEventListener("pointerdown", event => {
@@ -450,7 +549,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     if (event.key === "Escape" && (modal || !menu.hidden)) {
       event.preventDefault(); event.stopImmediatePropagation(); close(); menu.hidden = true; star.setAttribute("aria-expanded", "false");
     }
-    if (event.key === "Tab" && modal) {
+    if (event.key === "Tab" && modal && !modal.node.classList.contains("pdf-explanation-composer")) {
       const items = [...modal.node.querySelectorAll("button:not(:disabled),textarea:not(:disabled),iframe")];
       const first = items[0], last = items.at(-1);
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
@@ -460,7 +559,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
   window.addEventListener("message", event => {
     if (event.data?.type === "pdf-explanation-escape" && event.source === modal?.node.querySelector("iframe")?.contentWindow) close();
   });
-  app.eventBus.on("documentloaded", () => { load().then(restore).catch(report); });
+  app.eventBus.on("documentloaded", () => { close(); load().then(restore).catch(report); });
   app.eventBus.on("pagerendered", restore);
   app.eventBus.on("annotationeditorlayerrendered", restore);
   app.eventBus.on("annotationeditormodechanged", restore);

@@ -2,7 +2,7 @@ import { DefaultChatTransport, readUIMessageStream } from "ai"
 import { downloadPdfExplanationAttempt, type ExplanationAttempt } from "../pdf-explanation-debug"
 
 export async function requestPdfExplanation(question: string, transcription: string, onProgress: (text: string) => void,
-  debug?: ExplanationAttempt, model?: string) {
+  debug?: ExplanationAttempt, model?: string, image?: string) {
   if (debug) { debug.stage = "solicitud-gateway"; debug.transcription = transcription; debug.wire = "" }
   const transport = new DefaultChatTransport({
     api: "/api/pdf-explanation",
@@ -36,7 +36,7 @@ export async function requestPdfExplanation(question: string, transcription: str
     chatId: crypto.randomUUID(),
     messageId: undefined,
     messages: [{ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: question }] }],
-    body: { question, transcription, model },
+    body: { question, transcription, model, ...(image ? { image } : {}) },
     abortSignal: undefined,
   })
   let html: string | undefined

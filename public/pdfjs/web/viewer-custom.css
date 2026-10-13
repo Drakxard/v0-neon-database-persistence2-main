@@ -971,3 +971,11 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
 .pdfjs-custom-replacement-unmatched-item .pdfjs-custom-replacement-meta {
   margin-top: 6px;
 }
+
+.pdf-explanation-overlay.pdf-explanation-composer { background: transparent; pointer-events: none; place-items: end; padding: 12px; box-sizing: border-box; }
+.pdf-explanation-composer .pdf-explanation-panel { pointer-events: auto; width: min(440px, 94vw); max-height: 70vh; }
+.pdf-explanation-composer .pdf-explanation-panel form { padding: 12px; }
+.pdf-explanation-composer textarea { min-height: 70px; }
+.pdf-explanation-attachment { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.pdf-explanation-region { position: fixed; pointer-events: none; z-index: 11999; border: 2px solid #a855f7; background: #a855f726; box-sizing: border-box; }
+.pdf-explanation-region[hidden] { display: none; }

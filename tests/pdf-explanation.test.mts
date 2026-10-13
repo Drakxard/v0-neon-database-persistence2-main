@@ -3,6 +3,16 @@ import test from "node:test"
 import { explanationHtml, explanationInput, explanationPrompt } from "../lib/pdf-explanation.ts"
 import { explanationFailure } from "../lib/pdf-explanation-errors.ts"
 
+test("optional region is accepted while page transcription remains required", () => {
+  const image = "data:image/png;base64,aGVsbG8="
+  assert.equal(explanationInput({ question: "", transcription: "Texto", image }).image, image)
+  assert.equal(explanationInput({ question: "", transcription: "Texto" }).image, undefined)
+  for (const invalid of [null, "https://example.com/image.png", "data:image/svg+xml;base64,aGVsbG8=", "data:image/png;base64,!"]) {
+    assert.throws(() => explanationInput({ question: "", transcription: "Texto", image: invalid }))
+  }
+  assert.throws(() => explanationInput({ question: "", transcription: "", image }))
+})
+
 test("explanation sends exactly the student's request and page transcription", () => {
   const input = explanationInput({ question: " ¿Por qué cambia el signo? ", transcription: "La derivada es -2x." })
   const prompt = explanationPrompt(input.question, input.transcription)

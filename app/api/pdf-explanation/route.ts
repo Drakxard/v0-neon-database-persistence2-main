@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   let input: ReturnType<typeof explanationInput>
   let requestedModel: string | undefined
   try {
-    if (Number(request.headers.get("content-length") || 0) > 800_000) {
+    if (Number(request.headers.get("content-length") || 0) > 5_000_000) {
       return Response.json({ error: "La página supera el límite permitido.", stage: "validacion-solicitud" }, { status: 413 })
     }
     const body = await request.json()
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   try {
     const azure = azureExplanationConfig()
     if (azure) return explanationStream(azureExplanationModel(azure), input.question, input.transcription,
-      { maxOutputTokens: 12_000, reasoning: "low", provider: "azure" })
+      { maxOutputTokens: 12_000, reasoning: "low", provider: "azure", image: input.image })
   } catch (error) {
     const failure = explanationFailure(error, "azure")
     return Response.json({ error: error instanceof Error && !failure.diagnostics.status ? error.message : failure.message,
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       gateway(selected.id),
       input.question,
       input.transcription,
-      { maxOutputTokens: selected.maxOutputTokens },
+      { maxOutputTokens: selected.maxOutputTokens, image: input.image },
     )
   } catch (error) {
     if (error instanceof FreeExplanationModelsError) return Response.json({ error: error.message, stage: "catalogo-modelos-gratuitos" }, { status: 503 })
