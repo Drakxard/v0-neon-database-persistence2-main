@@ -76,8 +76,14 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await page.locator("#pdf-explanation-question").fill("¿Qué representa la derivada?")
     await page.locator("#pdf-explanation-question").press("Shift+Enter")
     assert.equal(generations, 0)
+    const successfulDownload = page.waitForEvent("download")
     await page.locator("#pdf-explanation-question").press("Enter")
     await page.locator(".pdf-explanation-result iframe").waitFor()
+    const file = await successfulDownload
+    assert.ok(file.suggestedFilename().includes("pagina-1-exito"))
+    const downloadedHtml = await readFile(await file.path(), "utf8")
+    assert.ok(downloadedHtml.includes("<h1>Explicación</h1>"))
+    assert.ok(downloadedHtml.includes("mostrar-explicacion"))
     await page.frameLocator(".pdf-explanation-result iframe").getByRole("button", { name: "Siguiente" }).click()
     await page.keyboard.press("Escape")
     await page.locator(".pdf-explanation-overlay").waitFor({ state: "detached" })
@@ -158,8 +164,10 @@ test("star starts Datalab before confirmation; Enter waits for that job and retr
       const html = "<html><head></head><body>Explicación lista</body></html>"
       const response = createUIMessageStreamResponse({ stream: createUIMessageStream({ execute: ({ writer }) => {
         writer.write({ type: "start", messageId: "retry" })
-        writer.write({ type: "tool-input-available", toolCallId: "render", toolName: "renderExplanation", input: { html } })
-        writer.write({ type: "tool-output-available", toolCallId: "render", output: { html } })
+        // A tool-input error used to abort the browser before recovery arrived.
+        writer.write({ type: "tool-input-error", toolCallId: "render", toolName: "renderExplanation", input: '{"html":"Incomplete', errorText: "JSON inválido" })
+        writer.write({ type: "data-explanation-debug", data: { stage: "validacion-html-recuperacion", model: "free-test-model", text: html } })
+        writer.write({ type: "data-explanation", data: { html } })
         writer.write({ type: "finish", finishReason: "tool-calls" })
       } }) })
       return route.fulfill({ body: await response.text(), headers: Object.fromEntries(response.headers) })
@@ -185,10 +193,23 @@ test("star starts Datalab before confirmation; Enter waits for that job and retr
     await page.locator("#pdf-explanation-question").press("Enter")
     assert.equal(generations, 0)
     assert.equal(transcriptions, 1)
+    const failedDownload = page.waitForEvent("download")
     release()
     await page.getByText("AI Gateway alcanzó el límite de solicitudes (429).", { exact: true }).waitFor()
+    const failure = await failedDownload
+    assert.ok(failure.suggestedFilename().includes("pagina-1-fallo"))
+    const failureHtml = await readFile(await failure.path(), "utf8")
+    assert.ok(failureHtml.includes("429"))
+    assert.ok(failureHtml.includes("respuesta-http"))
+    assert.ok(failureHtml.includes("Transcripción de la página actual."))
+    const retriedDownload = page.waitForEvent("download")
     await page.locator("#pdf-explanation-question").press("Enter")
     await page.locator(".pdf-explanation-result iframe").waitFor()
+    const retry = await retriedDownload
+    assert.ok(retry.suggestedFilename().includes("pagina-1-exito"))
+    const retryHtml = await readFile(await retry.path(), "utf8")
+    assert.ok(retryHtml.includes("tool-input-error"))
+    assert.ok(retryHtml.includes("free-test-model"))
     assert.equal(transcriptions, 1)
     assert.equal(generations, 2)
   } finally { release(); await browser.close() }

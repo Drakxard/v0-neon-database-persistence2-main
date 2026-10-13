@@ -300,11 +300,15 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       generating = true;
       submit.disabled = true;
       input.disabled = true;
+      const debug = { question, page, stage: "transcripcion", startedAt: new Date().toISOString(), outcome: "fallo" };
       try {
         status.textContent = "Preparando la transcripción de la página…";
         const { state, text } = await preparePage(pdf, page);
         status.textContent = "Generando la explicación visual…";
-        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = message; });
+        debug.transcription = text;
+        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = message; }, debug);
+        debug.html = html;
+        debug.stage = "guardar-html-y-nota";
         const pdfPage = await state.pdf.getPage(page);
         const [x1, y1, x2, y2] = pdfPage.view;
         const annotation = { annotationType: 3, pageIndex: page - 1, rect: [x1 + 24, y2 - 80, Math.min(x2 - 24, x1 + 320), y2 - 40], rotation: 0, color: [126, 70, 190], fontSize: 12, value: `★ ${question}` };
@@ -313,12 +317,17 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         state.data.entries.push(entry);
         await persist(state);
         await restore();
+        debug.stage = "mostrar-explicacion";
         if (modal === view) openHtml(entry);
         else showToast("Explicación guardada. Tocá la duda en el PDF para abrirla.", "success", 5000);
+        debug.outcome = "exito";
       } catch (error) {
         status.textContent = error instanceof Error ? error.message : "No se pudo generar la explicación.";
+        debug.error = status.textContent;
         if (modal !== view) report(error);
       } finally {
+        debug.finishedAt = new Date().toISOString();
+        try { window.downloadPdfExplanationAttempt(debug); } catch (error) { console.error("[Verlo] Descarga de diagnóstico", error); }
         generating = false; submit.disabled = false; input.disabled = false;
         if (modal === view) input.focus();
       }

@@ -38,6 +38,10 @@ export function explanationStream(model: LanguageModel, question: string, transc
   return createUIMessageStreamResponse({
     stream: createUIMessageStream({
       execute: async ({ writer }) => {
+        const diagnostic = (stage: string, details: Record<string, unknown> = {}) => writer.write({
+          type: "data-explanation-debug", data: { version: "verlo-debug-v1", stage, ...details },
+        })
+        diagnostic("modelo-principal", { model: typeof model === "object" ? model.modelId : model, fallbackModels: options.fallbackModels })
         let delivered = false
         let failed = false
         let toolError: string | undefined
@@ -51,10 +55,18 @@ export function explanationStream(model: LanguageModel, question: string, transc
           while (true) {
             const { done, value } = await reader.read()
             if (done) break
+            if (value.type === "tool-input-error") {
+              toolError = value.errorText
+              diagnostic("argumentos-herramienta-invalidos", { input: value.input, error: value.errorText, toolName: value.toolName })
+              // AI SDK maps this event to output-error on the client. Suppress
+              // it until recovery has had a chance to deliver usable HTML.
+              continue
+            }
             // Finish only after checking that a usable interface was delivered.
-            if (value.type === "finish") continue
+            if (value.type === "finish") { diagnostic("modelo-principal-finalizado", { finishReason: value.finishReason }); continue }
             if (value.type === "tool-output-error") {
               toolError = value.errorText
+              diagnostic("html-herramienta-invalido", { error: value.errorText })
               continue
             }
             if (value.type === "tool-output-available") delivered = true
@@ -63,7 +75,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
               writer.write({ type: "error", errorText: reportError({ name: "TimeoutError" }) })
               continue
             }
-            if (value.type === "error") failed = true
+            if (value.type === "error") { failed = true; diagnostic("error-gateway", { error: value.errorText }) }
             writer.write(value)
           }
         } finally {
@@ -75,9 +87,11 @@ export function explanationStream(model: LanguageModel, question: string, transc
           // Keep the same SDK UI transport and validate before exposing it.
           let text = await result.text
           let reason = await result.finishReason
+          diagnostic("validacion-html", { text, finishReason: reason, usage: await result.totalUsage, toolError })
           const extract = (text: string) => text.match(/(?:<!doctype html[^>]*>\s*)?<html\b[\s\S]*?<\/html>/i)?.[0]
           let document = extract(text)
           if (!document && options.recoveryModel && !abortSignal.aborted) {
+            diagnostic("modelo-recuperacion", { model: typeof options.recoveryModel === "object" ? options.recoveryModel.modelId : options.recoveryModel })
             writer.write({ type: "data-explanation-status", data: { text: "El primer modelo no entregó HTML; probando otro modelo gratuito…" } })
             const recovery = streamText({
               model: options.recoveryModel,
@@ -100,13 +114,14 @@ export function explanationStream(model: LanguageModel, question: string, transc
                   writer.write({ type: "error", errorText: reportError({ name: "TimeoutError" }) })
                   continue
                 }
-                if (value.type === "error") failed = true
+                if (value.type === "error") { failed = true; diagnostic("error-modelo-recuperacion", { error: value.errorText }) }
                 writer.write(value)
               }
             } finally { recoveryReader.releaseLock() }
             if (failed) return
             text = await recovery.text
             reason = await recovery.finishReason
+            diagnostic("validacion-html-recuperacion", { text, finishReason: reason, usage: await recovery.totalUsage })
             document = extract(text)
           }
           if (document) {
@@ -119,6 +134,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
             return
           }
         }
+        diagnostic("html-validado")
         writer.write({ type: "finish" })
       },
       onError: reportError,

@@ -19,10 +19,10 @@ function textModel(text: string, reason: "stop" | "length" = "stop") {
   return new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks }) }) })
 }
 
-function modelFor(html: string) {
+function modelFor(html: string, input = JSON.stringify({ html })) {
   const chunks: LanguageModelV4StreamPart[] = [
     { type: "stream-start", warnings: [] },
-    { type: "tool-call", toolCallId: "render-1", toolName: "renderExplanation", input: JSON.stringify({ html }) },
+    { type: "tool-call", toolCallId: "render-1", toolName: "renderExplanation", input },
     { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: {
       inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: 20, text: 20, reasoning: undefined },
@@ -111,4 +111,23 @@ test("invalid tool output automatically recovers through another verified free m
   assert.equal(recovery.doStreamCalls[0].tools, undefined)
   assert.equal(recovery.doStreamCalls[0].reasoning, "none")
   assert.ok(JSON.stringify(recovery.doStreamCalls[0].prompt).includes("directamente como texto"))
+})
+
+test("invalid tool JSON is diagnosed and cannot cancel recovery in the SDK UI reader", async () => {
+  const raw = '{"html":"<html><body>Sin terminar'
+  const recovery = textModel("<html><head></head><body>Recuperación válida</body></html>")
+  const response = explanationStream(modelFor("", raw), "Duda", "Página", { recoveryModel: recovery })
+  const transport = new DefaultChatTransport({ fetch: async () => response })
+  const stream = await transport.sendMessages({ trigger: "submit-message", chatId: "test", messageId: undefined, messages: [] })
+  let html = "", debug = ""
+  for await (const message of readUIMessageStream({ stream, terminateOnError: true })) {
+    for (const part of message.parts) {
+      if (part.type === "data-explanation") html = (part.data as { html: string }).html
+      if (part.type === "data-explanation-debug") debug += JSON.stringify(part.data)
+      if (part.type === "tool-renderExplanation") assert.notEqual(part.state, "output-error")
+    }
+  }
+  assert.ok(html.includes("Recuperación válida"))
+  assert.ok(debug.includes("argumentos-herramienta-invalidos"))
+  assert.ok(debug.includes("Sin terminar"))
 })
