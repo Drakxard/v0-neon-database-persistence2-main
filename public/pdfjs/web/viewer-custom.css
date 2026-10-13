@@ -979,3 +979,13 @@ html.pdfjs-custom-presentation-preparing #viewerContainer {
 .pdf-explanation-attachment { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .pdf-explanation-region { position: fixed; pointer-events: none; z-index: 11999; border: 2px solid #a855f7; background: #a855f726; box-sizing: border-box; }
 .pdf-explanation-region[hidden] { display: none; }
+
+/* Quiet corner controls for the HTML viewer and explanation composer. */
+.pdf-explanation-panel header { justify-content: flex-end; padding: 6px 8px; border-bottom: 0; gap: 2px; }
+.pdf-explanation-panel .pdf-explanation-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; font: 20px/1 system-ui; border: 0; border-radius: 6px; }
+.pdf-explanation-fullpage .pdf-explanation-result header { top: 8px; right: 8px; gap: 2px; opacity: .35; transition: opacity .15s; }
+.pdf-explanation-fullpage .pdf-explanation-result header:hover,
+.pdf-explanation-fullpage .pdf-explanation-result header:focus-within { opacity: 1; }
+.pdf-explanation-fullpage .pdf-explanation-result header button { background: #ffffffe6; box-shadow: none; }
+.pdf-explanation-icon:focus-visible { outline: 2px solid #7e46be; outline-offset: 2px; }
+.pdf-explanation-attachment:has(button[hidden]) { display: none; }

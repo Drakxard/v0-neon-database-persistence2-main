@@ -170,9 +170,13 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const header = document.createElement("header");
     const heading = document.createElement("strong");
     heading.textContent = title;
+    heading.hidden = true;
     const dismiss = document.createElement("button");
     dismiss.type = "button";
-    dismiss.textContent = "Cerrar · Esc";
+    dismiss.textContent = "\u00d7";
+    dismiss.className = "pdf-explanation-icon";
+    dismiss.title = "Salir (Esc)";
+    dismiss.setAttribute("aria-label", "Salir de la explicaci\u00f3n");
     dismiss.addEventListener("click", close);
     header.append(heading, dismiss);
     panel.append(header);
@@ -195,6 +199,45 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const escapeBridge = `<script>addEventListener('keydown',e=>{if(e.key==='Escape')parent.postMessage({type:'pdf-explanation-escape'},'*')});<\/script>`;
     iframe.srcdoc = csp + escapeBridge + entry.html;
     view.panel.append(iframe);
+    const header = view.panel.querySelector("header");
+    const icon = (symbol, label, action) => {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "pdf-explanation-icon";
+      button.textContent = symbol; button.title = label; button.setAttribute("aria-label", label);
+      button.addEventListener("click", action);
+      return button;
+    };
+    const picker = document.createElement("input");
+    picker.type = "file"; picker.accept = ".html,.htm,text/html"; picker.hidden = true;
+    picker.addEventListener("change", async () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      const state = documentState;
+      try {
+        const html = await file.text();
+        if (!/<html[\s>]/i.test(html) || !/<\/html\s*>/i.test(html)) throw new Error("Eleg? un documento HTML completo.");
+        if (documentState !== state || modal !== view) return;
+        const previous = entry.html;
+        entry.html = html;
+        try {
+          if (state.root) await write(state.root, `manifests/pdf-explanations/${state.key}/${entry.id}.html`, html);
+          await persist(state);
+        } catch (error) { entry.html = previous; throw error; }
+        openHtml(entry);
+      } catch (error) { report(error); }
+      finally { picker.value = ""; }
+    });
+    const reload = icon("\u21bb", "Recargar HTML", () => { iframe.srcdoc = csp + escapeBridge + entry.html; });
+    const upload = icon("\u2191", "Importar HTML", () => picker.click());
+    const download = icon("\u2193", "Exportar HTML", () => {
+      const url = URL.createObjectURL(new Blob([entry.html], { type: "text/html;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url; link.download = `verlo-pagina-${entry.annotation.pageIndex + 1}.html`;
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    });
+    header.prepend(reload, upload, download);
+    view.panel.append(picker);
     iframe.focus();
   }
   function bindEditor(entry, editor) {
@@ -332,7 +375,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     view.node.setAttribute("aria-modal", "false");
     star.setAttribute("aria-expanded", "true");
     const form = document.createElement("form");
-    form.innerHTML = '<label for="pdf-explanation-model">Modelo gratuito de AI Gateway</label><div class="pdf-explanation-model-row"><select id="pdf-explanation-model" disabled><option value="">Cargando modelos…</option></select><button type="button" class="pdf-explanation-refresh" title="Actualizar modelos gratuitos" aria-label="Actualizar modelos gratuitos">↻</button></div><p class="pdf-explanation-model-status" role="status"></p><label for="pdf-explanation-question">¿Qué querés entender? Podés dejarlo vacío.</label><textarea id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><div class="pdf-explanation-loading" hidden><span class="pdf-explanation-spinner" aria-hidden="true"></span><span class="pdf-explanation-elapsed">Cargando…</span></div><p class="pdf-explanation-progress" role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
+    form.innerHTML = '<label hidden for="pdf-explanation-model">Modelo gratuito de AI Gateway</label><div class="pdf-explanation-model-row"><select id="pdf-explanation-model" disabled><option value="">Cargando modelos…</option></select><button type="button" class="pdf-explanation-refresh" title="Actualizar modelos gratuitos" aria-label="Actualizar modelos gratuitos">↻</button></div><p class="pdf-explanation-model-status" role="status"></p><textarea aria-label="?Qu? quer?s entender?" id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><div class="pdf-explanation-loading" hidden><span class="pdf-explanation-spinner" aria-hidden="true"></span><span class="pdf-explanation-elapsed">Cargando…</span></div><p class="pdf-explanation-progress" role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
     view.panel.append(form);
     const input = form.querySelector("textarea"), status = form.querySelector(".pdf-explanation-progress"), submit = form.querySelector('button[type="submit"]');
     const modelSelect = form.querySelector("select"), modelStatus = form.querySelector(".pdf-explanation-model-status"), refresh = form.querySelector(".pdf-explanation-refresh");
@@ -343,6 +386,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const attachment = document.createElement("div");
     attachment.className = "pdf-explanation-attachment";
     const attachmentStatus = document.createElement("span");
+    attachmentStatus.hidden = true;
     attachmentStatus.textContent = "Arrastrá sobre la página para adjuntar una región (opcional).";
     const removeRegion = document.createElement("button");
     removeRegion.type = "button"; removeRegion.textContent = "Quitar región"; removeRegion.hidden = true;
@@ -441,6 +485,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     }
     async function loadModels() {
       modelSelect.disabled = true; refresh.disabled = true;
+      modelStatus.hidden = false;
       modelStatus.textContent = "Consultando el modelo de explicación…";
       try {
         const response = await fetch("/api/pdf-explanation", { cache: "no-store" });
@@ -459,7 +504,8 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
           modelSelect.append(option);
         }
         if (payload.models.some(model => model.id === remembered)) modelSelect.value = remembered;
-        modelStatus.textContent = fixedAzure ? "GPT-5 mini · Azure" : `${payload.models.length} modelos gratuitos · se usará el que elijas`;
+        modelStatus.textContent = "";
+        modelStatus.hidden = true;
       } catch (error) {
         modelSelect.replaceChildren(new Option("No se pudo cargar la lista", ""));
         modelStatus.textContent = error.message;
