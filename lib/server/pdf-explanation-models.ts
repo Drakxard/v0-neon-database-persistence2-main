@@ -2,7 +2,7 @@ export const DEFAULT_FREE_EXPLANATION_MODEL = "poolside/laguna-s-2.1-free"
 const preferredModels = [DEFAULT_FREE_EXPLANATION_MODEL, "inclusionai/ling-3.1-flash-free", "inclusionai/ling-3.1-flash"]
 
 type CatalogModel = {
-  id?: unknown; type?: unknown; tags?: unknown; max_tokens?: unknown;
+  id?: unknown; name?: unknown; type?: unknown; tags?: unknown; max_tokens?: unknown;
   supported_parameters?: unknown; pricing?: { input?: unknown; output?: unknown };
   deprecated_at?: unknown;
 }
@@ -17,10 +17,8 @@ export function chooseFreeExplanationModels(catalog: unknown, preferred?: string
   const data = (catalog as { data?: unknown } | null)?.data
   if (!Array.isArray(data)) throw new FreeExplanationModelsError("No se pudo comprobar el catálogo gratuito de AI Gateway. Volvé a intentar.")
   const free = (data as CatalogModel[]).filter(model => model && typeof model.id === "string" && model.type === "language"
-    && Array.isArray(model.tags) && model.tags.includes("free") && model.tags.includes("tool-use")
-    && Array.isArray(model.supported_parameters) && model.supported_parameters.includes("tools") && model.supported_parameters.includes("tool_choice")
     && zeroPrice(model.pricing?.input) && zeroPrice(model.pricing?.output)
-    && typeof model.max_tokens === "number" && model.max_tokens >= 8000
+    && typeof model.max_tokens === "number" && model.max_tokens >= 1800
     && (typeof model.deprecated_at !== "number" || model.deprecated_at > now))
   const priority = [preferred?.trim(), ...preferredModels].filter(Boolean)
   free.sort((a, b) => {
@@ -28,7 +26,10 @@ export function chooseFreeExplanationModels(catalog: unknown, preferred?: string
     return rank(a.id) - rank(b.id)
   })
   if (!free.length) throw new FreeExplanationModelsError("AI Gateway no ofrece ahora un modelo gratuito compatible con Verlo. La generación se detuvo sin usar modelos pagos.")
-  return free.slice(0, 3).map(model => ({ id: model.id as string, maxOutputTokens: Math.min(16_000, model.max_tokens as number) }))
+  return free.map(model => ({ id: model.id as string, name: typeof model.name === "string" ? model.name : model.id as string,
+    maxOutputTokens: Math.min(16_000, model.max_tokens as number),
+    supportsTools: Array.isArray(model.supported_parameters) && model.supported_parameters.includes("tools") && model.supported_parameters.includes("tool_choice"),
+  }))
 }
 
 export async function freeExplanationModels(preferred?: string) {

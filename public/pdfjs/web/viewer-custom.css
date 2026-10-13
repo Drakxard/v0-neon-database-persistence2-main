@@ -30,6 +30,13 @@
 .pdf-explanation-panel textarea { box-sizing: border-box; width: 100%; padding: 12px; font: inherit; border: 1px solid #888; border-radius: 5px; background: var(--field-bg-color, #fff); color: inherit; }
 .pdf-explanation-panel p { min-height: 22px; margin: 12px 0; }
 .pdf-explanation-panel button:disabled { cursor: wait; opacity: .6; }
+.pdf-explanation-model-row { display: flex; gap: 8px; }
+.pdf-explanation-model-row select { min-width: 0; flex: 1; padding: 8px; font: inherit; color: inherit; background: var(--field-bg-color, #fff); border: 1px solid #888; border-radius: 5px; }
+.pdf-explanation-loading { display: flex; align-items: center; gap: 9px; margin-top: 12px; }
+.pdf-explanation-loading[hidden] { display: none; }
+.pdf-explanation-spinner { width: 16px; height: 16px; border: 2px solid #8885; border-top-color: currentColor; border-radius: 50%; animation: pdf-explanation-spin 1s linear infinite; }
+@keyframes pdf-explanation-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pdf-explanation-spinner { animation: none; } }
 .pdf-explanation-result { width: 96vw; height: 94vh; display: flex; flex-direction: column; }
 .pdf-explanation-result iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: white; }
 .annotationEditorLayer .pdf-explanation-text { pointer-events: auto !important; cursor: grab !important; touch-action: none; }

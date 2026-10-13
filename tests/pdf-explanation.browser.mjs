@@ -20,7 +20,9 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
   await page.route("https://explanation.test/**", async route => {
     const url = new URL(route.request().url())
     if (url.pathname === "/api/pdf-explanation") {
+      if (route.request().method() === "GET") return route.fulfill({ json: { models: [{ id: "free/a" }, { id: "free/b" }] } })
       const body = route.request().postDataJSON()
+      assert.equal(body.model, "free/b")
       assert.equal(body.transcription, "Una derivada mide el cambio de la función.")
       assert.equal(body.question, generations === 0 ? "¿Qué representa la derivada?" : "Explicalo")
       generations++
@@ -72,6 +74,7 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await page.locator("#pdfExplanationButton").click()
     assert.equal(await page.getByRole("menuitem", { name: "Procedimiento" }).isDisabled(), true)
     await page.getByRole("menuitem", { name: "Verlo", exact: true }).click()
+    await page.locator("#pdf-explanation-model").selectOption("free/b")
     await page.getByText("Página lista · Enter para explicar", { exact: true }).waitFor()
     await page.locator("#pdf-explanation-question").fill("¿Qué representa la derivada?")
     await page.locator("#pdf-explanation-question").press("Shift+Enter")
@@ -156,8 +159,10 @@ test("star starts Datalab before confirmation; Enter waits for that job and retr
       return route.fulfill({ json: { markdown: "Transcripción de la página actual." } })
     }
     if (url.pathname === "/api/pdf-explanation") {
+      if (route.request().method() === "GET") return route.fulfill({ json: { models: [{ id: "free/a" }, { id: "free/b" }] } })
       generations++
       const body = route.request().postDataJSON()
+      assert.equal(body.model, generations === 1 ? "free/a" : "free/b")
       assert.equal(body.question, "Explicalo")
       assert.equal(body.transcription, "Transcripción de la página actual.")
       if (generations === 1) return route.fulfill({ status: 429, json: { error: "AI Gateway alcanzó el límite de solicitudes (429)." } })
@@ -193,6 +198,8 @@ test("star starts Datalab before confirmation; Enter waits for that job and retr
     await page.locator("#pdf-explanation-question").press("Enter")
     assert.equal(generations, 0)
     assert.equal(transcriptions, 1)
+    await page.locator(".pdf-explanation-loading").waitFor({ state: "visible" })
+    assert.equal(await page.locator("#pdf-explanation-model").isDisabled(), true)
     const failedDownload = page.waitForEvent("download")
     release()
     await page.getByText("AI Gateway alcanzó el límite de solicitudes (429).", { exact: true }).waitFor()
@@ -203,6 +210,7 @@ test("star starts Datalab before confirmation; Enter waits for that job and retr
     assert.ok(failureHtml.includes("respuesta-http"))
     assert.ok(failureHtml.includes("Transcripción de la página actual."))
     const retriedDownload = page.waitForEvent("download")
+    await page.locator("#pdf-explanation-model").selectOption("free/b")
     await page.locator("#pdf-explanation-question").press("Enter")
     await page.locator(".pdf-explanation-result iframe").waitFor()
     const retry = await retriedDownload

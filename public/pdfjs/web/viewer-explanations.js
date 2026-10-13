@@ -275,11 +275,41 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const pdf = app.pdfDocument;
     const view = overlay(`Verlo · página ${page}`);
     const form = document.createElement("form");
-    form.innerHTML = '<label for="pdf-explanation-question">¿Qué querés entender? Podés dejarlo vacío.</label><textarea id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><p role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
+    form.innerHTML = '<label for="pdf-explanation-model">Modelo gratuito de AI Gateway</label><div class="pdf-explanation-model-row"><select id="pdf-explanation-model" disabled><option value="">Cargando modelos…</option></select><button type="button" class="pdf-explanation-refresh" title="Actualizar modelos gratuitos" aria-label="Actualizar modelos gratuitos">↻</button></div><p class="pdf-explanation-model-status" role="status"></p><label for="pdf-explanation-question">¿Qué querés entender? Podés dejarlo vacío.</label><textarea id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><div class="pdf-explanation-loading" hidden><span class="pdf-explanation-spinner" aria-hidden="true"></span><span class="pdf-explanation-elapsed">Cargando…</span></div><p class="pdf-explanation-progress" role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
     view.panel.append(form);
-    const input = form.querySelector("textarea"), status = form.querySelector("p"), submit = form.querySelector("button");
+    const input = form.querySelector("textarea"), status = form.querySelector(".pdf-explanation-progress"), submit = form.querySelector('button[type="submit"]');
+    const modelSelect = form.querySelector("select"), modelStatus = form.querySelector(".pdf-explanation-model-status"), refresh = form.querySelector(".pdf-explanation-refresh");
+    const loadingIndicator = form.querySelector(".pdf-explanation-loading"), elapsed = form.querySelector(".pdf-explanation-elapsed");
     input.focus();
     let generating = false;
+    async function loadModels() {
+      modelSelect.disabled = true; refresh.disabled = true;
+      modelStatus.textContent = "Consultando modelos con entrada y salida a precio cero…";
+      try {
+        const response = await fetch("/api/pdf-explanation", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "No se pudo cargar la lista de modelos.");
+        if (!Array.isArray(payload.models) || !payload.models.length) throw new Error("No hay modelos gratuitos disponibles.");
+        let remembered = modelSelect.value;
+        if (!remembered) { try { remembered = localStorage.getItem("pdf-explanation-model") || ""; } catch {} }
+        modelSelect.replaceChildren();
+        for (const model of payload.models) {
+          const option = document.createElement("option");
+          option.value = model.id; option.textContent = model.id;
+          modelSelect.append(option);
+        }
+        if (payload.models.some(model => model.id === remembered)) modelSelect.value = remembered;
+        modelStatus.textContent = `${payload.models.length} modelos gratuitos · se usará el que elijas`;
+      } catch (error) {
+        modelSelect.replaceChildren(new Option("No se pudo cargar la lista", ""));
+        modelStatus.textContent = error.message;
+        throw error;
+      } finally { modelSelect.disabled = generating || !modelSelect.value; refresh.disabled = generating; }
+    }
+    let modelsReady = loadModels();
+    modelsReady.catch(() => {});
+    refresh.addEventListener("click", () => { modelsReady = loadModels(); modelsReady.catch(() => {}); });
+    modelSelect.addEventListener("change", () => { try { localStorage.setItem("pdf-explanation-model", modelSelect.value); } catch {} });
     status.textContent = "Preparando la transcripción de la página…";
     preparePage(pdf, page).then(() => {
       if (modal === view && !generating) status.textContent = "Página lista · Enter para explicar";
@@ -300,13 +330,23 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       generating = true;
       submit.disabled = true;
       input.disabled = true;
+      modelSelect.disabled = true; refresh.disabled = true;
+      form.setAttribute("aria-busy", "true"); loadingIndicator.hidden = false;
+      const started = Date.now();
+      const updateElapsed = () => { elapsed.textContent = `Cargando… ${Math.floor((Date.now() - started) / 1000)} s`; };
+      updateElapsed();
+      const ticker = setInterval(updateElapsed, 1000);
       const debug = { question, page, stage: "transcripcion", startedAt: new Date().toISOString(), outcome: "fallo" };
       try {
+        await modelsReady;
+        const selectedModel = modelSelect.value;
+        if (!selectedModel) throw new Error("Elegí un modelo gratuito antes de generar.");
+        debug.model = selectedModel;
         status.textContent = "Preparando la transcripción de la página…";
         const { state, text } = await preparePage(pdf, page);
         status.textContent = "Generando la explicación visual…";
         debug.transcription = text;
-        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = message; }, debug);
+        const html = await window.requestPdfExplanation(question, text, message => { status.textContent = `${selectedModel} · ${message}`; }, debug, selectedModel);
         debug.html = html;
         debug.stage = "guardar-html-y-nota";
         const pdfPage = await state.pdf.getPage(page);
@@ -326,9 +366,11 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
         debug.error = status.textContent;
         if (modal !== view) report(error);
       } finally {
+        clearInterval(ticker); loadingIndicator.hidden = true; form.removeAttribute("aria-busy");
         debug.finishedAt = new Date().toISOString();
         try { window.downloadPdfExplanationAttempt(debug); } catch (error) { console.error("[Verlo] Descarga de diagnóstico", error); }
         generating = false; submit.disabled = false; input.disabled = false;
+        modelSelect.disabled = !modelSelect.value; refresh.disabled = false;
         if (modal === view) input.focus();
       }
     });

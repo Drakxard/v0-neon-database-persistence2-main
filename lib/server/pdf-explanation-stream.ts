@@ -4,9 +4,7 @@ import { explanationFailure } from "../pdf-explanation-errors.ts"
 import { explanationLessonSchema, lessonHtml, lessonFromText, type ExplanationLesson } from "../pdf-explanation-lesson.ts"
 
 export function explanationStream(model: LanguageModel, question: string, transcription: string,
-  options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; attemptTimeoutMs?: number } = {}) {
-  const abortSignal = AbortSignal.timeout(60_000)
-  const primarySignal = AbortSignal.any([abortSignal, AbortSignal.timeout(options.attemptTimeoutMs ?? 25_000)])
+  options: { fallbackModels?: string[]; recoveryModel?: LanguageModel; maxOutputTokens?: number; supportsTools?: boolean } = {}) {
   const reportError = (error: unknown) => {
     const failure = explanationFailure(error)
     console.error("[PDF explicación] AI Gateway", failure.diagnostics)
@@ -14,7 +12,8 @@ export function explanationStream(model: LanguageModel, question: string, transc
   }
   const result = streamText({
     model,
-    prompt: explanationPrompt(question, transcription),
+    prompt: explanationPrompt(question, transcription, options.supportsTools === false ? "text" : "tool"),
+    ...(options.supportsTools === false ? {} : {
     tools: {
       renderExplanation: tool({
         description: "Entrega title y steps: contenido breve de la explicación. La plantilla del servidor crea el HTML animado y AI SDK UI lo muestra. No generes código HTML, CSS ni JavaScript.",
@@ -28,11 +27,11 @@ export function explanationStream(model: LanguageModel, question: string, transc
     // Free models can return the document as text; a forced tool would make
     // AI SDK reject that otherwise usable response before it reaches the UI.
     toolChoice: "auto",
+    } as const),
     reasoning: "none",
     maxOutputTokens: Math.min(options.maxOutputTokens ?? 1_800, 1_800),
     ...(options.fallbackModels?.length ? { providerOptions: { gateway: { models: options.fallbackModels } } } : {}),
     maxRetries: 0,
-    abortSignal: primarySignal,
     onError: ({ error }) => { reportError(error) },
   })
   return createUIMessageStreamResponse({
@@ -44,7 +43,6 @@ export function explanationStream(model: LanguageModel, question: string, transc
         diagnostic("modelo-principal", { model: typeof model === "object" ? model.modelId : model, fallbackModels: options.fallbackModels })
         let delivered = false
         let failed = false
-        let timedOut = false
         let toolError: string | undefined
         const reader = toUIMessageStream({
           stream: result.stream,
@@ -72,21 +70,14 @@ export function explanationStream(model: LanguageModel, question: string, transc
             }
             if (value.type === "tool-output-available") delivered = true
             if (value.type === "abort") {
-              timedOut = true
-              diagnostic("tiempo-modelo-principal-agotado")
-              continue
-            }
-            if (value.type === "error" && primarySignal.aborted) {
-              timedOut = true
-              diagnostic("tiempo-modelo-principal-agotado", { error: value.errorText })
+              failed = true
+              diagnostic("solicitud-interrumpida")
+              writer.write({ type: "error", errorText: "AI Gateway interrumpió la generación. Elegí otro modelo para reintentar." })
               continue
             }
             if (value.type === "error") { failed = true; diagnostic("error-gateway", { error: value.errorText }) }
             writer.write(value)
           }
-        } catch (error) {
-          if (primarySignal.aborted) { timedOut = true; diagnostic("tiempo-modelo-principal-agotado") }
-          else throw error
         } finally {
           reader.releaseLock()
         }
@@ -94,12 +85,12 @@ export function explanationStream(model: LanguageModel, question: string, transc
         if (!delivered) {
           // Some free models return HTML as text instead of calling the tool.
           // Keep the same SDK UI transport and validate before exposing it.
-          let text = timedOut ? "" : await result.text
-          let reason = timedOut ? "timeout" : await result.finishReason
-          diagnostic("validacion-html", { text, finishReason: reason, usage: timedOut ? undefined : await result.totalUsage, toolError })
+          let text = await result.text
+          let reason = await result.finishReason
+          diagnostic("validacion-html", { text, finishReason: reason, usage: await result.totalUsage, toolError })
           const extract = (text: string) => lessonFromText(text) || text.match(/(?:<!doctype html[^>]*>\s*)?<html\b[\s\S]*?<\/html>/i)?.[0]
           let document = extract(text)
-          if (!document && options.recoveryModel && !abortSignal.aborted) {
+          if (!document && options.recoveryModel) {
             diagnostic("modelo-recuperacion", { model: typeof options.recoveryModel === "object" ? options.recoveryModel.modelId : options.recoveryModel })
             writer.write({ type: "data-explanation-status", data: { text: "El primer modelo no terminó; probando otro modelo gratuito…" } })
             const recovery = streamText({
@@ -108,7 +99,6 @@ export function explanationStream(model: LanguageModel, question: string, transc
               reasoning: "none",
               maxOutputTokens: Math.min(options.maxOutputTokens ?? 1_800, 1_800),
               maxRetries: 0,
-              abortSignal,
               onError: ({ error }) => { reportError(error) },
             })
             const recoveryReader = toUIMessageStream({ stream: recovery.stream, sendReasoning: false, sendSources: false,
@@ -137,7 +127,7 @@ export function explanationStream(model: LanguageModel, question: string, transc
             writer.write({ type: "data-explanation", data: { html: explanationHtml(document) } })
           } else {
             console.error("[PDF explicación] Sin HTML", { finishReason: reason, textLength: text.length, toolError: Boolean(toolError) })
-            writer.write({ type: "error", errorText: reason === "timeout" ? reportError({ name: "TimeoutError" }) : reason === "length"
+            writer.write({ type: "error", errorText: reason === "length"
               ? "El modelo agotó su límite antes de completar el HTML. Presioná Enter para reintentar; la página ya está transcrita."
               : "El modelo gratuito terminó sin entregar HTML completo. Presioná Enter para reintentar; la página ya está transcrita." })
             return
@@ -149,5 +139,6 @@ export function explanationStream(model: LanguageModel, question: string, transc
       onError: reportError,
     }),
     headers: { "Cache-Control": "no-store" },
+    keepAliveMs: 10_000,
   })
 }

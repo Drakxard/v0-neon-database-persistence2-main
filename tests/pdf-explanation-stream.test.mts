@@ -85,24 +85,12 @@ test("short lesson content becomes complete animated HTML without asking the mod
   }
 })
 
-test("a stalled first model is cancelled and the second model receives its own chance", async () => {
-  let cancelled = false
-  const slow = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => ({ stream: new ReadableStream<LanguageModelV4StreamPart>({
-    start(controller) {
-      controller.enqueue({ type: "stream-start", warnings: [] })
-      abortSignal?.addEventListener("abort", () => { cancelled = true; controller.error(abortSignal.reason) }, { once: true })
-    },
-  }) }) })
-  const recovery = textModel(JSON.stringify(lesson))
-  // AbortSignal.timeout is unref'ed; a real HTTP request keeps Node alive,
-  // while this synthetic stream needs a referenced handle for the timer.
-  const keepAlive = setTimeout(() => {}, 1000)
-  let chunks
-  try { chunks = await parts(explanationStream(slow, "Duda", "Página", { recoveryModel: recovery, attemptTimeoutMs: 50 })) }
-  finally { clearTimeout(keepAlive) }
-  assert.equal(cancelled, true)
-  assert.equal(recovery.doStreamCalls.length, 1)
-  assert.ok(chunks.some(part => part.type === "data-explanation-debug" && part.data.stage === "tiempo-modelo-principal-agotado"))
+test("text-only free models can generate a lesson without tools or an application abort deadline", async () => {
+  const model = textModel(JSON.stringify(lesson))
+  const chunks = await parts(explanationStream(model, "Duda", "Página", { supportsTools: false }))
+  assert.equal(model.doStreamCalls[0].tools, undefined)
+  assert.ok(JSON.stringify(model.doStreamCalls[0].prompt).includes("directamente como texto"))
+  assert.equal(model.doStreamCalls[0].abortSignal, undefined)
   assert.ok(chunks.some(part => part.type === "data-explanation" && part.data.html.includes("Costo de búsqueda")))
   assert.ok(!chunks.some(part => part.type === "error"))
 })

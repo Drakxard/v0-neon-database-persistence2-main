@@ -12,10 +12,9 @@ test("old paid environment preference is ignored and all fallback models have ze
   assert.deepEqual(models.map(model => model.id), [DEFAULT_FREE_EXPLANATION_MODEL, "inclusionai/ling-3.1-flash-free"])
 })
 
-test("expired promotions, unsupported tools, missing prices and decision models cannot be selected", () => {
+test("expired promotions, missing prices and decision models cannot be selected", () => {
   const candidates = [
     { ...free("expired"), deprecated_at: 100 },
-    { ...free("no-forced-tool"), supported_parameters: ["tools"] },
     { ...free("missing-price"), pricing: { input: "", output: "0" } },
     { ...free("evaluation"), type: "evaluation" },
     { ...free("promo-ended"), pricing: { input: "0", output: "0.000001" } },
@@ -26,5 +25,11 @@ test("expired promotions, unsupported tools, missing prices and decision models 
 
 test("a still-free preferred model is respected and output tokens fit its limit", () => {
   const model = { ...free("free-preference"), max_tokens: 8192 }
-  assert.deepEqual(chooseFreeExplanationModels({ data: [free(DEFAULT_FREE_EXPLANATION_MODEL), model] }, model.id)[0], { id: model.id, maxOutputTokens: 8192 })
+  assert.deepEqual(chooseFreeExplanationModels({ data: [free(DEFAULT_FREE_EXPLANATION_MODEL), model] }, model.id)[0], { id: model.id, name: model.id, maxOutputTokens: 8192, supportsTools: true })
+})
+
+test("the selector lists every free language model including models without tools", () => {
+  const models = chooseFreeExplanationModels({ data: [free("one"), free("two"), free("three"), free("four"), { ...free("text-only"), tags: [], supported_parameters: [] }] })
+  assert.equal(models.length, 5)
+  assert.equal(models.find(model => model.id === "text-only")?.supportsTools, false)
 })
