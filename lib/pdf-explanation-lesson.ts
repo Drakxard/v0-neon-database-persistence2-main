@@ -20,7 +20,20 @@ export const explanationLessonSchema = {
 } as const
 
 export function lessonHtml(input: unknown) {
-  const lesson = input as ExplanationLesson
+  // Some Gateway providers encode array arguments as JSON strings. Decode only
+  // these structural fields, then apply the same validation as native arrays.
+  // Content strings stay literal text and are never interpreted as code.
+  const decodeArray = (input: unknown) => {
+    let value = input
+    for (let depth = 0; depth < 2 && typeof value === "string" && value.length <= 32_000; depth++) {
+      try { value = JSON.parse(value) } catch { break }
+    }
+    return value
+  }
+  const raw = input as ExplanationLesson | null
+  const steps = decodeArray(raw?.steps)
+  const lesson = { title: raw?.title, steps: Array.isArray(steps)
+    ? steps.map(step => ({ ...step, items: decodeArray(step?.items) })) : steps } as ExplanationLesson
   const validString = (value: unknown, max: number) => typeof value === "string" && value.trim().length > 0 && value.length <= max
   if (!lesson || !validString(lesson.title, 160) || !Array.isArray(lesson.steps) || lesson.steps.length < 2 || lesson.steps.length > 4
     || lesson.steps.some(step => !step || !validString(step.title, 100) || !validString(step.text, 650) || !validString(step.result, 350)

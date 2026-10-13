@@ -649,7 +649,13 @@ async function runLocalDriveSyncQueue() {
   return getLocalDriveSyncSummary()
 }
 
-export function processLocalDriveSyncQueue(): Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> {
+export async function processLocalDriveSyncQueue(): Promise<Awaited<ReturnType<typeof getLocalDriveSyncSummary>>> {
+  const { getAzureSyncStatus, syncLocalWorkspaceToAzure } = await import("./client/azure-workspace-sync")
+  if ((await getAzureSyncStatus()).configured) {
+    const root = getReadyWorkspaceHandle()
+    if (!root) throw new Error("La carpeta local no está disponible para sincronizar Azure.")
+    return syncLocalWorkspaceToAzure(root)
+  }
   if (driveSyncRun) {
     driveSyncRequested = true
     return driveSyncRun.then(() => {

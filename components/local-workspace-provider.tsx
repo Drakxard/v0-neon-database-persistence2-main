@@ -6,6 +6,7 @@ import QRCode from "qrcode"
 import { getSynthesisFolderStore } from "@/lib/client/synthesis-persistence"
 
 import { LocalFetchInterceptor } from "@/components/local-fetch-interceptor"
+import { AzureWorkspaceSyncControls, useAzureWorkspaceSync } from "@/components/azure-workspace-sync"
 import {
   clearLegacyInscreenBrowserHalf,
   ensureWorkspaceSubdirectories,
@@ -257,9 +258,10 @@ function InscreenConfigModal({
   )
 }
 
-function ServicesPanel({ apis, drive, summary, widgetSummary, servicesFileMessage, busy, error, driveCleanupMessage, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onCleanupDrive, onRetryWidgets, onClose }: {
+function ServicesPanel({ apis, drive, azure, summary, widgetSummary, servicesFileMessage, busy, error, driveCleanupMessage, onConfigureGroq, onConfigureR2, onConnect, onDisconnect, onSync, onCleanupDrive, onRetryWidgets, onClose }: {
   apis: ApiStatus
   drive: DriveStatus
+  azure: ReturnType<typeof useAzureWorkspaceSync>
   summary: DriveSummary
   widgetSummary: WidgetTargetSummary
   servicesFileMessage: string
@@ -282,13 +284,13 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, servicesFileMessag
     </div>
   )
   return <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/25 px-6 backdrop-blur-sm">
-    <div className="w-full max-w-xl rounded-3xl border border-slate-200 bg-white p-7 text-slate-900 shadow-2xl">
+    <div className="max-h-[94vh] w-full max-w-xl overflow-auto rounded-3xl border border-slate-200 bg-white p-7 text-slate-900 shadow-2xl">
       <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">Servicios</p>
       <h2 className="mt-2 text-2xl font-semibold">Conexiones de este navegador</h2>
       <div className="mt-6 space-y-3">
         <button type="button" onClick={onConfigureGroq} className="block w-full text-left">{service("Groq", apis.groq ? "Verificado en User.Services" : "Selecciona para configurarlo", apis.groq)}</button>
         <button type="button" onClick={onConfigureR2} className="block w-full text-left">{service("Cloudflare R2", apis.r2 ? "Verificado en User.Services" : "Selecciona para configurarlo", apis.r2)}</button>
-        {service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
+        {azure.status?.configured ? service("Azure Blob Storage", azure.status.connected ? "Sincronización con la conexión del despliegue" : "Revisá la conexión del despliegue", Boolean(azure.status.connected)) : service("Google Drive", drive.connected ? `${drive.email} · ${drive.rootFolderName}` : "Sin cuenta conectada", drive.connected)}
       </div>
       {servicesFileMessage ? <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{servicesFileMessage}</p> : null}
       <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
@@ -297,7 +299,7 @@ function ServicesPanel({ apis, drive, summary, widgetSummary, servicesFileMessag
         {widgetSummary.errors.map((message, index) => <p className="mt-2 text-xs text-amber-800" key={`${index}-${message}`}>{message}</p>)}
         {widgetSummary.pending > 0 || widgetSummary.failed > 0 ? <button type="button" onClick={onRetryWidgets} disabled={busy} className="mt-3 rounded-xl border border-slate-300 px-3 py-2 disabled:opacity-50">Reintentar widgets</button> : null}
       </div>
-      {drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
+      {azure.status?.configured ? <AzureWorkspaceSyncControls sync={azure} /> : drive.connected ? <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm">
         <p>{summary.synced} sincronizados · {summary.pending} pendientes · {summary.failed} con error</p>
         {summary.errors.length ? <div className="mt-3 space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
           {summary.errors.map((message, index) => <p key={`${index}-${message}`}>{message}</p>)}
@@ -424,6 +426,7 @@ export function LocalWorkspaceProvider({
   const isReady = !enabled || (bootState === "ready" && Boolean(rootHandle) && permissionState === "granted")
   const canRenderBeforeWorkspaceReady = enabled && pathname === "/practice/viewer"
   const [synthesisMigrationError, setSynthesisMigrationError] = useState("")
+  const azure = useAzureWorkspaceSync(rootHandle, enabled && permissionState === "granted", isReady)
 
   useEffect(() => {
     if (!enabled || !isReady || !rootHandle) return
@@ -883,7 +886,7 @@ export function LocalWorkspaceProvider({
         <button className="ml-3 underline" onClick={() => { void getSynthesisFolderStore().then(() => setSynthesisMigrationError("")).catch((error) => setSynthesisMigrationError(String(error.message || error))) }}>Reintentar migración</button>
       </div> : null}
       {enabled && bootState === "configure" && configStep === 4 ? (
-        <ServicesPanel apis={apiStatus} drive={driveStatus} summary={driveSummary} widgetSummary={widgetTargetSummary} servicesFileMessage={servicesFileMessage} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
+        <ServicesPanel apis={apiStatus} drive={driveStatus} azure={azure} summary={driveSummary} widgetSummary={widgetTargetSummary} servicesFileMessage={servicesFileMessage} busy={savingConfig} error={error} driveCleanupMessage={driveCleanupMessage} onConfigureGroq={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(0) }} onConfigureR2={() => { setConfigValues(EMPTY_INSCREEN_CONFIG); setConfigStep(1) }} onConnect={connectDrive} onDisconnect={() => { void disconnectDrive() }} onSync={() => { void syncDrive() }} onCleanupDrive={() => { void cleanupDriveDuplicates() }} onRetryWidgets={() => { void retryWidgets() }} onClose={finishInscreenConfiguration} />
       ) : enabled && bootState === "configure" ? (
         <InscreenConfigModal
           step={configStep}

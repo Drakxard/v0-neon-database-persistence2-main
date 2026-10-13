@@ -22,6 +22,7 @@ export function proxy(request: NextRequest) {
       (request.nextUrl.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") ||
       isSubjectVoiceServerRequest(request.nextUrl.pathname, request.method) ||
       request.nextUrl.pathname.startsWith("/api/inscreen/")
+      || request.nextUrl.pathname.startsWith("/api/storage/azure")
     ) {
       return NextResponse.next()
     }

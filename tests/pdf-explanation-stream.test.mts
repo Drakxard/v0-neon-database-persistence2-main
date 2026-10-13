@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { readFileSync } from "node:fs"
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test"
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { explanationStream } from "../lib/server/pdf-explanation-stream.ts"
@@ -10,6 +11,25 @@ const lesson = { title: "Costo de búsqueda", steps: [
   { title: "Encontrar la clave", text: "Se calcula la cubeta inicial y se compara la clave.", items: ["h(k)", "Comparación", "Clave encontrada"], result: "Una búsqueda directa requiere una comparación." },
   { title: "Resolver una colisión", text: "Si la primera cubeta no coincide, se prueban otras.", items: ["Cubeta ocupada", "Nuevo intento", "Coincidencia"], result: "Los intentos infructuosos aumentan el costo." },
 ] }
+
+const reportedLesson = JSON.parse(readFileSync(new URL("./fixtures/pdf-explanation-string-steps.json", import.meta.url), "utf8"))
+
+test("the reported Gateway response with JSON-string steps renders through the real SDK UI reader", async () => {
+  const model = modelFor("", JSON.stringify(reportedLesson))
+  const response = explanationStream(model, "Explicalo", "Costo de la búsqueda")
+  const transport = new DefaultChatTransport({ fetch: async () => response })
+  const stream = await transport.sendMessages({ trigger: "submit-message", chatId: "reported-failure", messageId: undefined, messages: [] })
+  let html = ""
+  for await (const message of readUIMessageStream({ stream, terminateOnError: true })) {
+    for (const part of message.parts) {
+      if (part.type === "tool-renderExplanation" && part.state === "output-available") html = (part.output as { html: string }).html
+    }
+  }
+  assert.ok(html.includes(reportedLesson.title))
+  assert.ok(html.includes("Búsqueda exitosa: menos intentos"))
+  assert.ok(html.includes("connect-src 'none'"))
+  assert.equal(model.doStreamCalls.length, 1)
+})
 
 function textModel(text: string, reason: "stop" | "length" = "stop") {
   const chunks: LanguageModelV4StreamPart[] = [
@@ -100,6 +120,19 @@ test("lesson rendering treats model strings as text and cannot inject script tag
   assert.ok(!html.includes('<script>alert("injected")'))
   assert.ok(html.includes("\\u003c/script>"))
   assert.throws(() => lessonHtml({ title: "Incomplete", steps: [] }))
+})
+
+test("JSON-encoded arrays work for text delivery and nested items without weakening validation", async () => {
+  const encoded = { ...lesson, steps: JSON.stringify(lesson.steps.map(step => ({ ...step, items: JSON.stringify(step.items) }))) }
+  const chunks = await parts(explanationStream(textModel(JSON.stringify(encoded)), "Explicalo", "Página", { supportsTools: false }))
+  assert.ok(chunks.some(part => part.type === "data-explanation" && part.data.html.includes("Resolver una colisión")))
+  for (const steps of ['[{"title":"Incompleto"}]', "[]", "not JSON", JSON.stringify(JSON.stringify(JSON.stringify(lesson.steps)))]) {
+    assert.throws(() => lessonHtml({ ...lesson, steps }))
+  }
+  assert.throws(() => lessonHtml({ ...lesson, steps: [{ ...lesson.steps[0], items: '[]' }, lesson.steps[1]] }))
+  const html = lessonHtml({ ...lesson, steps: JSON.stringify(lesson.steps.map(step => ({ ...step, items: JSON.stringify(['</script><script>alert(1)</script>', 'Seguro']) }))) })
+  assert.ok(!html.includes('<script>alert(1)</script>'))
+  assert.ok(html.includes('\\u003c/script>'))
 })
 
 test("a free model returning text instead of tools still delivers validated HTML through SDK UI", async () => {

@@ -24,6 +24,7 @@
     "@ai-sdk/gateway": "^4.0.111",
     "@aws-sdk/client-s3": "^3.1010.0",
     "@aws-sdk/s3-request-presigner": "^3.1010.0",
+    "@azure/storage-blob": "^12.34.0",
     "@floating-ui/react": "^0.27.20",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.12",
