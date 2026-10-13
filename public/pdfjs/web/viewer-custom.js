@@ -2271,8 +2271,21 @@
     window.location.assign(buildReturnHref());
   }
 
+  function deselectEditorTool() {
+    const viewer = state.app?.pdfViewer;
+    const none = window.pdfjsLib?.AnnotationEditorType.NONE ?? 0;
+    if (viewer?.annotationEditorMode > none) {
+      state.app.eventBus.dispatch("switchannotationeditormode", {
+        source: window,
+        mode: none,
+        isFromKeyboard: true,
+      });
+    }
+  }
+
   function handleViewerEscape(event) {
     if (event?.defaultPrevented) return;
+    deselectEditorTool();
 
     if (state.cutSelectionMode) {
       event?.preventDefault?.();
@@ -4535,6 +4548,8 @@
 
   function handleKeyDown(event) {
     if (!state.app || event.defaultPrevented || event.repeat) return;
+    // Also commit and leave text editing when Escape comes from its input.
+    if (event.key === "Escape") deselectEditorTool();
     if (event.key === "Escape" && state.openEditorConfigPanel) {
       event.preventDefault();
       closeEditorConfigPanels();
