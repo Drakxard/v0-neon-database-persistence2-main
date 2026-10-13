@@ -1,16 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { explanationHtml, explanationInput, explanationPrompt, PDF_EXPLANATION_STYLE } from "../lib/pdf-explanation.ts"
+import { explanationHtml, explanationInput, explanationPrompt } from "../lib/pdf-explanation.ts"
 import { explanationFailure } from "../lib/pdf-explanation-errors.ts"
 
-test("explanation includes the student's question, page transcription and animation prompt", () => {
+test("explanation sends exactly the student's request and page transcription", () => {
   const input = explanationInput({ question: " ¿Por qué cambia el signo? ", transcription: "La derivada es -2x." })
   const prompt = explanationPrompt(input.question, input.transcription)
-  assert.ok(prompt.includes(PDF_EXPLANATION_STYLE))
-  assert.ok(prompt.includes("¿Por qué cambia el signo?"))
-  assert.ok(prompt.includes("La derivada es -2x."))
-  assert.ok(prompt.includes("Vercel AI SDK UI"))
-  assert.ok(prompt.includes("renderExplanation"))
+  assert.equal(prompt, "¿Por qué cambia el signo?\n\nLa derivada es -2x.")
   assert.equal(explanationInput({ question: "  ", transcription: "x" }).question, "Explicalo")
   assert.throws(() => explanationInput({ transcription: "x" }))
   assert.throws(() => explanationInput({ question: "x", transcription: "x".repeat(180001) }))

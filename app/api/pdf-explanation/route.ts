@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       gateway(selected.id),
       input.question,
       input.transcription,
-      { maxOutputTokens: selected.maxOutputTokens, supportsTools: selected.supportsTools },
+      { maxOutputTokens: selected.maxOutputTokens },
     )
   } catch (error) {
     if (error instanceof FreeExplanationModelsError) return Response.json({ error: error.message, stage: "catalogo-modelos-gratuitos" }, { status: 503 })
