@@ -4,6 +4,12 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test"
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider"
 import { explanationStream } from "../lib/server/pdf-explanation-stream.ts"
 import { DefaultChatTransport, readUIMessageStream } from "ai"
+import { lessonHtml } from "../lib/pdf-explanation-lesson.ts"
+
+const lesson = { title: "Costo de búsqueda", steps: [
+  { title: "Encontrar la clave", text: "Se calcula la cubeta inicial y se compara la clave.", items: ["h(k)", "Comparación", "Clave encontrada"], result: "Una búsqueda directa requiere una comparación." },
+  { title: "Resolver una colisión", text: "Si la primera cubeta no coincide, se prueban otras.", items: ["Cubeta ocupada", "Nuevo intento", "Coincidencia"], result: "Los intentos infructuosos aumentan el costo." },
+] }
 
 function textModel(text: string, reason: "stop" | "length" = "stop") {
   const chunks: LanguageModelV4StreamPart[] = [
@@ -47,7 +53,7 @@ test("request instructs the Gateway model to return UI through renderExplanation
   assert.deepEqual(request.toolChoice, { type: "auto" })
   assert.equal(request.tools?.[0].name, "renderExplanation")
   assert.equal(request.reasoning, "none")
-  assert.equal(request.maxOutputTokens, 6000)
+  assert.equal(request.maxOutputTokens, 1800)
   assert.ok(JSON.stringify(request.prompt).includes("Vercel AI SDK UI"))
   assert.ok(JSON.stringify(request.prompt).includes("¿Por qué cambia el signo?"))
 })
@@ -63,7 +69,49 @@ test("the UI stream forwards only the verified free fallbacks supplied by the se
   const fallbackModels = ["inclusionai/ling-3.1-flash-free"]
   await parts(explanationStream(model, "Explicalo", "Página", { fallbackModels, maxOutputTokens: 8192 }))
   assert.deepEqual(model.doStreamCalls[0].providerOptions?.gateway, { models: fallbackModels })
-  assert.equal(model.doStreamCalls[0].maxOutputTokens, 6000)
+  assert.equal(model.doStreamCalls[0].maxOutputTokens, 1800)
+})
+
+test("short lesson content becomes complete animated HTML without asking the model to generate code", async () => {
+  for (const model of [modelFor("", JSON.stringify(lesson)), textModel(JSON.stringify(lesson))]) {
+    const chunks = await parts(explanationStream(model, "Explicalo", "Página"))
+    const artifact = chunks.find(part => part.type === "tool-output-available" || part.type === "data-explanation")
+    const html = artifact.output?.html || artifact.data?.html
+    assert.ok(html.includes("Costo de búsqueda"))
+    assert.ok(html.includes("prefers-reduced-motion"))
+    assert.ok(html.includes("pointer"))
+    assert.ok(html.includes("connect-src 'none'"))
+    assert.ok(JSON.stringify(model.doStreamCalls[0].prompt).includes("NO escribas HTML"))
+  }
+})
+
+test("a stalled first model is cancelled and the second model receives its own chance", async () => {
+  let cancelled = false
+  const slow = new MockLanguageModelV4({ doStream: async ({ abortSignal }) => ({ stream: new ReadableStream<LanguageModelV4StreamPart>({
+    start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] })
+      abortSignal?.addEventListener("abort", () => { cancelled = true; controller.error(abortSignal.reason) }, { once: true })
+    },
+  }) }) })
+  const recovery = textModel(JSON.stringify(lesson))
+  // AbortSignal.timeout is unref'ed; a real HTTP request keeps Node alive,
+  // while this synthetic stream needs a referenced handle for the timer.
+  const keepAlive = setTimeout(() => {}, 1000)
+  let chunks
+  try { chunks = await parts(explanationStream(slow, "Duda", "Página", { recoveryModel: recovery, attemptTimeoutMs: 50 })) }
+  finally { clearTimeout(keepAlive) }
+  assert.equal(cancelled, true)
+  assert.equal(recovery.doStreamCalls.length, 1)
+  assert.ok(chunks.some(part => part.type === "data-explanation-debug" && part.data.stage === "tiempo-modelo-principal-agotado"))
+  assert.ok(chunks.some(part => part.type === "data-explanation" && part.data.html.includes("Costo de búsqueda")))
+  assert.ok(!chunks.some(part => part.type === "error"))
+})
+
+test("lesson rendering treats model strings as text and cannot inject script tags", () => {
+  const html = lessonHtml({ ...lesson, title: '</script><script>alert("injected")</script>' })
+  assert.ok(!html.includes('<script>alert("injected")'))
+  assert.ok(html.includes("\\u003c/script>"))
+  assert.throws(() => lessonHtml({ title: "Incomplete", steps: [] }))
 })
 
 test("a free model returning text instead of tools still delivers validated HTML through SDK UI", async () => {
