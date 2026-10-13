@@ -2,7 +2,7 @@ export const PDF_EXPLANATION_STYLE = "versionCorta: Animaciones didácticas por 
 
 export function explanationInput(body: unknown) {
   const data = body as Record<string, unknown> | null
-  const question = typeof data?.question === "string" ? data.question.trim() : ""
+  const question = typeof data?.question === "string" ? data.question.trim() || "Explicalo" : ""
   const transcription = typeof data?.transcription === "string" ? data.transcription.trim() : ""
   if (!question || question.length > 2000 || !transcription || transcription.length > 180_000) {
     throw new Error("Ingresá una duda y una transcripción de página válidas.")

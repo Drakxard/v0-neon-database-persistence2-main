@@ -1,7 +1,17 @@
 import { DefaultChatTransport, readUIMessageStream } from "ai"
 
 export async function requestPdfExplanation(question: string, transcription: string, onProgress: (text: string) => void) {
-  const transport = new DefaultChatTransport({ api: "/api/pdf-explanation" })
+  const transport = new DefaultChatTransport({
+    api: "/api/pdf-explanation",
+    fetch: async (url, init) => {
+      const response = await fetch(url, init)
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null
+        throw new Error(payload?.error || `No se pudo generar la explicación (HTTP ${response.status}).`)
+      }
+      return response
+    },
+  })
   const stream = await transport.sendMessages({
     trigger: "submit-message",
     chatId: crypto.randomUUID(),

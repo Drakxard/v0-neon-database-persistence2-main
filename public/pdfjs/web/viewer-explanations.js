@@ -5,6 +5,7 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
   let documentState = null, loading = null, modal = null, restoring = false;
   let saving = Promise.resolve();
   const editors = new Map();
+  const preparedPages = new WeakMap();
   const star = document.createElement("button");
   star.id = "pdfExplanationButton";
   star.className = "toolbarButton pdf-explanation-star";
@@ -124,6 +125,20 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     state.data.transcriptions[key] = payload.markdown;
     await persist(state); // Keep the transcription even if generation fails.
     return payload.markdown;
+  }
+  function preparePage(pdf, page) {
+    if (!pdf) return Promise.reject(new Error("Esperá a que termine de cargar el PDF."));
+    let pages = preparedPages.get(pdf);
+    if (!pages) { pages = new Map(); preparedPages.set(pdf, pages); }
+    if (pages.has(page)) return pages.get(page);
+    const pending = (async () => {
+      const state = await load();
+      if (state.pdf !== pdf) throw new Error("El PDF cambió. Volvé a abrir Verlo.");
+      return { state, text: await transcription(state, page) };
+    })();
+    pages.set(page, pending);
+    pending.catch(() => { if (pages.get(page) === pending) pages.delete(page); });
+    return pending;
   }
   function close() {
     if (!modal) return;
@@ -257,22 +272,37 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     menu.hidden = true;
     star.setAttribute("aria-expanded", "false");
     const page = app.pdfViewer.currentPageNumber;
+    const pdf = app.pdfDocument;
     const view = overlay(`Verlo · página ${page}`);
     const form = document.createElement("form");
-    form.innerHTML = '<label for="pdf-explanation-question">¿Qué pregunta o duda puntual querés entender?</label><textarea id="pdf-explanation-question" required maxlength="2000" rows="4" placeholder="Escribí tu duda sobre esta página"></textarea><p role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
+    form.innerHTML = '<label for="pdf-explanation-question">¿Qué querés entender? Podés dejarlo vacío.</label><textarea id="pdf-explanation-question" maxlength="2000" rows="4" placeholder="Explicalo · Enter para generar; Shift+Enter para otra línea"></textarea><p role="status" aria-live="polite"></p><button type="submit">Generar explicación</button>';
     view.panel.append(form);
     const input = form.querySelector("textarea"), status = form.querySelector("p"), submit = form.querySelector("button");
     input.focus();
+    let generating = false;
+    status.textContent = "Preparando la transcripción de la página…";
+    preparePage(pdf, page).then(() => {
+      if (modal === view && !generating) status.textContent = "Página lista · Enter para explicar";
+    }, error => {
+      if (modal === view && !generating) status.textContent = error.message;
+    });
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!submit.disabled) form.requestSubmit();
+      }
+    });
     form.addEventListener("submit", async event => {
       event.preventDefault();
-      const question = input.value.trim();
-      if (!question || submit.disabled) return;
+      const question = input.value.trim() || "Explicalo";
+      if (submit.disabled) return;
+      generating = true;
       submit.disabled = true;
       input.disabled = true;
       try {
-        const state = await load();
         status.textContent = "Preparando la transcripción de la página…";
-        const text = await transcription(state, page);
+        const { state, text } = await preparePage(pdf, page);
         status.textContent = "Generando la explicación visual…";
         const html = await window.requestPdfExplanation(question, text, message => { status.textContent = message; });
         const pdfPage = await state.pdf.getPage(page);
@@ -288,7 +318,10 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
       } catch (error) {
         status.textContent = error instanceof Error ? error.message : "No se pudo generar la explicación.";
         if (modal !== view) report(error);
-      } finally { submit.disabled = false; input.disabled = false; }
+      } finally {
+        generating = false; submit.disabled = false; input.disabled = false;
+        if (modal === view) input.focus();
+      }
     });
   }
   star.addEventListener("click", () => {
@@ -297,7 +330,10 @@ window.initPdfExplanations = function ({ app, query, ensureWorkspaceRootHandle, 
     const rect = star.getBoundingClientRect();
     menu.style.top = `${rect.bottom + 4}px`;
     menu.style.right = `${Math.max(8, innerWidth - rect.right)}px`;
-    if (!menu.hidden) menu.querySelector("button").focus();
+    if (!menu.hidden) {
+      preparePage(app.pdfDocument, app.pdfViewer.currentPageNumber).catch(() => {});
+      menu.querySelector("button").focus();
+    }
   });
   menu.querySelector("button").addEventListener("click", ask);
   document.addEventListener("pointerdown", event => {

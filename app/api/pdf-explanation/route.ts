@@ -2,6 +2,7 @@ import { createGateway } from "@ai-sdk/gateway"
 import { requireAuthSession } from "@/lib/authz"
 import { explanationInput } from "@/lib/pdf-explanation"
 import { explanationStream } from "@/lib/server/pdf-explanation-stream"
+import { explanationFailure } from "@/lib/pdf-explanation-errors"
 
 export const runtime = "nodejs"
 export const maxDuration = 120
@@ -29,7 +30,9 @@ export async function POST(request: Request) {
       input.question,
       input.transcription,
     )
-  } catch {
-    return Response.json({ error: "No se pudo generar la explicación con AI Gateway. Volvé a intentarlo." }, { status: 502 })
+  } catch (error) {
+    const failure = explanationFailure(error)
+    console.error("[PDF explicación] AI Gateway", failure.diagnostics)
+    return Response.json({ error: failure.message }, { status: 502 })
   }
 }

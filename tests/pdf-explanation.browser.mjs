@@ -22,7 +22,7 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     if (url.pathname === "/api/pdf-explanation") {
       const body = route.request().postDataJSON()
       assert.equal(body.transcription, "Una derivada mide el cambio de la función.")
-      assert.equal(body.question, "¿Qué representa la derivada?")
+      assert.equal(body.question, generations === 0 ? "¿Qué representa la derivada?" : "Explicalo")
       generations++
       assert.equal(body.messages[0].role, "user")
       const html = '<html><head></head><body><h1>Explicación</h1><button onclick="this.textContent=\'Paso 2\'">Siguiente</button></body></html>'
@@ -68,8 +68,11 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     await page.locator("#pdfExplanationButton").click()
     assert.equal(await page.getByRole("menuitem", { name: "Procedimiento" }).isDisabled(), true)
     await page.getByRole("menuitem", { name: "Verlo", exact: true }).click()
+    await page.getByText("Página lista · Enter para explicar", { exact: true }).waitFor()
     await page.locator("#pdf-explanation-question").fill("¿Qué representa la derivada?")
-    await page.getByRole("button", { name: "Generar explicación" }).click()
+    await page.locator("#pdf-explanation-question").press("Shift+Enter")
+    assert.equal(generations, 0)
+    await page.locator("#pdf-explanation-question").press("Enter")
     await page.locator(".pdf-explanation-result iframe").waitFor()
     await page.frameLocator(".pdf-explanation-result iframe").getByRole("button", { name: "Siguiente" }).click()
     await page.keyboard.press("Escape")
@@ -121,11 +124,68 @@ test("PDF.js star generates from cached Datalab text; note drags, persists and r
     })
     await page.locator("#pdfExplanationButton").click()
     await page.getByRole("menuitem", { name: "Verlo", exact: true }).click()
-    await page.locator("#pdf-explanation-question").fill("¿Qué representa la derivada?")
-    await page.getByRole("button", { name: "Generar explicación" }).click()
+    await page.locator("#pdf-explanation-question").press("Enter")
     await page.locator(".pdf-explanation-result iframe").waitFor()
     assert.equal(generations, 2)
     assert.equal(transcriptions, 0)
     assert.deepEqual(errors, [])
   } finally { await browser.close() }
+})
+
+test("star starts Datalab before confirmation; Enter waits for that job and retries Gateway without transcribing again", async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage()
+  let transcriptions = 0, generations = 0
+  let release
+  const pending = new Promise(resolve => { release = resolve })
+  await page.route("https://prepare.test/**", async route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === "/api/inscreen/marker-transcribe") {
+      transcriptions++
+      await pending
+      return route.fulfill({ json: { markdown: "Transcripción de la página actual." } })
+    }
+    if (url.pathname === "/api/pdf-explanation") {
+      generations++
+      const body = route.request().postDataJSON()
+      assert.equal(body.question, "Explicalo")
+      assert.equal(body.transcription, "Transcripción de la página actual.")
+      if (generations === 1) return route.fulfill({ status: 429, json: { error: "AI Gateway alcanzó el límite de solicitudes (429)." } })
+      const html = "<html><head></head><body>Explicación lista</body></html>"
+      const response = createUIMessageStreamResponse({ stream: createUIMessageStream({ execute: ({ writer }) => {
+        writer.write({ type: "start", messageId: "retry" })
+        writer.write({ type: "tool-input-available", toolCallId: "render", toolName: "renderExplanation", input: { html } })
+        writer.write({ type: "tool-output-available", toolCallId: "render", output: { html } })
+        writer.write({ type: "finish", finishReason: "tool-calls" })
+      } }) })
+      return route.fulfill({ body: await response.text(), headers: Object.fromEntries(response.headers) })
+    }
+    if (url.pathname === "/sample.pdf") return route.fulfill({ body: Buffer.from(bytes), contentType: "application/pdf" })
+    try {
+      const file = `public${url.pathname}`
+      let body = await readFile(file)
+      if (file.endsWith("viewer.html")) body = Buffer.from(body.toString().replace('<script src="viewer-custom.js"></script>', ""))
+      return route.fulfill({ body, contentType: /\.(mjs|js)$/.test(file) ? "text/javascript" : file.endsWith(".css") ? "text/css" : file.endsWith(".html") ? "text/html" : "application/octet-stream" })
+    } catch { return route.fulfill({ status: 404 }) }
+  })
+  try {
+    await page.goto("https://prepare.test/pdfjs/web/viewer.html?file=%2Fsample.pdf")
+    await page.waitForFunction(() => window.PDFViewerApplication?.pdfViewer?.getPageView(0)?.annotationEditorLayer?.annotationEditorLayer, null, { timeout: 20_000 })
+    await page.evaluate(() => window.initPdfExplanations({ app: window.PDFViewerApplication, query: {}, ensureWorkspaceRootHandle: async () => null, inscreenApiFetch: fetch, showToast: () => {} }))
+    const transcriptionRequest = page.waitForRequest("**/api/inscreen/marker-transcribe")
+    await page.locator("#pdfExplanationButton").click()
+    await transcriptionRequest
+    assert.equal(transcriptions, 1)
+    assert.equal(generations, 0)
+    await page.getByRole("menuitem", { name: "Verlo", exact: true }).click()
+    await page.locator("#pdf-explanation-question").press("Enter")
+    assert.equal(generations, 0)
+    assert.equal(transcriptions, 1)
+    release()
+    await page.getByText("AI Gateway alcanzó el límite de solicitudes (429).", { exact: true }).waitFor()
+    await page.locator("#pdf-explanation-question").press("Enter")
+    await page.locator(".pdf-explanation-result iframe").waitFor()
+    assert.equal(transcriptions, 1)
+    assert.equal(generations, 2)
+  } finally { release(); await browser.close() }
 })

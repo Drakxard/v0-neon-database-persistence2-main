@@ -1,5 +1,6 @@
 import { createUIMessageStreamResponse, jsonSchema, streamText, tool, toUIMessageStream, type LanguageModel } from "ai"
 import { explanationHtml, explanationPrompt } from "../pdf-explanation.ts"
+import { explanationFailure } from "../pdf-explanation-errors.ts"
 
 export function explanationStream(model: LanguageModel, question: string, transcription: string) {
   const result = streamText({
@@ -27,7 +28,11 @@ export function explanationStream(model: LanguageModel, question: string, transc
       stream: result.stream,
       sendReasoning: false,
       sendSources: false,
-      onError: () => "No se pudo generar la explicación con AI Gateway. Volvé a intentarlo.",
+      onError: error => {
+        const failure = explanationFailure(error);
+        console.error("[PDF explicación] AI Gateway", failure.diagnostics);
+        return failure.message;
+      },
     }),
     headers: { "Cache-Control": "no-store" },
   })

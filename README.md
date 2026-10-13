@@ -26,7 +26,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 ## Modo de voz por materia
 
-En el visor PDF.js, `★ → Verlo` permite escribir una duda sobre la página actual y generar una explicación HTML animada. Un clic sobre el texto de la duda vuelve a abrirla; arrastrarlo guarda su posición. `Esc` cierra la explicación. `Procedimiento` queda reservado para una próxima implementación.
+En el visor PDF.js, tocar `★` prepara la transcripción de la página actual inmediatamente, reutilizando el caché cuando existe. `Verlo` permite escribir una duda y presionar `Enter` para generar una explicación HTML animada; si el campo queda vacío se usa `Explicalo`. `Shift+Enter` agrega una línea. La preparación pendiente se comparte con la generación y los reintentos, sin duplicar solicitudes a Datalab. Un clic sobre el texto de la duda vuelve a abrirla; arrastrarlo guarda su posición. `Esc` cierra la explicación. `Procedimiento` queda reservado para una próxima implementación.
 
 El servidor usa AI SDK con AI Gateway: configurar `gatewayia` o `AI_GATEWAY_API_KEY`; `PDF_EXPLANATION_MODEL` permite elegir el modelo (por defecto `anthropic/claude-sonnet-4.5`). Se reutilizan los bloques de Datalab guardados por Conjuntos; si faltan, se transcribe solamente la página actual con `datalab`/`MARKER_API` o la configuración de `User.Services`. Los HTML, transcripciones y posiciones se guardan en `manifests/pdf-explanations` de la carpeta local; en modo remoto se conservan en el almacenamiento del navegador.
 
