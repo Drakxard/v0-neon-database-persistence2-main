@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 
 export function TtsTestDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [modelId, setModelId] = useState(TTS_MODELS[0].id)
-  const [voiceId, setVoiceId] = useState<string | undefined>()
+  const [voiceId, setVoiceId] = useState<string | undefined>(TTS_MODELS[0].defaultVoice)
   const [text, setText] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")

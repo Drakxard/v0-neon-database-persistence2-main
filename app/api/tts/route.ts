@@ -1,6 +1,6 @@
 import { requireAuthSession } from "@/lib/authz"
 import { TtsInputError } from "@/lib/tts-models"
-import { generateCloudflareTts, TtsServiceError } from "@/lib/server/cloudflare-tts"
+import { generateTts, TtsServiceError } from "@/lib/server/tts"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   if (auth.response) return auth.response
   try {
     const value = await request.json().catch(() => { throw new TtsInputError("La solicitud no es válida.") })
-    const { audio, contentType } = await generateCloudflareTts(value, request.signal)
+    const { audio, contentType } = await generateTts(value, request.signal)
     return new Response(new Uint8Array(audio), { headers: { "Content-Type": contentType, "Cache-Control": "no-store" } })
   } catch (error) {
     const status = error instanceof TtsInputError ? 400 : error instanceof TtsServiceError ? error.status : 502
