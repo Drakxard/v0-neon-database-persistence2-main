@@ -15,6 +15,7 @@
     "test:svg": "node --test tests/synthesis-svg.browser.mjs",
     "test:inscreen-reader": "node --test --experimental-strip-types tests/inscreen-synthesis-reader.browser.mts",
     "test:voice": "node --test tests/subject-voice.browser.mjs",
+    "test:tts": "node --test tests/tts-test.browser.mjs",
     "test:synthesis-paste": "node --test tests/synthesis-math.browser.mjs",
     "test:pdf-search": "node --test tests/subject-pdf.browser.mjs",
     "diagnose:jev": "node scripts/diagnose-jev.mjs",

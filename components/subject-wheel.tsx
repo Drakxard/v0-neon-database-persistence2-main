@@ -7,6 +7,7 @@ import { AdminAccessModal } from "@/components/admin-access-modal"
 import { useLocalWorkspace } from "@/components/local-workspace-provider"
 import { MaterialTagBar } from "@/components/material-tag-bar"
 import { SubjectVoiceDialog, VoiceModeButton } from "@/components/subject-voice-dialog"
+import { TtsTestDialog } from "@/components/tts-test-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -1290,6 +1291,7 @@ export function SubjectWheel({
   const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false)
   const [workspaceNoticeMessage, setWorkspaceNoticeMessage] = useState("")
   const [isVoiceModeEnabled, setIsVoiceModeEnabled] = useState(false)
+  const [isTtsTestOpen, setIsTtsTestOpen] = useState(false)
   const [voiceSubject, setVoiceSubject] = useState<Subject | null>(null)
   const [hasResolvedPersistentWorkspaceState, setHasResolvedPersistentWorkspaceState] = useState(false)
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
@@ -7463,11 +7465,13 @@ export function SubjectWheel({
               active={isVoiceModeEnabled}
               label={isVoiceModeEnabled ? "Desactivar modo de voz" : "Activar modo de voz"}
               onClick={() => setIsVoiceModeEnabled((enabled) => !enabled)}
+              onLongPress={() => setIsTtsTestOpen(true)}
             />
           </div>
         </div>
       </header>
 
+      <TtsTestDialog open={isTtsTestOpen} onOpenChange={setIsTtsTestOpen} />
       <SubjectVoiceDialog
         subject={voiceSubject ? { id: voiceSubject.id, name: getSubjectDisplayName(voiceSubject) } : null}
         weekNumber={homeSelectedWeekNumber}
