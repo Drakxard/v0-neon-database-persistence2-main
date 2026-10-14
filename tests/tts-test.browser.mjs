@@ -13,10 +13,11 @@ const assets = Promise.all([
       import { createRoot } from 'react-dom/client';
       import { VoiceModeButton } from './components/subject-voice-dialog';
       import { TtsTestDialog } from './components/tts-test-dialog';
+      import { LocalFetchInterceptor } from './components/local-fetch-interceptor';
       function Harness() {
         const [open, setOpen] = useState(false);
         const [active, setActive] = useState(false);
-        return <><VoiceModeButton active={active} label="Micrófono principal"
+        return <><LocalFetchInterceptor /><VoiceModeButton active={active} label="Micrófono principal"
           onClick={() => { window.shortClicks++; setActive(!active); }} onLongPress={() => setOpen(true)} />
           <TtsTestDialog open={open} onOpenChange={setOpen} /></>;
       }
@@ -43,7 +44,9 @@ async function setup(t, viewport = { width: 1000, height: 700 }) {
     window.holdRequest = false
     window.blockPlayback = false
     window.fetch = async (url, options) => {
-      window.requests.push({ url, body: JSON.parse(options.body), signal: options.signal })
+      const request = url instanceof Request ? url : new Request(new URL(url, window.location.origin), options)
+      const body = await request.clone().text()
+      window.requests.push({ url: request.url, body: body ? JSON.parse(body) : null, signal: request.signal })
       if (window.holdRequest) await new Promise((resolve) => { window.releaseRequest = resolve })
       if (window.failRequest) return Response.json({ error: "Sin créditos" }, { status: 502 })
       return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "audio/mpeg" } })
@@ -128,6 +131,8 @@ test("Enter reproduce, conserva texto, evita duplicados y cancela respuestas obs
   const page = await setup(t)
   await open(page)
   const input = page.getByRole("textbox", { name: "Texto en español" })
+  assert.equal(await page.evaluate(async () => (await fetch("/api/tts")).status), 501)
+  assert.equal(await page.evaluate(() => window.requests.length), 0)
   await input.press("Enter")
   assert.equal(await page.evaluate(() => window.requests.length), 0)
   await input.fill("Hola, ¿cómo estás?")

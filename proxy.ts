@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server"
 import { isLocalStorageMode } from "@/lib/storage-mode"
 import { SUBJECT_IDS } from "@/lib/subjects"
 import { isSubjectVoiceServerRequest } from "@/lib/subject-voice-api"
+import { isTtsServerRequest } from "@/lib/tts-api"
 
 export function proxy(request: NextRequest) {
   if (isLocalStorageMode() && request.nextUrl.pathname.startsWith("/api/")) {
@@ -20,6 +21,7 @@ export function proxy(request: NextRequest) {
       (request.nextUrl.pathname === "/api/pdf-translate" && request.method.toUpperCase() === "POST") ||
       (request.nextUrl.pathname === "/api/pdf-explanation" && ["GET", "POST"].includes(request.method.toUpperCase())) ||
       (request.nextUrl.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") ||
+      isTtsServerRequest(request.nextUrl.pathname, request.method) ||
       isSubjectVoiceServerRequest(request.nextUrl.pathname, request.method) ||
       request.nextUrl.pathname.startsWith("/api/inscreen/")
       || request.nextUrl.pathname.startsWith("/api/storage/azure")

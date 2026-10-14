@@ -63,6 +63,7 @@ import {
 import { SUBJECT_IDS } from "@/lib/subjects"
 import { getReadyDriveConfigToken, getReadyInscreenConfigToken } from "@/lib/local-workspace-client"
 import { isSubjectVoiceServerRequest } from "@/lib/subject-voice-api"
+import { isTtsServerRequest } from "@/lib/tts-api"
 
 const INSCREEN_CONFIG_TOKEN_HEADER = "x-inscreen-config-token"
 
@@ -806,7 +807,7 @@ export function LocalFetchInterceptor() {
         if (token) headers.set("x-drive-config-token", token)
         return originalFetch(new Request(request, { headers }))
       }
-      if (url.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST") {
+      if (isTtsServerRequest(url.pathname, request.method) || (url.pathname === "/api/synthesis-voice" && request.method.toUpperCase() === "POST")) {
         return originalFetch(request)
       }
       if (isProtectedInscreenRequest(url.pathname, request.method)) {

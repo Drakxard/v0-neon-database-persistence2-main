@@ -3,6 +3,7 @@ import test from "node:test"
 import { createRequire } from "node:module"
 import { build } from "esbuild"
 import { isSubjectVoiceServerRequest } from "../lib/subject-voice-api.ts"
+import { isTtsServerRequest } from "../lib/tts-api.ts"
 
 const require = createRequire(import.meta.url)
 const { NextRequest } = require("next/server")
@@ -11,6 +12,16 @@ const compiled = await build({ entryPoints: ["proxy.ts"], bundle: true, write: f
 const proxyModule = { exports: {} as { proxy?: (request: unknown) => Response } }
 new Function("require", "module", "exports", compiled.outputFiles[0].text)(require, proxyModule, proxyModule.exports)
 const proxy = proxyModule.exports.proxy!
+
+test("TTS pasa al servidor en modo local únicamente mediante POST", () => {
+  const allowed = proxy(new NextRequest("https://app.test/api/tts", { method: "POST" }))
+  assert.equal(allowed.headers.get("x-middleware-next"), "1")
+  assert.equal(isTtsServerRequest("/api/tts", "post"), true)
+  for (const [path, method] of [["/api/tts", "GET"], ["/api/tts", "DELETE"], ["/api/tts/unknown", "POST"]]) {
+    assert.equal(isTtsServerRequest(path, method), false)
+    assert.equal(proxy(new NextRequest(`https://app.test${path}`, { method })).status, 501)
+  }
+})
 
 test("el proxy permite consultar voz y ejecutar Datalab/Clef con workspace local", () => {
   for (const [path, method] of [
